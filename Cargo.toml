@@ -1,0 +1,34 @@
+[package]
+name = "aicoder"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# HTTP 客户端（用于调用 LLM API）
+reqwest = { version = "0.12", features = ["json", "stream", "hickory-dns"] }
+
+# JSON 序列化/反序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 异常处理
+anyhow = "1"
+
+# 日志框架
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["tracing-log"] }
+
+# CLI 参数解析
+clap = { version = "4", features = ["derive"] }
+
+# 异步工具集
+futures = "0.3"
+
+# 环境变量解析
+dotenvy = "0.15"
+
+# UUID
+uuid = { version = "1", features = ["v4"] }
