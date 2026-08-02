@@ -1,44 +1,138 @@
+mod agent;
 mod client;
+mod events;
+mod redaction;
+mod tools;
 mod types;
 
+use std::{path::PathBuf, sync::Arc};
+
+use anyhow::Result;
+use clap::Parser;
+
+use agent::{Agent, AgentConfig};
+use tools::{
+    AllowAllApproval, ApprovalHandler, ConsoleApproval, DispatcherConfig, ToolDispatcher,
+    default_registry,
+};
+
+use crate::events::{
+    AgentTypeEventHandler, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
+    ReasoningChunkEvent, ReasoningEndedEvent, ReasoningStartedEvent, ToolCallStartedEvent,
+};
+
+#[derive(Debug, Parser)]
+#[command(name = "aicoder", about = "A small tool-using coding agent")]
+struct Cli {
+    /// User prompt sent to the model.
+    #[arg(short, long, default_value = "你是谁")]
+    prompt: String,
+
+    /// Automatically approve write_file and bash calls.
+    #[arg(long)]
+    yes: bool,
+
+    /// Workspace available to file and command tools.
+    #[arg(long, default_value = ".")]
+    workspace: PathBuf,
+}
+
+struct AppHandler {}
+#[allow(dead_code)]
+type OnToolCallStartedFn = fn();
+
+impl AgentTypeEventHandler for AppHandler {
+    fn on_tool_call_started(&self, ev: ToolCallStartedEvent) {
+        // print!("[Tool]:")
+    }
+
+    fn on_tool_call_chunk(&self, ev: events::ToolCallChunkEvent) {
+        // print!("{:?}", ev.name_delta) 
+    }
+
+    fn on_tool_call_ended(&self, ev: events::ToolCallEndedEvent) {
+        println!("[Tool]{:?}", ev.tool_call)
+    }
+
+    
+    fn on_tool_execution_ended(&self, ev: events::ToolExecutionEndedEvent) {
+        println!("[ToolExec]{:?}", ev.name)
+    }
+
+
+
+    fn on_reasoning_started(&self, _event: ReasoningStartedEvent) {
+        // tracing::info!(
+        //     sequence = event.meta.sequence,
+        //     choice_index = event.choice_index,
+        //     "reasoning started"
+        // );
+        print!("[Reasoning]:")
+    }
+
+    fn on_reasoning_chunk(&self, event: ReasoningChunkEvent) {
+        // tracing::info!(
+        //     sequence = event.meta.sequence,
+        //     choice_index = event.choice_index,
+        //     delta = event.delta,
+        //     "reasoning chunk"
+        // );
+        //
+        print!("{}", event.delta)
+    }
+
+    fn on_reasoning_ended(&self, _event: ReasoningEndedEvent) {
+        println!()
+    }
+
+    fn on_content_started(&self, _event: ContentStartedEvent) {
+        println!();
+        print!("[Content]:");
+    }
+
+    fn on_content_chunk(&self, event: ContentChunkEvent) {
+        print!("{}", event.delta)
+    }
+
+    fn on_content_ended(&self, _event: ContentEndedEvent) {
+        println!()
+    }
+}
+
 #[tokio::main]
-async fn main() {
-    // 初始化日志
+async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_target(false)
         .with_level(true)
         .init();
+    let cli = Cli::parse();
 
-    // 从环境变量读取 API key
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-        .or_else(|_| std::env::var("DASHSCOPE_API_KEY"))
-        .or_else(|_| std::env::var("ZHIPU_API_KEY"))
-        .unwrap_or_else(|_| {
-            eprintln!("⚠️  未设置 API key，请先设置 OPENAI_API_KEY 或其他环境变量");
-            eprintln!("  参考 .env.example 创建 .env 文件，或在运行时传入环境变量");
-            std::process::exit(1);
-        });
+    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string());
+    let client = Arc::new(client::ChatClient::from_env(&model)?);
 
-    let config = client::ClientConfig {
-        base_url: std::env::var("OPENAI_API_BASE")
-            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string()),
-        api_key,
-        model: "/models/unsloth_Qwen3.6-35B-A3B-NVFP4-Fast".to_string(),
-        timeout: 120,
-        max_retries: 3,
+    let registry = Arc::new(default_registry()?);
+    let approval: Arc<dyn ApprovalHandler> = if cli.yes {
+        Arc::new(AllowAllApproval)
+    } else {
+        Arc::new(ConsoleApproval)
     };
-    let client = client::ChatClient::new(config)
-        .expect("Failed to create client");
+    let dispatcher = Arc::new(ToolDispatcher::new(
+        registry,
+        &cli.workspace,
+        approval,
+        DispatcherConfig::default(),
+    )?);
+    let agent = Agent::new(client, dispatcher, AgentConfig::default());
 
-    // 构建请求
     let request = types::ChatCompletionRequest {
-        model: "/models/unsloth_Qwen3.6-35B-A3B-NVFP4-Fast".to_string(),
+        model,
         messages: vec![
             types::ChatMessage {
                 role: types::Role::System,
-                content: Some("You are a helpful coding assistant. Reply in Chinese."
-                    .to_string()),
+                content: Some(
+                    "You are a helpful coding assistant. Reply in Chinese. Use tools when needed."
+                        .to_string(),
+                ),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -46,7 +140,7 @@ async fn main() {
             },
             types::ChatMessage {
                 role: types::Role::User,
-                content: Some("用 Rust 写一个快速排序".to_string()),
+                content: Some(cli.prompt),
                 reasoning: None,
                 tool_calls: None,
                 tool_call_id: None,
@@ -59,42 +153,60 @@ async fn main() {
         seed: None,
         tools: None,
         tool_choice: None,
-        stream: Some(false),
+        stream: Some(true),
         stop: None,
         response_format: None,
     };
 
-    // 调用 API
-    match client.chat_completion(request).await {
-        Ok(response) => {
-            println!("=== 响应 ===");
-            if let Some(choice) = response.choices.first() {
-                if let Some(reasoning) = &choice.message.reasoning {
-                    println!("=== 推理过程 ===\n{}\n", reasoning);
-                }
-                if let Some(content) = &choice.message.content {
-                    println!("=== 回复 ===\n{}", content);
-                } else if choice.message.reasoning.is_none() {
-                    println!("(空回复)");
-                }
-                if let Some(ref tool_calls) = choice.message.tool_calls {
-                    for tc in tool_calls {
-                        println!(
-                            "  工具调用: {}({})",
-                            tc.function.name, tc.function.arguments
-                        );
-                    }
-                }
-            }
-            if let Some(usage) = &response.usage {
-                println!("\n=== 使用量 ===");
-                println!("提示词: {} tokens", usage.prompt_tokens);
-                println!("生成: {} tokens", usage.completion_tokens);
-                println!("总计: {} tokens", usage.total_tokens);
-            }
-        }
-        Err(e) => {
-            eprintln!("请求失败: {}", e);
-        }
+    let result = agent
+        .run_with_type_handler(request, Arc::new(AppHandler {}))
+        .await?;
+    if let Some(reasoning) = &result.final_message.reasoning {
+        println!("=== 推理过程 ===\n{reasoning}\n");
+    }
+    if let Some(content) = &result.final_message.content {
+        println!("=== 回复 ===\n{content}");
+    } else {
+        println!("(空回复)");
+    }
+    println!(
+        "\n=== 使用量 ===\n轮次: {}\n消息: {}\n提示词: {} tokens\n缓存命中: {} tokens\n未缓存: {} tokens\n缓存命中率: {:.2}%\n生成: {} tokens\n总计: {} tokens",
+        result.rounds,
+        result.messages.len(),
+        result.usage.prompt_tokens,
+        result.usage.cached_tokens(),
+        result.usage.uncached_tokens(),
+        result.usage.cache_hit_rate() * 100.0,
+        result.usage.completion_tokens,
+        result.usage.total_tokens
+    );
+    if let Some(cache_write_tokens) = result
+        .usage
+        .prompt_tokens_details
+        .as_ref()
+        .and_then(|details| details.cache_write_tokens)
+    {
+        println!("缓存写入: {cache_write_tokens} tokens");
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_accepts_prompt() {
+        let cli = Cli::try_parse_from(["aicoder", "--prompt", "检查当前项目"]).unwrap();
+        assert_eq!(cli.prompt, "检查当前项目");
+        assert!(!cli.yes);
+        assert_eq!(cli.workspace, PathBuf::from("."));
+    }
+
+    #[test]
+    fn cli_keeps_default_prompt() {
+        let cli = Cli::try_parse_from(["aicoder"]).unwrap();
+        assert_eq!(cli.prompt, "你是谁");
     }
 }

@@ -145,12 +145,28 @@ pub struct ChatCompletionRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ToolChoice {
-    /// 模型自主选择
+    Mode(ToolChoiceMode),
+    Named(NamedToolChoice),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToolChoiceMode {
+    None,
     Auto,
-    /// 强制使用某个工具
-    Named(String),
-    /// 强制使用所有工具
     Required,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedToolChoice {
+    #[serde(rename = "type")]
+    pub tool_type: ToolType,
+    pub function: NamedToolFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedToolFunction {
+    pub name: String,
 }
 
 /// 响应格式
@@ -171,4 +187,30 @@ pub struct UserQuery {
     /// 系统提示（可选）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_choice_uses_openai_compatible_wire_format() {
+        assert_eq!(
+            serde_json::to_value(ToolChoice::Mode(ToolChoiceMode::Auto)).unwrap(),
+            serde_json::json!("auto")
+        );
+        assert_eq!(
+            serde_json::to_value(ToolChoice::Named(NamedToolChoice {
+                tool_type: ToolType::Function,
+                function: NamedToolFunction {
+                    name: "read_file".to_string(),
+                },
+            }))
+            .unwrap(),
+            serde_json::json!({
+                "type": "function",
+                "function": {"name": "read_file"}
+            })
+        );
+    }
 }

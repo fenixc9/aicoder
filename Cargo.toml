@@ -13,6 +13,8 @@ reqwest = { version = "0.12", features = ["json", "stream", "hickory-dns"] }
 # JSON 序列化/反序列化
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+regex = "1"
+httpdate = "1"
 
 # 异常处理
 anyhow = "1"
@@ -26,9 +28,16 @@ clap = { version = "4", features = ["derive"] }
 
 # 异步工具集
 futures = "0.3"
+async-stream = "0.3"
+
+# 异步工具和模型接口
+async-trait = "0.1"
 
 # 环境变量解析
 dotenvy = "0.15"
 
 # UUID
 uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"

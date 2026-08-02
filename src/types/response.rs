@@ -79,7 +79,7 @@ pub struct TokenOffset {
 }
 
 /// 使用量统计
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Usage {
     /// 提示词 token 数
     pub prompt_tokens: i32,
@@ -87,6 +87,56 @@ pub struct Usage {
     pub completion_tokens: i32,
     /// 总 token 数
     pub total_tokens: i32,
+    /// Prompt token 明细，包括缓存读取和缓存写入 token
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PromptTokensDetails {
+    /// 从 prompt cache 读取的 token 数
+    #[serde(default)]
+    pub cached_tokens: i32,
+    /// 写入 prompt cache 的 token 数；只有部分模型提供
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_tokens: Option<i32>,
+}
+
+impl Usage {
+    pub fn cached_tokens(&self) -> i32 {
+        self.prompt_tokens_details
+            .as_ref()
+            .map(|details| details.cached_tokens)
+            .unwrap_or(0)
+    }
+
+    pub fn uncached_tokens(&self) -> i32 {
+        (self.prompt_tokens - self.cached_tokens()).max(0)
+    }
+
+    pub fn cache_hit_rate(&self) -> f64 {
+        if self.prompt_tokens == 0 {
+            0.0
+        } else {
+            f64::from(self.cached_tokens()) / f64::from(self.prompt_tokens)
+        }
+    }
+
+    pub fn accumulate(&mut self, other: &Usage) {
+        self.prompt_tokens += other.prompt_tokens;
+        self.completion_tokens += other.completion_tokens;
+        self.total_tokens += other.total_tokens;
+
+        if let Some(other_details) = &other.prompt_tokens_details {
+            let details = self
+                .prompt_tokens_details
+                .get_or_insert_with(PromptTokensDetails::default);
+            details.cached_tokens += other_details.cached_tokens;
+            if let Some(cache_write_tokens) = other_details.cache_write_tokens {
+                *details.cache_write_tokens.get_or_insert(0) += cache_write_tokens;
+            }
+        }
+    }
 }
 
 /// SSE 流式事件
@@ -137,6 +187,9 @@ pub struct StreamDelta {
     /// 内容
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// 推理内容；部分兼容服务使用 reasoning_content
+    #[serde(default, alias = "reasoning_content")]
+    pub reasoning: Option<String>,
     /// 工具调用
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<StreamToolCall>>,
@@ -240,4 +293,48 @@ pub struct EmbeddingData {
     pub index: i32,
     /// 嵌入向量
     pub embedding: Vec<f32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_accepts_missing_or_null_prompt_details() {
+        let missing: Usage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 12
+        }))
+        .unwrap();
+        assert_eq!(missing.cached_tokens(), 0);
+        assert_eq!(missing.uncached_tokens(), 10);
+
+        let null: Usage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 12,
+            "prompt_tokens_details": null
+        }))
+        .unwrap();
+        assert_eq!(null.cached_tokens(), 0);
+    }
+
+    #[test]
+    fn usage_calculates_cache_hit_rate() {
+        let usage: Usage = serde_json::from_value(serde_json::json!({
+            "prompt_tokens": 2000,
+            "completion_tokens": 100,
+            "total_tokens": 2100,
+            "prompt_tokens_details": {
+                "cached_tokens": 1500,
+                "cache_write_tokens": 200
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(usage.cached_tokens(), 1500);
+        assert_eq!(usage.uncached_tokens(), 500);
+        assert!((usage.cache_hit_rate() - 0.75).abs() < f64::EPSILON);
+    }
 }
