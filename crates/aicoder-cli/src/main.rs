@@ -5,17 +5,19 @@ use std::{
 };
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentTypeEventHandler, ChatClient,
+    Agent, AgentConfig, AgentEventHandler, ChatClient,
     events::{
-        ContentChunkEvent, ContentEndedEvent, ContentStartedEvent, ReasoningChunkEvent,
-        ReasoningEndedEvent, ReasoningStartedEvent, ToolCallEndedEvent, ToolExecutionEndedEvent,
+        AgentCompletedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
+        ReasoningChunkEvent, ReasoningEndedEvent, ReasoningStartedEvent, ToolCallEndedEvent,
+        ToolExecutionEndedEvent,
     },
+    session::{JsonlSessionRepository, SessionRepository},
     tools::{AllowAllApproval, ApprovalHandler, ToolInvocation},
     types::{ChatCompletionRequest, ChatMessage, Role},
 };
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "aicoder", about = "A small tool-using coding agent")]
@@ -31,6 +33,32 @@ struct Cli {
     /// Workspace available to file and command tools.
     #[arg(long, default_value = ".")]
     workspace: PathBuf,
+
+    /// Continue the most recently updated session for this workspace.
+    #[arg(short = 'c', long = "continue", conflicts_with_all = ["session", "no_session"])]
+    continue_session: bool,
+
+    /// Continue a specific session by its full ID.
+    #[arg(long, value_name = "ID", conflicts_with_all = ["continue_session", "no_session"])]
+    session: Option<String>,
+
+    /// Run without creating or updating a session.
+    #[arg(long, conflicts_with_all = ["continue_session", "session"])]
+    no_session: bool,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// List sessions belonging to the selected workspace.
+    Sessions,
+    /// Permanently delete a session by its full ID.
+    DeleteSession {
+        /// Session ID shown by `aicoder sessions`.
+        id: String,
+    },
 }
 
 struct ConsoleEvents;
@@ -62,7 +90,11 @@ impl ApprovalHandler for ConsoleApproval {
     }
 }
 
-impl AgentTypeEventHandler for ConsoleEvents {
+impl AgentEventHandler for ConsoleEvents {
+    fn on_agent_completed(&self, _event: AgentCompletedEvent) {
+        // println!("[Finish] Usage {:?}", _event.usage)
+    }
+
     fn on_tool_call_ended(&self, event: ToolCallEndedEvent) {
         println!("[Tool]{:?}", event.tool_call);
     }
@@ -105,14 +137,108 @@ fn flush_stdout() {
     let _ = std::io::stdout().flush();
 }
 
+fn load_dotenv() -> Result<()> {
+    match dotenvy::dotenv() {
+        Ok(_) => Ok(()),
+        Err(error) if error.not_found() => {
+            // `cargo run` may be invoked from the workspace root. In that case dotenvy's
+            // current-directory search cannot see the CLI crate's own `.env` file.
+            let cli_env = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".env");
+            if cli_env.is_file() {
+                dotenvy::from_path(&cli_env)
+                    .with_context(|| format!("Failed to load {}", cli_env.display()))?;
+            }
+            Ok(())
+        }
+        Err(error) => Err(error).context("Failed to load .env"),
+    }
+}
+
+fn session_root() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("AICODER_HOME") {
+        ensure!(!path.is_empty(), "AICODER_HOME cannot be empty");
+        return Ok(PathBuf::from(path).join("sessions"));
+    }
+    let home = std::env::var_os("HOME").context(
+        "Cannot determine session directory: set AICODER_HOME or HOME, or use --no-session",
+    )?;
+    ensure!(!home.is_empty(), "HOME cannot be empty");
+    Ok(PathBuf::from(home).join(".aicoder").join("sessions"))
+}
+
+fn system_message() -> ChatMessage {
+    ChatMessage {
+        role: Role::System,
+        content: Some(
+            "You are a helpful coding assistant. Reply in Chinese. Use tools when needed."
+                .to_string(),
+        ),
+        reasoning: None,
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    }
+}
+
+fn user_message(content: String) -> ChatMessage {
+    ChatMessage {
+        role: Role::User,
+        content: Some(content),
+        reasoning: None,
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    }
+}
+
+fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Result<bool> {
+    match &cli.command {
+        Some(Command::Sessions) => {
+            let sessions = repository.list(&cli.workspace)?;
+            if sessions.is_empty() {
+                println!("当前 workspace 没有 session");
+            } else {
+                for session in sessions {
+                    println!(
+                        "{}\t{} messages\t{}",
+                        session.id,
+                        session.message_count,
+                        session.title.as_deref().unwrap_or("(无标题)")
+                    );
+                }
+            }
+            Ok(true)
+        }
+        Some(Command::DeleteSession { id }) => {
+            repository.delete(id)?;
+            println!("已删除 session {id}");
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    load_dotenv()?;
     tracing_subscriber::fmt()
         .with_target(false)
         .with_level(true)
         .init();
     let cli = Cli::parse();
 
+    if cli.command.is_some() {
+        let repository = JsonlSessionRepository::new(session_root()?)?;
+        if handle_session_command(&cli, &repository)? {
+            return Ok(());
+        }
+    }
+
+    let repository = if cli.no_session {
+        None
+    } else {
+        Some(JsonlSessionRepository::new(session_root()?)?)
+    };
     let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string());
     let client = ChatClient::from_env(&model)?;
     let builder = Agent::builder(client)
@@ -124,29 +250,47 @@ async fn main() -> Result<()> {
         builder.approval(ConsoleApproval).build()?
     };
 
+    let mut session = match &repository {
+        Some(repository) if cli.continue_session => {
+            if let Some(recent) = repository.most_recent(&cli.workspace)? {
+                Some(repository.open(&recent.id)?)
+            } else {
+                Some(repository.create(&cli.workspace)?)
+            }
+        }
+        Some(repository) => match &cli.session {
+            Some(id) => Some(repository.open(id)?),
+            None => Some(repository.create(&cli.workspace)?),
+        },
+        None => None,
+    };
+    if let Some(session) = &session {
+        let workspace = cli
+            .workspace
+            .canonicalize()
+            .with_context(|| format!("Failed to resolve workspace {}", cli.workspace.display()))?;
+        ensure!(
+            session.metadata().cwd == workspace,
+            "Session {} belongs to workspace {}, not {}",
+            session.metadata().id,
+            session.metadata().cwd.display(),
+            workspace.display()
+        );
+        eprintln!("Session: {}", session.metadata().id);
+    }
+
+    let prompt = user_message(cli.prompt);
+    let mut messages = vec![system_message()];
+    if let (Some(repository), Some(session)) = (&repository, &mut session) {
+        repository.append(session, prompt)?;
+        messages.extend(session.chat_messages());
+    } else {
+        messages.push(prompt);
+    }
+    let input_message_count = messages.len();
     let request = ChatCompletionRequest {
         model,
-        messages: vec![
-            ChatMessage {
-                role: Role::System,
-                content: Some(
-                    "You are a helpful coding assistant. Reply in Chinese. Use tools when needed."
-                        .to_string(),
-                ),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
-            ChatMessage {
-                role: Role::User,
-                content: Some(cli.prompt),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
-        ],
+        messages,
         temperature: Some(0.7),
         top_p: Some(1.0),
         max_tokens: Some(2048),
@@ -161,34 +305,14 @@ async fn main() -> Result<()> {
     let result = agent
         .run_with_handler(request, Arc::new(ConsoleEvents))
         .await?;
-    if let Some(reasoning) = &result.final_message.reasoning {
-        println!("=== 推理过程 ===\n{reasoning}\n");
+    if let (Some(repository), Some(session)) = (&repository, &mut session) {
+        let generated_messages = result
+            .messages
+            .get(input_message_count..)
+            .context("Agent returned fewer messages than were supplied in the session context")?;
+        repository.append_all(session, generated_messages.iter().cloned())?;
     }
-    if let Some(content) = &result.final_message.content {
-        println!("=== 回复 ===\n{content}");
-    } else {
-        println!("(空回复)");
-    }
-    println!(
-        "\n=== 使用量 ===\n轮次: {}\n消息: {}\n提示词: {} tokens\n缓存命中: {} tokens\n未缓存: {} tokens\n缓存命中率: {:.2}%\n生成: {} tokens\n总计: {} tokens",
-        result.rounds,
-        result.messages.len(),
-        result.usage.prompt_tokens,
-        result.usage.cached_tokens(),
-        result.usage.uncached_tokens(),
-        result.usage.cache_hit_rate() * 100.0,
-        result.usage.completion_tokens,
-        result.usage.total_tokens
-    );
-    if let Some(cache_write_tokens) = result
-        .usage
-        .prompt_tokens_details
-        .as_ref()
-        .and_then(|details| details.cache_write_tokens)
-    {
-        println!("缓存写入: {cache_write_tokens} tokens");
-    }
-
+    println!("Usage :{:?}", result.usage);
     Ok(())
 }
 
@@ -202,11 +326,50 @@ mod tests {
         assert_eq!(cli.prompt, "检查当前项目");
         assert!(!cli.yes);
         assert_eq!(cli.workspace, PathBuf::from("."));
+        assert!(!cli.continue_session);
+        assert!(cli.session.is_none());
+        assert!(!cli.no_session);
     }
 
     #[test]
     fn cli_keeps_default_prompt() {
         let cli = Cli::try_parse_from(["aicoder"]).unwrap();
         assert_eq!(cli.prompt, "你是谁");
+    }
+
+    #[test]
+    fn cli_accepts_session_selection_modes() {
+        let continued = Cli::try_parse_from(["aicoder", "--continue"]).unwrap();
+        assert!(continued.continue_session);
+
+        let selected = Cli::try_parse_from([
+            "aicoder",
+            "--session",
+            "58ed33e6-26fc-4688-81ad-909d63af5ad7",
+        ])
+        .unwrap();
+        assert_eq!(
+            selected.session.as_deref(),
+            Some("58ed33e6-26fc-4688-81ad-909d63af5ad7")
+        );
+
+        assert!(Cli::try_parse_from(["aicoder", "--continue", "--no-session"]).is_err());
+    }
+
+    #[test]
+    fn cli_accepts_session_management_commands() {
+        let listed = Cli::try_parse_from(["aicoder", "sessions"]).unwrap();
+        assert!(matches!(listed.command, Some(Command::Sessions)));
+
+        let deleted = Cli::try_parse_from([
+            "aicoder",
+            "delete-session",
+            "58ed33e6-26fc-4688-81ad-909d63af5ad7",
+        ])
+        .unwrap();
+        assert!(matches!(
+            deleted.command,
+            Some(Command::DeleteSession { .. })
+        ));
     }
 }

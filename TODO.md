@@ -38,7 +38,7 @@
 
 - [x] 增加串行 Agent 事件回调，覆盖 reasoning、content、tool call、工具执行、重试和 Usage
 - [ ] 支持交互式 REPL，可以在一次启动中连续提问
-- [ ] 支持会话保存、恢复和 `--resume`
+- [x] 支持会话保存、恢复、`--continue` 和 `--session`
 - [ ] 增加 `--model`、`--base-url`、`--timeout`、`--max-rounds`、`--temperature` 和 `--stream`
 - [ ] 使用现有的 `dotenvy` 依赖真正加载 `.env`
 - [ ] 支持从 stdin 读取 prompt

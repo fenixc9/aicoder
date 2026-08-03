@@ -5,7 +5,7 @@ use std::{
 };
 
 use super::{
-    AgentRawEvent, AgentRawEventEnvelope, AgentTypeEventHandler, RunId, handler::dispatch_event,
+    AgentEventHandler, AgentRawEvent, AgentRawEventEnvelope, RunId, handler::dispatch_event,
 };
 use tokio::sync::{mpsc, oneshot};
 
@@ -25,7 +25,7 @@ pub struct AgentEventEmitter {
 }
 
 impl AgentEventEmitter {
-    pub(crate) fn new(handler: Arc<dyn AgentTypeEventHandler>) -> Self {
+    pub(crate) fn new(handler: Arc<dyn AgentEventHandler>) -> Self {
         let (sender, mut receiver) = mpsc::unbounded_channel::<EventCommand>();
         let run_id = RunId::new();
         let run_id_text = run_id.to_string();
@@ -107,7 +107,7 @@ mod tests {
 
     struct RecordingHandler(Arc<Mutex<Vec<(u64, String)>>>);
 
-    impl AgentTypeEventHandler for RecordingHandler {
+    impl AgentEventHandler for RecordingHandler {
         fn on_raw_event(&self, event: &AgentRawEventEnvelope) {
             thread::sleep(Duration::from_millis(25));
             self.0.lock().unwrap().push((

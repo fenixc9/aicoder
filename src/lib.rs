@@ -7,11 +7,12 @@ pub mod agent;
 pub mod client;
 pub mod events;
 mod redaction;
+pub mod session;
 pub mod tools;
 pub mod types;
 
 pub use agent::{Agent, AgentBuilder, AgentConfig, AgentRunResult, ChatCompletionProvider};
 pub use client::{ChatClient, ClientConfig};
 pub use events::{
-    AgentRawEvent, AgentRawEventEnvelope, AgentTypeEventHandler, RunId, ToolExecutionOutcome,
+    AgentEventHandler, AgentRawEvent, AgentRawEventEnvelope, RunId, ToolExecutionOutcome,
 };

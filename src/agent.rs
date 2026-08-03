@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use crate::{
     client::ChatClient,
     events::{
-        AgentEventEmitter, AgentRawEvent, AgentStage, AgentTypeEventHandler, RoundOutcome,
+        AgentEventEmitter, AgentEventHandler, AgentRawEvent, AgentStage, RoundOutcome,
         emit_full_response_events,
     },
     tools::{
@@ -118,7 +118,7 @@ impl Agent {
     pub async fn run_with_handler(
         &self,
         request: ChatCompletionRequest,
-        handler: Arc<dyn AgentTypeEventHandler>,
+        handler: Arc<dyn AgentEventHandler>,
     ) -> Result<AgentRunResult> {
         let events = AgentEventEmitter::new(handler);
         events.emit(AgentRawEvent::AgentStarted {

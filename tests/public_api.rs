@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use aicoder_core::{
     Agent, AgentRawEvent, ChatCompletionProvider,
+    session::{MemorySessionRepository, SessionRepository},
     tools::ToolRegistry,
     types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role},
 };
@@ -74,4 +75,35 @@ async fn external_application_can_build_agent_and_observe_raw_events() {
         observed.last(),
         Some(AgentRawEvent::AgentCompleted { .. })
     ));
+}
+
+#[test]
+fn external_application_can_manage_conversation_sessions() {
+    let workspace = tempdir().unwrap();
+    let repository = MemorySessionRepository::new();
+    let mut session = repository.create(workspace.path()).unwrap();
+    repository
+        .append(
+            &mut session,
+            ChatMessage {
+                role: Role::User,
+                content: Some("remember this".to_string()),
+                reasoning: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        )
+        .unwrap();
+
+    let reopened = repository.open(&session.metadata().id).unwrap();
+    assert_eq!(reopened.chat_messages().len(), 1);
+    assert_eq!(
+        repository
+            .most_recent(workspace.path())
+            .unwrap()
+            .unwrap()
+            .id,
+        session.metadata().id
+    );
 }

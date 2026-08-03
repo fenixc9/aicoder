@@ -194,7 +194,7 @@ pub struct UsageUpdatedEvent {
 /// to forward or persist the event stream while overriding only the typed callbacks they need for
 /// presentation. Payloads are owned and backed by `Arc` where useful, so callbacks can retain or
 /// forward events without copying complete streaming chunks.
-pub trait AgentTypeEventHandler: Send + Sync + 'static {
+pub trait AgentEventHandler: Send + Sync + 'static {
     fn on_raw_event(&self, _event: &AgentRawEventEnvelope) {}
 
     fn on_agent_started(&self, _event: AgentStartedEvent) {}
@@ -229,9 +229,9 @@ pub trait AgentTypeEventHandler: Send + Sync + 'static {
     fn on_usage_updated(&self, _event: UsageUpdatedEvent) {}
 }
 
-impl AgentTypeEventHandler for () {}
+impl AgentEventHandler for () {}
 
-impl<F> AgentTypeEventHandler for F
+impl<F> AgentEventHandler for F
 where
     F: Fn(&AgentRawEventEnvelope) + Send + Sync + 'static,
 {
@@ -240,10 +240,7 @@ where
     }
 }
 
-pub(crate) fn dispatch_event(
-    handler: &dyn AgentTypeEventHandler,
-    envelope: &AgentRawEventEnvelope,
-) {
+pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRawEventEnvelope) {
     handler.on_raw_event(envelope);
     let meta = AgentEventMeta::from(envelope);
     match &envelope.event {
@@ -427,7 +424,7 @@ mod tests {
         raw_sequences: Mutex<Vec<u64>>,
     }
 
-    impl AgentTypeEventHandler for RecordingHandler {
+    impl AgentEventHandler for RecordingHandler {
         fn on_raw_event(&self, event: &AgentRawEventEnvelope) {
             self.raw_sequences.lock().unwrap().push(event.sequence);
         }
