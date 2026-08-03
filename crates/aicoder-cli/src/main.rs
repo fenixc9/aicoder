@@ -180,6 +180,14 @@ async fn main() -> Result<()> {
         result.usage.completion_tokens,
         result.usage.total_tokens
     );
+    if let Some(cache_write_tokens) = result
+        .usage
+        .prompt_tokens_details
+        .as_ref()
+        .and_then(|details| details.cache_write_tokens)
+    {
+        println!("缓存写入: {cache_write_tokens} tokens");
+    }
 
     Ok(())
 }
@@ -194,5 +202,11 @@ mod tests {
         assert_eq!(cli.prompt, "检查当前项目");
         assert!(!cli.yes);
         assert_eq!(cli.workspace, PathBuf::from("."));
+    }
+
+    #[test]
+    fn cli_keeps_default_prompt() {
+        let cli = Cli::try_parse_from(["aicoder"]).unwrap();
+        assert_eq!(cli.prompt, "你是谁");
     }
 }
