@@ -1,6 +1,4 @@
-use std::io::{self, Write};
-
-use anyhow::{Context, Result};
+use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -28,29 +26,12 @@ impl ApprovalHandler for AllowAllApproval {
     }
 }
 
-pub struct ConsoleApproval;
+/// Safe default for non-interactive library consumers.
+pub struct DenyAllApproval;
 
 #[async_trait]
-impl ApprovalHandler for ConsoleApproval {
-    async fn approve(&self, invocation: &ToolInvocation) -> Result<bool> {
-        let invocation = invocation.clone();
-        tokio::task::spawn_blocking(move || {
-            eprintln!(
-                "\n⚠️  工具 {} 将以当前用户权限执行（不是沙箱）\n参数: {}",
-                invocation.name,
-                serde_json::to_string_pretty(&invocation.arguments)?
-            );
-            eprint!("允许执行? [y/N] ");
-            io::stderr().flush()?;
-
-            let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
-            Ok(matches!(
-                input.trim().to_ascii_lowercase().as_str(),
-                "y" | "yes"
-            ))
-        })
-        .await
-        .context("Approval prompt task failed")?
+impl ApprovalHandler for DenyAllApproval {
+    async fn approve(&self, _invocation: &ToolInvocation) -> Result<bool> {
+        Ok(false)
     }
 }

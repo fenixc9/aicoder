@@ -1,7 +1,5 @@
 //! OpenAI API 请求类型
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 /// 聊天消息角色
@@ -77,34 +75,6 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
-/// 采样策略 / 温度
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SamplingStrategy {
-    /// 固定 temperature
-    Temperature(f32),
-    /// Top-p（核采样）
-    TopP(f32),
-    /// Top-k
-    TopK(i32),
-}
-
-/// 流式响应标志
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum StreamChoice {
-    /// 普通非流式
-    NonStream,
-    /// 流式响应
-    Stream(StreamFormat),
-}
-
-/// 流式输出格式
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum StreamFormat {
-    /// 只流式输出内容，不流式输出 JSON
-    Json,
-}
-
 /// Chat Completion 请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatCompletionRequest {
@@ -177,16 +147,6 @@ pub enum ResponseType {
     Text,
     /// JSON 模式
     JsonObject,
-}
-
-/// 用户输入的封装
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserQuery {
-    /// 用户消息内容
-    pub content: String,
-    /// 系统提示（可选）
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<String>,
 }
 
 #[cfg(test)]

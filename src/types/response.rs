@@ -1,7 +1,5 @@
 //! OpenAI API 响应类型
 
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 use super::request::{ChatMessage, Role, ToolType};
@@ -234,65 +232,6 @@ pub struct ApiError {
     /// 错误参数详情
     #[serde(skip_serializing_if = "Option::is_none")]
     pub param: Option<String>,
-}
-
-/// Embedding 请求
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddingRequest {
-    /// 模型名称
-    pub model: String,
-    /// 输入文本或字符串数组
-    pub input: EmbeddingInput,
-    /// 输出维度
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dimensions: Option<i32>,
-    /// 格式
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub encoding_format: Option<EncodingFormat>,
-}
-
-/// Embedding 输入
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum EmbeddingInput {
-    /// 单个字符串
-    Single(String),
-    /// 字符串数组
-    Multiple(Vec<String>),
-}
-
-/// 编码格式
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum EncodingFormat {
-    Float,
-    Base64,
-}
-
-/// Embedding 响应
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddingResponse {
-    /// 对象类型
-    #[serde(rename = "object")]
-    pub object_type: String,
-    /// 数据列表
-    pub data: Vec<EmbeddingData>,
-    /// 模型名称
-    pub model: String,
-    /// 使用量
-    pub usage: Option<Usage>,
-}
-
-/// Embedding 数据
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddingData {
-    /// 对象类型
-    #[serde(rename = "object")]
-    pub object_type: String,
-    /// 索引
-    pub index: i32,
-    /// 嵌入向量
-    pub embedding: Vec<f32>,
 }
 
 #[cfg(test)]

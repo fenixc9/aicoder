@@ -1,7 +1,11 @@
 [package]
-name = "aicoder"
+name = "aicoder-core"
 version = "0.1.0"
 edition = "2024"
+
+[workspace]
+members = ["crates/aicoder-cli"]
+resolver = "3"
 
 [dependencies]
 # 异步运行时
@@ -21,10 +25,6 @@ anyhow = "1"
 
 # 日志框架
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["tracing-log"] }
-
-# CLI 参数解析
-clap = { version = "4", features = ["derive"] }
 
 # 异步工具集
 futures = "0.3"
@@ -33,11 +33,9 @@ async-stream = "0.3"
 # 异步工具和模型接口
 async-trait = "0.1"
 
-# 环境变量解析
-dotenvy = "0.15"
-
 # UUID
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["tracing-log"] }

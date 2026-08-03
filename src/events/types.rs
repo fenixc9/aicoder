@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::{fmt, sync::Arc, time::Duration};
 
 use serde_json::Value;
@@ -168,7 +166,7 @@ pub enum AgentRawEvent {
 }
 
 pub(crate) fn emit_full_response_events(
-    events: &super::AgentEventSink,
+    events: &super::AgentEventEmitter,
     response: &ChatCompletionResponse,
 ) {
     events.emit(AgentRawEvent::ModelResponseStarted);

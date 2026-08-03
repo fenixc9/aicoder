@@ -10,7 +10,7 @@ use tempfile::tempdir;
 
 use super::*;
 use crate::{
-    events::{AgentEvent, AgentEventEnvelope, AgentEventSink, ToolExecutionOutcome},
+    events::{AgentEventEmitter, AgentRawEvent, AgentRawEventEnvelope, ToolExecutionOutcome},
     types::{FunctionCall, FunctionDefinition, ToolCall, ToolType},
 };
 
@@ -338,9 +338,9 @@ async fn dispatcher_returns_approval_denied_as_tool_message() {
     )
     .unwrap();
 
-    let delivered = Arc::new(Mutex::new(Vec::<AgentEventEnvelope>::new()));
+    let delivered = Arc::new(Mutex::new(Vec::<AgentRawEventEnvelope>::new()));
     let captured = Arc::clone(&delivered);
-    let events = AgentEventSink::new(Arc::new(move |event: &AgentEventEnvelope| {
+    let events = AgentEventEmitter::new(Arc::new(move |event: &AgentRawEventEnvelope| {
         captured.lock().unwrap().push(event.clone());
     }));
 
@@ -364,22 +364,22 @@ async fn dispatcher_returns_approval_denied_as_tool_message() {
     let delivered = delivered.lock().unwrap();
     assert!(matches!(
         delivered[0].event,
-        AgentEvent::ToolExecutionStarted { .. }
+        AgentRawEvent::ToolExecutionStarted { .. }
     ));
     assert!(matches!(
         delivered[1].event,
-        AgentEvent::ToolApprovalRequested { .. }
+        AgentRawEvent::ToolApprovalRequested { .. }
     ));
     assert!(matches!(
         delivered[2].event,
-        AgentEvent::ToolApprovalResolved {
+        AgentRawEvent::ToolApprovalResolved {
             approved: false,
             ..
         }
     ));
     assert!(matches!(
         &delivered[3].event,
-        AgentEvent::ToolExecutionEnded {
+        AgentRawEvent::ToolExecutionEnded {
             outcome,
             ..
         } if matches!(outcome.as_ref(), ToolExecutionOutcome::ApprovalDenied)

@@ -8,7 +8,7 @@ mod dispatcher;
 mod registry;
 mod util;
 
-pub use approval::{AllowAllApproval, ApprovalHandler, ConsoleApproval, ToolInvocation};
+pub use approval::{AllowAllApproval, ApprovalHandler, DenyAllApproval, ToolInvocation};
 // Keep the original `tools::XxxTool` facade stable even when the binary only uses the registry.
 #[allow(unused_imports)]
 pub use builtins::{

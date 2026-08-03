@@ -11,7 +11,7 @@ use std::{
 };
 
 use crate::{
-    events::{AgentEvent, AgentEventSink},
+    events::{AgentEventEmitter, AgentRawEvent},
     redaction::{sanitize_text, sanitize_url},
     types::{ApiError, ChatCompletionRequest, ChatCompletionResponse, StreamChunk},
 };
@@ -75,13 +75,13 @@ fn retry_delay(headers: Option<&HeaderMap>, retry_number: u32) -> Duration {
 }
 
 fn emit_retry(
-    events: Option<&AgentEventSink>,
+    events: Option<&AgentEventEmitter>,
     attempt: u32,
     delay: Duration,
     reason: impl Into<String>,
 ) {
     if let Some(events) = events {
-        events.emit(AgentEvent::ModelRetryScheduled {
+        events.emit(AgentRawEvent::ModelRetryScheduled {
             attempt,
             delay,
             reason: Arc::<str>::from(reason.into()),
@@ -211,7 +211,7 @@ impl ChatClient {
     pub(crate) async fn chat_completion_with_events(
         &self,
         request: ChatCompletionRequest,
-        events: &AgentEventSink,
+        events: &AgentEventEmitter,
     ) -> Result<ChatCompletionResponse> {
         self.chat_completion_inner(request, Some(events)).await
     }
@@ -219,7 +219,7 @@ impl ChatClient {
     async fn chat_completion_inner(
         &self,
         request: ChatCompletionRequest,
-        events: Option<&AgentEventSink>,
+        events: Option<&AgentEventEmitter>,
     ) -> Result<ChatCompletionResponse> {
         let url = format!("{}/chat/completions", self.config.base_url);
         let request_body = serde_json::to_string(&request)?;
@@ -376,7 +376,7 @@ impl ChatClient {
     async fn chat_completion_stream_inner(
         &self,
         mut request: ChatCompletionRequest,
-        events: Option<&AgentEventSink>,
+        events: Option<&AgentEventEmitter>,
     ) -> Result<impl Stream<Item = Result<StreamChunk>>> {
         use futures::stream::StreamExt;
 
@@ -447,7 +447,7 @@ impl ChatClient {
         url: &str,
         request_body: &str,
         total_attempts: u32,
-        events: Option<&AgentEventSink>,
+        events: Option<&AgentEventEmitter>,
     ) -> Result<reqwest::Response> {
         for attempt in 1..=total_attempts {
             tracing::debug!(attempt, total_attempts, "Starting streaming HTTP attempt");
@@ -562,7 +562,7 @@ impl ChatClient {
     pub(crate) async fn chat_completion_stream_collect_with_events(
         &self,
         mut request: ChatCompletionRequest,
-        events: &AgentEventSink,
+        events: &AgentEventEmitter,
     ) -> Result<ChatCompletionResponse> {
         use futures::StreamExt;
 
@@ -570,7 +570,7 @@ impl ChatClient {
         let stream = self
             .chat_completion_stream_inner(request, Some(events))
             .await?;
-        events.emit(AgentEvent::ModelResponseStarted);
+        events.emit(AgentRawEvent::ModelResponseStarted);
         futures::pin_mut!(stream);
         let mut accumulator = ChatStreamAccumulator::default();
         while let Some(chunk) = stream.next().await {
@@ -588,7 +588,7 @@ impl ChatClient {
             }
         }
         let response = accumulator.finish_with_events(events)?;
-        events.emit(AgentEvent::ModelResponseCompleted {
+        events.emit(AgentRawEvent::ModelResponseCompleted {
             finish_reason: response
                 .choices
                 .first()
@@ -601,7 +601,7 @@ impl ChatClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::AgentEventEnvelope;
+    use crate::events::AgentRawEventEnvelope;
     use futures::StreamExt;
     use std::{
         io::{self, Write},
@@ -1249,9 +1249,9 @@ mod tests {
         ];
         let (base_url, captured_requests) = spawn_mock_sequence(responses).await;
 
-        let delivered = Arc::new(Mutex::new(Vec::<AgentEventEnvelope>::new()));
+        let delivered = Arc::new(Mutex::new(Vec::<AgentRawEventEnvelope>::new()));
         let captured = Arc::clone(&delivered);
-        let events = AgentEventSink::new(Arc::new(move |event: &AgentEventEnvelope| {
+        let events = AgentEventEmitter::new(Arc::new(move |event: &AgentRawEventEnvelope| {
             captured.lock().unwrap().push(event.clone());
         }));
 
@@ -1269,7 +1269,7 @@ mod tests {
         let delivered = delivered.lock().unwrap();
         assert!(matches!(
             &delivered[0].event,
-            AgentEvent::ModelRetryScheduled {
+            AgentRawEvent::ModelRetryScheduled {
                 attempt: 2,
                 reason,
                 ..
@@ -1277,7 +1277,7 @@ mod tests {
         ));
         assert!(matches!(
             delivered[1].event,
-            AgentEvent::ModelResponseStarted
+            AgentRawEvent::ModelResponseStarted
         ));
     }
 }

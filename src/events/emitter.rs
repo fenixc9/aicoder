@@ -4,28 +4,10 @@ use std::{
     thread,
 };
 
-use super::{AgentRawEvent, AgentRawEventEnvelope, RunId};
+use super::{
+    AgentRawEvent, AgentRawEventEnvelope, AgentTypeEventHandler, RunId, handler::dispatch_event,
+};
 use tokio::sync::{mpsc, oneshot};
-
-pub trait AgentRawEventHandler: Send + Sync + 'static {
-    fn on_event(&self, event: &AgentRawEventEnvelope);
-}
-
-impl<F> AgentRawEventHandler for F
-where
-    F: Fn(&AgentRawEventEnvelope) + Send + Sync + 'static,
-{
-    fn on_event(&self, event: &AgentRawEventEnvelope) {
-        self(event);
-    }
-}
-
-#[allow(dead_code)]
-pub struct NoopRawEventHandler;
-
-impl AgentRawEventHandler for NoopRawEventHandler {
-    fn on_event(&self, _event: &AgentRawEventEnvelope) {}
-}
 
 enum EventCommand {
     Event {
@@ -37,13 +19,13 @@ enum EventCommand {
 
 /// A cheap, non-blocking producer for one serialized per-run event queue.
 #[derive(Clone)]
-pub(crate) struct AgentEventSink {
+pub struct AgentEventEmitter {
     sender: mpsc::UnboundedSender<EventCommand>,
     round: Option<usize>,
 }
 
-impl AgentEventSink {
-    pub(crate) fn new(handler: Arc<dyn AgentRawEventHandler>) -> Self {
+impl AgentEventEmitter {
+    pub(crate) fn new(handler: Arc<dyn AgentTypeEventHandler>) -> Self {
         let (sender, mut receiver) = mpsc::unbounded_channel::<EventCommand>();
         let run_id = RunId::new();
         let run_id_text = run_id.to_string();
@@ -61,8 +43,10 @@ impl AgentEventSink {
                                 event,
                             };
                             sequence = sequence.saturating_add(1);
-                            if catch_unwind(AssertUnwindSafe(|| handler.on_event(&envelope)))
-                                .is_err()
+                            if catch_unwind(AssertUnwindSafe(|| {
+                                dispatch_event(handler.as_ref(), &envelope)
+                            }))
+                            .is_err()
                             {
                                 tracing::error!(
                                     "Agent event handler panicked; continuing delivery"
@@ -90,7 +74,8 @@ impl AgentEventSink {
         }
     }
 
-    pub(crate) fn emit(&self, event: AgentRawEvent) {
+    /// Enqueues a provider event without blocking the model stream.
+    pub fn emit(&self, event: AgentRawEvent) {
         let _ = self.sender.send(EventCommand::Event {
             round: self.round,
             event,
@@ -120,18 +105,23 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn callbacks_are_serialized_off_the_runtime() {
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let target = Arc::clone(&received);
-        let handler = Arc::new(move |event: &AgentRawEventEnvelope| {
+    struct RecordingHandler(Arc<Mutex<Vec<(u64, String)>>>);
+
+    impl AgentTypeEventHandler for RecordingHandler {
+        fn on_raw_event(&self, event: &AgentRawEventEnvelope) {
             thread::sleep(Duration::from_millis(25));
-            target.lock().unwrap().push((
+            self.0.lock().unwrap().push((
                 event.sequence,
                 thread::current().name().unwrap_or_default().to_string(),
             ));
-        });
-        let events = AgentEventSink::new(handler);
+        }
+    }
+
+    #[tokio::test]
+    async fn callbacks_are_serialized_off_the_runtime() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let handler = Arc::new(RecordingHandler(Arc::clone(&received)));
+        let events = AgentEventEmitter::new(handler);
 
         for _ in 0..4 {
             events.emit(AgentRawEvent::RoundStarted);

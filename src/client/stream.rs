@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use anyhow::{Context, Result};
 
 use crate::{
-    events::{AgentEvent, AgentEventSink, StreamEnd, ToolCallKey},
+    events::{AgentEventEmitter, AgentRawEvent, StreamEnd, ToolCallKey},
     types::{
         ChatCompletionResponse, ChatMessage, Choice, FunctionCall, LogProbs, Role, StreamChunk,
         StreamDelta, StreamToolCall, ToolCall, ToolType, Usage,
@@ -198,12 +198,12 @@ impl ChatStreamAccumulator {
     pub(crate) fn push_with_events(
         &mut self,
         chunk: StreamChunk,
-        events: &AgentEventSink,
+        events: &AgentEventEmitter,
     ) -> Result<()> {
         self.push_inner(chunk, Some(events))
     }
 
-    fn push_inner(&mut self, chunk: StreamChunk, events: Option<&AgentEventSink>) -> Result<()> {
+    fn push_inner(&mut self, chunk: StreamChunk, events: Option<&AgentEventEmitter>) -> Result<()> {
         if self.state == AccumulatorState::Finished {
             anyhow::bail!("Received a stream chunk after the stream was finished");
         }
@@ -241,7 +241,7 @@ impl ChatStreamAccumulator {
         }
         if let Some(usage) = chunk_usage {
             if let Some(events) = events {
-                events.emit(AgentEvent::UsageUpdated {
+                events.emit(AgentRawEvent::UsageUpdated {
                     usage: usage.clone().into(),
                 });
             }
@@ -250,7 +250,7 @@ impl ChatStreamAccumulator {
         Ok(())
     }
 
-    pub(crate) fn abort_events(&self, events: &AgentEventSink, reason: impl Into<String>) {
+    pub(crate) fn abort_events(&self, events: &AgentEventEmitter, reason: impl Into<String>) {
         let reason = Arc::<str>::from(reason.into());
         for (choice_index, choice) in &self.choices {
             if choice.events_ended {
@@ -260,19 +260,19 @@ impl ChatStreamAccumulator {
                 reason: reason.clone(),
             };
             if choice.reasoning_event_open {
-                events.emit(AgentEvent::ReasoningEnded {
+                events.emit(AgentRawEvent::ReasoningEnded {
                     choice_index: *choice_index,
                     outcome: outcome(),
                 });
             }
             if choice.content_event_open {
-                events.emit(AgentEvent::ContentEnded {
+                events.emit(AgentRawEvent::ContentEnded {
                     choice_index: *choice_index,
                     outcome: outcome(),
                 });
             }
             for tool_index in choice.tool_calls.keys() {
-                events.emit(AgentEvent::ToolCallEnded {
+                events.emit(AgentRawEvent::ToolCallEnded {
                     key: ToolCallKey {
                         choice_index: *choice_index,
                         tool_index: *tool_index,
@@ -309,7 +309,7 @@ impl ChatStreamAccumulator {
 
     pub(crate) fn finish_with_events(
         self,
-        events: &AgentEventSink,
+        events: &AgentEventEmitter,
     ) -> Result<ChatCompletionResponse> {
         if let Err(error) = self.validate_complete() {
             self.abort_events(events, error.to_string());
@@ -351,7 +351,7 @@ fn apply_delta(
     choice: &mut ChoiceAccumulator,
     choice_index: i32,
     delta: StreamDelta,
-    events: Option<&AgentEventSink>,
+    events: Option<&AgentEventEmitter>,
 ) -> Result<()> {
     if let Some(role) = delta.role {
         merge_stable(&mut choice.role, role, "choice role")?;
@@ -362,10 +362,10 @@ fn apply_delta(
             && let Some(events) = events
         {
             if !choice.reasoning_event_open {
-                events.emit(AgentEvent::ReasoningStarted { choice_index });
+                events.emit(AgentRawEvent::ReasoningStarted { choice_index });
                 choice.reasoning_event_open = true;
             }
-            events.emit(AgentEvent::ReasoningChunk {
+            events.emit(AgentRawEvent::ReasoningChunk {
                 choice_index,
                 delta: reasoning.clone().into(),
             });
@@ -378,10 +378,10 @@ fn apply_delta(
             && let Some(events) = events
         {
             if !choice.content_event_open {
-                events.emit(AgentEvent::ContentStarted { choice_index });
+                events.emit(AgentRawEvent::ContentStarted { choice_index });
                 choice.content_event_open = true;
             }
-            events.emit(AgentEvent::ContentChunk {
+            events.emit(AgentRawEvent::ContentChunk {
                 choice_index,
                 delta: content.clone().into(),
             });
@@ -400,7 +400,7 @@ fn apply_tool_call(
     choice: &mut ChoiceAccumulator,
     choice_index: i32,
     delta: StreamToolCall,
-    events: Option<&AgentEventSink>,
+    events: Option<&AgentEventEmitter>,
 ) -> Result<()> {
     if delta.index < 0 {
         anyhow::bail!("Stream tool call index must be non-negative");
@@ -411,7 +411,7 @@ fn apply_tool_call(
     };
     let is_new = !choice.tool_calls.contains_key(&delta.index);
     if is_new && let Some(events) = events {
-        events.emit(AgentEvent::ToolCallStarted { key });
+        events.emit(AgentRawEvent::ToolCallStarted { key });
     }
 
     let id_delta = delta.id;
@@ -423,7 +423,7 @@ fn apply_tool_call(
     if let Some(events) = events
         && (id_delta.is_some() || name_delta.is_some() || arguments_delta.is_some())
     {
-        events.emit(AgentEvent::ToolCallChunk {
+        events.emit(AgentRawEvent::ToolCallChunk {
             key,
             id_delta: id_delta.clone().map(Into::into),
             name_delta: name_delta.clone().map(Into::into),
@@ -448,7 +448,7 @@ fn apply_tool_call(
 }
 
 fn emit_choice_ended(
-    events: &AgentEventSink,
+    events: &AgentEventEmitter,
     choice_index: i32,
     choice: &ChoiceAccumulator,
 ) -> Result<()> {
@@ -467,19 +467,19 @@ fn emit_choice_ended(
         .collect::<Result<Vec<_>>>()?;
 
     if choice.reasoning_event_open {
-        events.emit(AgentEvent::ReasoningEnded {
+        events.emit(AgentRawEvent::ReasoningEnded {
             choice_index,
             outcome: StreamEnd::Completed,
         });
     }
     if choice.content_event_open {
-        events.emit(AgentEvent::ContentEnded {
+        events.emit(AgentRawEvent::ContentEnded {
             choice_index,
             outcome: StreamEnd::Completed,
         });
     }
     for (key, tool_call) in completed_tools {
-        events.emit(AgentEvent::ToolCallEnded {
+        events.emit(AgentRawEvent::ToolCallEnded {
             key,
             outcome: StreamEnd::Completed,
             tool_call: Some(tool_call.into()),
@@ -573,7 +573,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::events::AgentEventEnvelope;
+    use crate::events::AgentRawEventEnvelope;
 
     fn chunk(value: serde_json::Value) -> StreamChunk {
         serde_json::from_value(value).unwrap()
@@ -659,9 +659,9 @@ mod tests {
 
     #[tokio::test]
     async fn accumulator_emits_ordered_semantic_events() {
-        let delivered = Arc::new(Mutex::new(Vec::<AgentEventEnvelope>::new()));
+        let delivered = Arc::new(Mutex::new(Vec::<AgentRawEventEnvelope>::new()));
         let captured = Arc::clone(&delivered);
-        let events = AgentEventSink::new(Arc::new(move |event: &AgentEventEnvelope| {
+        let events = AgentEventEmitter::new(Arc::new(move |event: &AgentRawEventEnvelope| {
             captured.lock().unwrap().push(event.clone());
         }));
         let mut accumulator = ChatStreamAccumulator::default();
@@ -707,43 +707,43 @@ mod tests {
         let delivered = delivered.lock().unwrap();
         assert!(matches!(
             delivered[0].event,
-            AgentEvent::ReasoningStarted { .. }
+            AgentRawEvent::ReasoningStarted { .. }
         ));
         assert!(matches!(
             delivered[1].event,
-            AgentEvent::ReasoningChunk { .. }
+            AgentRawEvent::ReasoningChunk { .. }
         ));
         assert!(matches!(
             delivered[2].event,
-            AgentEvent::ContentStarted { .. }
+            AgentRawEvent::ContentStarted { .. }
         ));
         assert!(matches!(
             delivered[3].event,
-            AgentEvent::ContentChunk { .. }
+            AgentRawEvent::ContentChunk { .. }
         ));
         assert!(matches!(
             delivered[4].event,
-            AgentEvent::ToolCallStarted { .. }
+            AgentRawEvent::ToolCallStarted { .. }
         ));
         assert!(matches!(
             delivered[5].event,
-            AgentEvent::ToolCallChunk { .. }
+            AgentRawEvent::ToolCallChunk { .. }
         ));
         assert!(matches!(
             delivered[6].event,
-            AgentEvent::ReasoningEnded { .. }
+            AgentRawEvent::ReasoningEnded { .. }
         ));
         assert!(matches!(
             delivered[7].event,
-            AgentEvent::ContentEnded { .. }
+            AgentRawEvent::ContentEnded { .. }
         ));
         assert!(matches!(
             delivered[8].event,
-            AgentEvent::ToolCallEnded { .. }
+            AgentRawEvent::ToolCallEnded { .. }
         ));
         assert!(matches!(
             delivered[9].event,
-            AgentEvent::UsageUpdated { .. }
+            AgentRawEvent::UsageUpdated { .. }
         ));
         assert!(
             delivered
@@ -755,9 +755,9 @@ mod tests {
 
     #[tokio::test]
     async fn accumulator_closes_open_events_when_stream_aborts() {
-        let delivered = Arc::new(Mutex::new(Vec::<AgentEventEnvelope>::new()));
+        let delivered = Arc::new(Mutex::new(Vec::<AgentRawEventEnvelope>::new()));
         let captured = Arc::clone(&delivered);
-        let events = AgentEventSink::new(Arc::new(move |event: &AgentEventEnvelope| {
+        let events = AgentEventEmitter::new(Arc::new(move |event: &AgentRawEventEnvelope| {
             captured.lock().unwrap().push(event.clone());
         }));
         let mut accumulator = ChatStreamAccumulator::default();
@@ -783,17 +783,17 @@ mod tests {
             .filter(|event| {
                 matches!(
                     event.event,
-                    AgentEvent::ReasoningEnded { .. }
-                        | AgentEvent::ContentEnded { .. }
-                        | AgentEvent::ToolCallEnded { .. }
+                    AgentRawEvent::ReasoningEnded { .. }
+                        | AgentRawEvent::ContentEnded { .. }
+                        | AgentRawEvent::ToolCallEnded { .. }
                 )
             })
             .collect::<Vec<_>>();
         assert_eq!(endings.len(), 3);
         assert!(endings.iter().all(|event| match &event.event {
-            AgentEvent::ReasoningEnded { outcome, .. }
-            | AgentEvent::ContentEnded { outcome, .. }
-            | AgentEvent::ToolCallEnded { outcome, .. } => matches!(
+            AgentRawEvent::ReasoningEnded { outcome, .. }
+            | AgentRawEvent::ContentEnded { outcome, .. }
+            | AgentRawEvent::ToolCallEnded { outcome, .. } => matches!(
                 outcome,
                 StreamEnd::Aborted { reason } if reason.as_ref() == "connection reset"
             ),

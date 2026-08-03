@@ -3,7 +3,7 @@
 mod emitter;
 mod handler;
 mod types;
-pub use emitter::{AgentRawEventHandler, NoopRawEventHandler};
+pub use emitter::AgentEventEmitter;
 #[allow(unused_imports)]
 pub use handler::{
     AgentCompletedEvent, AgentEventMeta, AgentFailedEvent, AgentStartedEvent,
@@ -19,8 +19,4 @@ pub use types::{
     ToolExecutionOutcome,
 };
 
-pub(crate) use emitter::AgentEventSink;
-pub(crate) use handler::AgentTypeEventAdapter;
 pub(crate) use types::emit_full_response_events;
-#[allow(unused_imports)]
-pub(crate) use types::{AgentRawEvent as AgentEvent, AgentRawEventEnvelope as AgentEventEnvelope};

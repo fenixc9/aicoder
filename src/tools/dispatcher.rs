@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tokio::time::timeout;
 
 use crate::{
-    events::{AgentEvent, AgentEventSink, ToolExecutionOutcome},
+    events::{AgentEventEmitter, AgentRawEvent, ToolExecutionOutcome},
     redaction::sanitize_text,
     types::{ChatMessage, Role, ToolCall},
 };
@@ -69,7 +69,7 @@ impl ToolDispatcher {
     pub(crate) async fn dispatch_with_events(
         &self,
         calls: &[ToolCall],
-        events: &AgentEventSink,
+        events: &AgentEventEmitter,
     ) -> Result<Vec<ChatMessage>> {
         self.dispatch_inner(calls, Some(events)).await
     }
@@ -77,7 +77,7 @@ impl ToolDispatcher {
     async fn dispatch_inner(
         &self,
         calls: &[ToolCall],
-        events: Option<&AgentEventSink>,
+        events: Option<&AgentEventEmitter>,
     ) -> Result<Vec<ChatMessage>> {
         if calls.len() > self.config.max_calls_per_round {
             anyhow::bail!(
@@ -120,10 +120,14 @@ impl ToolDispatcher {
             .unwrap_or(ToolCapability::Command)
     }
 
-    async fn execute_call(&self, call: &ToolCall, events: Option<&AgentEventSink>) -> ChatMessage {
+    async fn execute_call(
+        &self,
+        call: &ToolCall,
+        events: Option<&AgentEventEmitter>,
+    ) -> ChatMessage {
         emit_event(
             events,
-            AgentEvent::ToolExecutionStarted {
+            AgentRawEvent::ToolExecutionStarted {
                 call_id: call.id.clone().into(),
                 name: call.function.name.clone().into(),
                 arguments: call.function.arguments.clone().into(),
@@ -164,7 +168,7 @@ impl ToolDispatcher {
         if invocation.capability != ToolCapability::ReadOnly {
             emit_event(
                 events,
-                AgentEvent::ToolApprovalRequested {
+                AgentRawEvent::ToolApprovalRequested {
                     call_id: invocation.call_id.clone().into(),
                     name: invocation.name.clone().into(),
                     capability: invocation.capability,
@@ -173,7 +177,7 @@ impl ToolDispatcher {
             match self.approval.approve(&invocation).await {
                 Ok(true) => emit_event(
                     events,
-                    AgentEvent::ToolApprovalResolved {
+                    AgentRawEvent::ToolApprovalResolved {
                         call_id: invocation.call_id.clone().into(),
                         approved: true,
                     },
@@ -181,7 +185,7 @@ impl ToolDispatcher {
                 Ok(false) => {
                     emit_event(
                         events,
-                        AgentEvent::ToolApprovalResolved {
+                        AgentRawEvent::ToolApprovalResolved {
                             call_id: invocation.call_id.clone().into(),
                             approved: false,
                         },
@@ -195,7 +199,7 @@ impl ToolDispatcher {
                 Err(error) => {
                     emit_event(
                         events,
-                        AgentEvent::ToolApprovalResolved {
+                        AgentRawEvent::ToolApprovalResolved {
                             call_id: invocation.call_id.clone().into(),
                             approved: false,
                         },
@@ -239,7 +243,7 @@ impl ToolDispatcher {
         };
         emit_event(
             events,
-            AgentEvent::ToolExecutionEnded {
+            AgentRawEvent::ToolExecutionEnded {
                 call_id: call.id.clone().into(),
                 name: call.function.name.clone().into(),
                 outcome: outcome.into(),
@@ -249,21 +253,21 @@ impl ToolDispatcher {
     }
 }
 
-fn emit_event(events: Option<&AgentEventSink>, event: AgentEvent) {
+fn emit_event(events: Option<&AgentEventEmitter>, event: AgentRawEvent) {
     if let Some(events) = events {
         events.emit(event);
     }
 }
 
 fn failed_tool_message(
-    events: Option<&AgentEventSink>,
+    events: Option<&AgentEventEmitter>,
     call: &ToolCall,
     error: ToolFailure,
 ) -> ChatMessage {
     let outcome = failure_outcome(&error);
     emit_event(
         events,
-        AgentEvent::ToolExecutionEnded {
+        AgentRawEvent::ToolExecutionEnded {
             call_id: call.id.clone().into(),
             name: call.function.name.clone().into(),
             outcome: outcome.into(),

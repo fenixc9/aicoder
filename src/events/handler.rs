@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::{sync::Arc, time::Duration};
 
 use crate::{
@@ -8,8 +6,8 @@ use crate::{
 };
 
 use super::{
-    AgentRawEvent, AgentRawEventEnvelope, AgentRawEventHandler, AgentStage, RoundOutcome, RunId,
-    StreamEnd, ToolCallKey, ToolExecutionOutcome,
+    AgentRawEvent, AgentRawEventEnvelope, AgentStage, RoundOutcome, RunId, StreamEnd, ToolCallKey,
+    ToolExecutionOutcome,
 };
 
 /// Metadata shared by every typed event.
@@ -190,12 +188,15 @@ pub struct UsageUpdatedEvent {
     pub usage: Arc<Usage>,
 }
 
-/// Type-safe event callbacks for applications that do not need the raw event enum.
+/// The single event interface for agent applications.
 ///
-/// The adapter performs the raw enum match exactly once. Implementers override only the precise
-/// callbacks they need. Payloads are owned and backed by `Arc` where useful, so callbacks can
-/// retain or forward events without lifetimes or copying complete streaming chunks.
+/// `on_raw_event` observes every event before its type-specific callback. Applications can use it
+/// to forward or persist the event stream while overriding only the typed callbacks they need for
+/// presentation. Payloads are owned and backed by `Arc` where useful, so callbacks can retain or
+/// forward events without copying complete streaming chunks.
 pub trait AgentTypeEventHandler: Send + Sync + 'static {
+    fn on_raw_event(&self, _event: &AgentRawEventEnvelope) {}
+
     fn on_agent_started(&self, _event: AgentStartedEvent) {}
     fn on_agent_completed(&self, _event: AgentCompletedEvent) {}
     fn on_agent_failed(&self, _event: AgentFailedEvent) {}
@@ -228,200 +229,189 @@ pub trait AgentTypeEventHandler: Send + Sync + 'static {
     fn on_usage_updated(&self, _event: UsageUpdatedEvent) {}
 }
 
-pub(crate) struct AgentTypeEventAdapter {
-    handler: Arc<dyn AgentTypeEventHandler>,
-}
+impl AgentTypeEventHandler for () {}
 
-impl AgentTypeEventAdapter {
-    pub(crate) fn new(handler: Arc<dyn AgentTypeEventHandler>) -> Self {
-        Self { handler }
+impl<F> AgentTypeEventHandler for F
+where
+    F: Fn(&AgentRawEventEnvelope) + Send + Sync + 'static,
+{
+    fn on_raw_event(&self, event: &AgentRawEventEnvelope) {
+        self(event);
     }
 }
 
-impl AgentRawEventHandler for AgentTypeEventAdapter {
-    fn on_event(&self, envelope: &AgentRawEventEnvelope) {
-        let meta = AgentEventMeta::from(envelope);
-        match &envelope.event {
-            AgentRawEvent::AgentStarted { model } => {
-                self.handler.on_agent_started(AgentStartedEvent {
-                    meta,
-                    model: Arc::clone(model),
-                })
-            }
-            AgentRawEvent::AgentCompleted { rounds, usage } => {
-                self.handler.on_agent_completed(AgentCompletedEvent {
-                    meta,
-                    rounds: *rounds,
-                    usage: Arc::clone(usage),
-                });
-            }
-            AgentRawEvent::AgentFailed { stage, message } => {
-                self.handler.on_agent_failed(AgentFailedEvent {
-                    meta,
-                    stage: *stage,
-                    message: Arc::clone(message),
-                });
-            }
-            AgentRawEvent::RoundStarted => {
-                self.handler.on_round_started(RoundStartedEvent { meta });
-            }
-            AgentRawEvent::RoundCompleted { outcome } => {
-                self.handler.on_round_completed(RoundCompletedEvent {
-                    meta,
-                    outcome: outcome.clone(),
-                })
-            }
-            AgentRawEvent::ModelRequestStarted => self
-                .handler
-                .on_model_request_started(ModelRequestStartedEvent { meta }),
-            AgentRawEvent::ModelResponseStarted => self
-                .handler
-                .on_model_response_started(ModelResponseStartedEvent { meta }),
-            AgentRawEvent::ModelRetryScheduled {
-                attempt,
-                delay,
-                reason,
-            } => self
-                .handler
-                .on_model_retry_scheduled(ModelRetryScheduledEvent {
-                    meta,
-                    attempt: *attempt,
-                    delay: *delay,
-                    reason: Arc::clone(reason),
-                }),
-            AgentRawEvent::ModelResponseCompleted { finish_reason } => {
-                self.handler
-                    .on_model_response_completed(ModelResponseCompletedEvent {
-                        meta,
-                        finish_reason: finish_reason.clone(),
-                    });
-            }
-            AgentRawEvent::ModelResponseFailed { message } => self
-                .handler
-                .on_model_response_failed(ModelResponseFailedEvent {
-                    meta,
-                    message: Arc::clone(message),
-                }),
-            AgentRawEvent::ReasoningStarted { choice_index } => {
-                self.handler.on_reasoning_started(ReasoningStartedEvent {
-                    meta,
-                    choice_index: *choice_index,
-                })
-            }
-            AgentRawEvent::ReasoningChunk {
-                choice_index,
-                delta,
-            } => self.handler.on_reasoning_chunk(ReasoningChunkEvent {
+pub(crate) fn dispatch_event(
+    handler: &dyn AgentTypeEventHandler,
+    envelope: &AgentRawEventEnvelope,
+) {
+    handler.on_raw_event(envelope);
+    let meta = AgentEventMeta::from(envelope);
+    match &envelope.event {
+        AgentRawEvent::AgentStarted { model } => handler.on_agent_started(AgentStartedEvent {
+            meta,
+            model: Arc::clone(model),
+        }),
+        AgentRawEvent::AgentCompleted { rounds, usage } => {
+            handler.on_agent_completed(AgentCompletedEvent {
                 meta,
-                choice_index: *choice_index,
-                delta: Arc::clone(delta),
-            }),
-            AgentRawEvent::ReasoningEnded {
-                choice_index,
-                outcome,
-            } => self.handler.on_reasoning_ended(ReasoningEndedEvent {
-                meta,
-                choice_index: *choice_index,
-                outcome: outcome.clone(),
-            }),
-            AgentRawEvent::ContentStarted { choice_index } => {
-                self.handler.on_content_started(ContentStartedEvent {
-                    meta,
-                    choice_index: *choice_index,
-                });
-            }
-            AgentRawEvent::ContentChunk {
-                choice_index,
-                delta,
-            } => self.handler.on_content_chunk(ContentChunkEvent {
-                meta,
-                choice_index: *choice_index,
-                delta: Arc::clone(delta),
-            }),
-            AgentRawEvent::ContentEnded {
-                choice_index,
-                outcome,
-            } => self.handler.on_content_ended(ContentEndedEvent {
-                meta,
-                choice_index: *choice_index,
-                outcome: outcome.clone(),
-            }),
-            AgentRawEvent::ToolCallStarted { key } => self
-                .handler
-                .on_tool_call_started(ToolCallStartedEvent { meta, key: *key }),
-            AgentRawEvent::ToolCallChunk {
-                key,
-                id_delta,
-                name_delta,
-                arguments_delta,
-            } => self.handler.on_tool_call_chunk(ToolCallChunkEvent {
-                meta,
-                key: *key,
-                id_delta: id_delta.clone(),
-                name_delta: name_delta.clone(),
-                arguments_delta: arguments_delta.clone(),
-            }),
-            AgentRawEvent::ToolCallEnded {
-                key,
-                outcome,
-                tool_call,
-            } => self.handler.on_tool_call_ended(ToolCallEndedEvent {
-                meta,
-                key: *key,
-                outcome: outcome.clone(),
-                tool_call: tool_call.clone(),
-            }),
-            AgentRawEvent::ToolApprovalRequested {
-                call_id,
-                name,
-                capability,
-            } => self
-                .handler
-                .on_tool_approval_requested(ToolApprovalRequestedEvent {
-                    meta,
-                    call_id: Arc::clone(call_id),
-                    name: Arc::clone(name),
-                    capability: *capability,
-                }),
-            AgentRawEvent::ToolApprovalResolved { call_id, approved } => {
-                self.handler
-                    .on_tool_approval_resolved(ToolApprovalResolvedEvent {
-                        meta,
-                        call_id: Arc::clone(call_id),
-                        approved: *approved,
-                    });
-            }
-            AgentRawEvent::ToolExecutionStarted {
-                call_id,
-                name,
-                arguments,
-            } => self
-                .handler
-                .on_tool_execution_started(ToolExecutionStartedEvent {
-                    meta,
-                    call_id: Arc::clone(call_id),
-                    name: Arc::clone(name),
-                    arguments: Arc::clone(arguments),
-                }),
-            AgentRawEvent::ToolExecutionEnded {
-                call_id,
-                name,
-                outcome,
-            } => self
-                .handler
-                .on_tool_execution_ended(ToolExecutionEndedEvent {
-                    meta,
-                    call_id: Arc::clone(call_id),
-                    name: Arc::clone(name),
-                    outcome: Arc::clone(outcome),
-                }),
-            AgentRawEvent::UsageUpdated { usage } => {
-                self.handler.on_usage_updated(UsageUpdatedEvent {
-                    meta,
-                    usage: Arc::clone(usage),
-                })
-            }
+                rounds: *rounds,
+                usage: Arc::clone(usage),
+            });
         }
+        AgentRawEvent::AgentFailed { stage, message } => {
+            handler.on_agent_failed(AgentFailedEvent {
+                meta,
+                stage: *stage,
+                message: Arc::clone(message),
+            });
+        }
+        AgentRawEvent::RoundStarted => {
+            handler.on_round_started(RoundStartedEvent { meta });
+        }
+        AgentRawEvent::RoundCompleted { outcome } => {
+            handler.on_round_completed(RoundCompletedEvent {
+                meta,
+                outcome: outcome.clone(),
+            })
+        }
+        AgentRawEvent::ModelRequestStarted => {
+            handler.on_model_request_started(ModelRequestStartedEvent { meta })
+        }
+        AgentRawEvent::ModelResponseStarted => {
+            handler.on_model_response_started(ModelResponseStartedEvent { meta })
+        }
+        AgentRawEvent::ModelRetryScheduled {
+            attempt,
+            delay,
+            reason,
+        } => handler.on_model_retry_scheduled(ModelRetryScheduledEvent {
+            meta,
+            attempt: *attempt,
+            delay: *delay,
+            reason: Arc::clone(reason),
+        }),
+        AgentRawEvent::ModelResponseCompleted { finish_reason } => {
+            handler.on_model_response_completed(ModelResponseCompletedEvent {
+                meta,
+                finish_reason: finish_reason.clone(),
+            });
+        }
+        AgentRawEvent::ModelResponseFailed { message } => {
+            handler.on_model_response_failed(ModelResponseFailedEvent {
+                meta,
+                message: Arc::clone(message),
+            })
+        }
+        AgentRawEvent::ReasoningStarted { choice_index } => {
+            handler.on_reasoning_started(ReasoningStartedEvent {
+                meta,
+                choice_index: *choice_index,
+            })
+        }
+        AgentRawEvent::ReasoningChunk {
+            choice_index,
+            delta,
+        } => handler.on_reasoning_chunk(ReasoningChunkEvent {
+            meta,
+            choice_index: *choice_index,
+            delta: Arc::clone(delta),
+        }),
+        AgentRawEvent::ReasoningEnded {
+            choice_index,
+            outcome,
+        } => handler.on_reasoning_ended(ReasoningEndedEvent {
+            meta,
+            choice_index: *choice_index,
+            outcome: outcome.clone(),
+        }),
+        AgentRawEvent::ContentStarted { choice_index } => {
+            handler.on_content_started(ContentStartedEvent {
+                meta,
+                choice_index: *choice_index,
+            });
+        }
+        AgentRawEvent::ContentChunk {
+            choice_index,
+            delta,
+        } => handler.on_content_chunk(ContentChunkEvent {
+            meta,
+            choice_index: *choice_index,
+            delta: Arc::clone(delta),
+        }),
+        AgentRawEvent::ContentEnded {
+            choice_index,
+            outcome,
+        } => handler.on_content_ended(ContentEndedEvent {
+            meta,
+            choice_index: *choice_index,
+            outcome: outcome.clone(),
+        }),
+        AgentRawEvent::ToolCallStarted { key } => {
+            handler.on_tool_call_started(ToolCallStartedEvent { meta, key: *key })
+        }
+        AgentRawEvent::ToolCallChunk {
+            key,
+            id_delta,
+            name_delta,
+            arguments_delta,
+        } => handler.on_tool_call_chunk(ToolCallChunkEvent {
+            meta,
+            key: *key,
+            id_delta: id_delta.clone(),
+            name_delta: name_delta.clone(),
+            arguments_delta: arguments_delta.clone(),
+        }),
+        AgentRawEvent::ToolCallEnded {
+            key,
+            outcome,
+            tool_call,
+        } => handler.on_tool_call_ended(ToolCallEndedEvent {
+            meta,
+            key: *key,
+            outcome: outcome.clone(),
+            tool_call: tool_call.clone(),
+        }),
+        AgentRawEvent::ToolApprovalRequested {
+            call_id,
+            name,
+            capability,
+        } => handler.on_tool_approval_requested(ToolApprovalRequestedEvent {
+            meta,
+            call_id: Arc::clone(call_id),
+            name: Arc::clone(name),
+            capability: *capability,
+        }),
+        AgentRawEvent::ToolApprovalResolved { call_id, approved } => {
+            handler.on_tool_approval_resolved(ToolApprovalResolvedEvent {
+                meta,
+                call_id: Arc::clone(call_id),
+                approved: *approved,
+            });
+        }
+        AgentRawEvent::ToolExecutionStarted {
+            call_id,
+            name,
+            arguments,
+        } => handler.on_tool_execution_started(ToolExecutionStartedEvent {
+            meta,
+            call_id: Arc::clone(call_id),
+            name: Arc::clone(name),
+            arguments: Arc::clone(arguments),
+        }),
+        AgentRawEvent::ToolExecutionEnded {
+            call_id,
+            name,
+            outcome,
+        } => handler.on_tool_execution_ended(ToolExecutionEndedEvent {
+            meta,
+            call_id: Arc::clone(call_id),
+            name: Arc::clone(name),
+            outcome: Arc::clone(outcome),
+        }),
+        AgentRawEvent::UsageUpdated { usage } => handler.on_usage_updated(UsageUpdatedEvent {
+            meta,
+            usage: Arc::clone(usage),
+        }),
     }
 }
 
@@ -434,9 +424,14 @@ mod tests {
     #[derive(Default)]
     struct RecordingHandler {
         received: Mutex<Vec<String>>,
+        raw_sequences: Mutex<Vec<u64>>,
     }
 
     impl AgentTypeEventHandler for RecordingHandler {
+        fn on_raw_event(&self, event: &AgentRawEventEnvelope) {
+            self.raw_sequences.lock().unwrap().push(event.sequence);
+        }
+
         fn on_round_started(&self, event: RoundStartedEvent) {
             self.received
                 .lock()
@@ -476,33 +471,41 @@ mod tests {
     }
 
     #[test]
-    fn adapter_routes_exact_typed_events_without_reordering() {
+    fn handler_routes_raw_and_typed_events_without_reordering() {
         let handler = Arc::new(RecordingHandler::default());
-        let adapter = AgentTypeEventAdapter::new(handler.clone());
-        adapter.on_event(&envelope(1, AgentRawEvent::RoundStarted));
-        adapter.on_event(&envelope(
-            2,
-            AgentRawEvent::ReasoningChunk {
-                choice_index: 0,
-                delta: Arc::from("thinking"),
-            },
-        ));
-        adapter.on_event(&envelope(
-            3,
-            AgentRawEvent::ContentChunk {
-                choice_index: 0,
-                delta: Arc::from("hello"),
-            },
-        ));
-        adapter.on_event(&envelope(
-            4,
-            AgentRawEvent::UsageUpdated {
-                usage: Arc::new(Usage {
-                    total_tokens: 12,
-                    ..Usage::default()
-                }),
-            },
-        ));
+        dispatch_event(handler.as_ref(), &envelope(1, AgentRawEvent::RoundStarted));
+        dispatch_event(
+            handler.as_ref(),
+            &envelope(
+                2,
+                AgentRawEvent::ReasoningChunk {
+                    choice_index: 0,
+                    delta: Arc::from("thinking"),
+                },
+            ),
+        );
+        dispatch_event(
+            handler.as_ref(),
+            &envelope(
+                3,
+                AgentRawEvent::ContentChunk {
+                    choice_index: 0,
+                    delta: Arc::from("hello"),
+                },
+            ),
+        );
+        dispatch_event(
+            handler.as_ref(),
+            &envelope(
+                4,
+                AgentRawEvent::UsageUpdated {
+                    usage: Arc::new(Usage {
+                        total_tokens: 12,
+                        ..Usage::default()
+                    }),
+                },
+            ),
+        );
 
         assert_eq!(
             *handler.received.lock().unwrap(),
@@ -513,5 +516,6 @@ mod tests {
                 "usage:4:12"
             ]
         );
+        assert_eq!(*handler.raw_sequences.lock().unwrap(), vec![1, 2, 3, 4]);
     }
 }

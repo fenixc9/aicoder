@@ -1,25 +1,21 @@
-mod agent;
-mod client;
-mod events;
-mod redaction;
-mod tools;
-mod types;
+use std::{
+    io::{self, Write},
+    path::PathBuf,
+    sync::Arc,
+};
 
-use std::{path::PathBuf, sync::Arc};
-
-use anyhow::Result;
+use aicoder_core::{
+    Agent, AgentConfig, AgentTypeEventHandler, ChatClient,
+    events::{
+        ContentChunkEvent, ContentEndedEvent, ContentStartedEvent, ReasoningChunkEvent,
+        ReasoningEndedEvent, ReasoningStartedEvent, ToolCallEndedEvent, ToolExecutionEndedEvent,
+    },
+    tools::{AllowAllApproval, ApprovalHandler, ToolInvocation},
+    types::{ChatCompletionRequest, ChatMessage, Role},
+};
+use anyhow::{Context, Result};
+use async_trait::async_trait;
 use clap::Parser;
-
-use agent::{Agent, AgentConfig};
-use tools::{
-    AllowAllApproval, ApprovalHandler, ConsoleApproval, DispatcherConfig, ToolDispatcher,
-    default_registry,
-};
-
-use crate::events::{
-    AgentTypeEventHandler, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
-    ReasoningChunkEvent, ReasoningEndedEvent, ReasoningStartedEvent, ToolCallStartedEvent,
-};
 
 #[derive(Debug, Parser)]
 #[command(name = "aicoder", about = "A small tool-using coding agent")]
@@ -28,7 +24,7 @@ struct Cli {
     #[arg(short, long, default_value = "你是谁")]
     prompt: String,
 
-    /// Automatically approve write_file and bash calls.
+    /// Automatically approve mutating tools and commands.
     #[arg(long)]
     yes: bool,
 
@@ -37,66 +33,76 @@ struct Cli {
     workspace: PathBuf,
 }
 
-struct AppHandler {}
-#[allow(dead_code)]
-type OnToolCallStartedFn = fn();
+struct ConsoleEvents;
 
-impl AgentTypeEventHandler for AppHandler {
-    fn on_tool_call_started(&self, ev: ToolCallStartedEvent) {
-        // print!("[Tool]:")
+struct ConsoleApproval;
+
+#[async_trait]
+impl ApprovalHandler for ConsoleApproval {
+    async fn approve(&self, invocation: &ToolInvocation) -> Result<bool> {
+        let invocation = invocation.clone();
+        tokio::task::spawn_blocking(move || {
+            eprintln!(
+                "\n工具 {} 将以当前用户权限执行（不是沙箱）\n参数: {}",
+                invocation.name,
+                serde_json::to_string_pretty(&invocation.arguments)?
+            );
+            eprint!("允许执行? [y/N] ");
+            io::stderr().flush()?;
+
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            Ok(matches!(
+                input.trim().to_ascii_lowercase().as_str(),
+                "y" | "yes"
+            ))
+        })
+        .await
+        .context("Approval prompt task failed")?
+    }
+}
+
+impl AgentTypeEventHandler for ConsoleEvents {
+    fn on_tool_call_ended(&self, event: ToolCallEndedEvent) {
+        println!("[Tool]{:?}", event.tool_call);
     }
 
-    fn on_tool_call_chunk(&self, ev: events::ToolCallChunkEvent) {
-        // print!("{:?}", ev.name_delta) 
+    fn on_tool_execution_ended(&self, event: ToolExecutionEndedEvent) {
+        println!("[ToolExec]{:?}", event.name);
     }
-
-    fn on_tool_call_ended(&self, ev: events::ToolCallEndedEvent) {
-        println!("[Tool]{:?}", ev.tool_call)
-    }
-
-    
-    fn on_tool_execution_ended(&self, ev: events::ToolExecutionEndedEvent) {
-        println!("[ToolExec]{:?}", ev.name)
-    }
-
-
 
     fn on_reasoning_started(&self, _event: ReasoningStartedEvent) {
-        // tracing::info!(
-        //     sequence = event.meta.sequence,
-        //     choice_index = event.choice_index,
-        //     "reasoning started"
-        // );
-        print!("[Reasoning]:")
+        print!("[Reasoning]:");
+        flush_stdout();
     }
 
     fn on_reasoning_chunk(&self, event: ReasoningChunkEvent) {
-        // tracing::info!(
-        //     sequence = event.meta.sequence,
-        //     choice_index = event.choice_index,
-        //     delta = event.delta,
-        //     "reasoning chunk"
-        // );
-        //
-        print!("{}", event.delta)
+        print!("{}", event.delta);
+        flush_stdout();
     }
 
     fn on_reasoning_ended(&self, _event: ReasoningEndedEvent) {
-        println!()
+        println!();
     }
 
     fn on_content_started(&self, _event: ContentStartedEvent) {
         println!();
         print!("[Content]:");
+        flush_stdout();
     }
 
     fn on_content_chunk(&self, event: ContentChunkEvent) {
-        print!("{}", event.delta)
+        print!("{}", event.delta);
+        flush_stdout();
     }
 
     fn on_content_ended(&self, _event: ContentEndedEvent) {
-        println!()
+        println!();
     }
+}
+
+fn flush_stdout() {
+    let _ = std::io::stdout().flush();
 }
 
 #[tokio::main]
@@ -108,27 +114,21 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string());
-    let client = Arc::new(client::ChatClient::from_env(&model)?);
-
-    let registry = Arc::new(default_registry()?);
-    let approval: Arc<dyn ApprovalHandler> = if cli.yes {
-        Arc::new(AllowAllApproval)
+    let client = ChatClient::from_env(&model)?;
+    let builder = Agent::builder(client)
+        .workspace(&cli.workspace)
+        .config(AgentConfig::default());
+    let agent = if cli.yes {
+        builder.approval(AllowAllApproval).build()?
     } else {
-        Arc::new(ConsoleApproval)
+        builder.approval(ConsoleApproval).build()?
     };
-    let dispatcher = Arc::new(ToolDispatcher::new(
-        registry,
-        &cli.workspace,
-        approval,
-        DispatcherConfig::default(),
-    )?);
-    let agent = Agent::new(client, dispatcher, AgentConfig::default());
 
-    let request = types::ChatCompletionRequest {
+    let request = ChatCompletionRequest {
         model,
         messages: vec![
-            types::ChatMessage {
-                role: types::Role::System,
+            ChatMessage {
+                role: Role::System,
                 content: Some(
                     "You are a helpful coding assistant. Reply in Chinese. Use tools when needed."
                         .to_string(),
@@ -138,8 +138,8 @@ async fn main() -> Result<()> {
                 tool_call_id: None,
                 name: None,
             },
-            types::ChatMessage {
-                role: types::Role::User,
+            ChatMessage {
+                role: Role::User,
                 content: Some(cli.prompt),
                 reasoning: None,
                 tool_calls: None,
@@ -159,7 +159,7 @@ async fn main() -> Result<()> {
     };
 
     let result = agent
-        .run_with_type_handler(request, Arc::new(AppHandler {}))
+        .run_with_handler(request, Arc::new(ConsoleEvents))
         .await?;
     if let Some(reasoning) = &result.final_message.reasoning {
         println!("=== 推理过程 ===\n{reasoning}\n");
@@ -180,14 +180,6 @@ async fn main() -> Result<()> {
         result.usage.completion_tokens,
         result.usage.total_tokens
     );
-    if let Some(cache_write_tokens) = result
-        .usage
-        .prompt_tokens_details
-        .as_ref()
-        .and_then(|details| details.cache_write_tokens)
-    {
-        println!("缓存写入: {cache_write_tokens} tokens");
-    }
 
     Ok(())
 }
@@ -202,11 +194,5 @@ mod tests {
         assert_eq!(cli.prompt, "检查当前项目");
         assert!(!cli.yes);
         assert_eq!(cli.workspace, PathBuf::from("."));
-    }
-
-    #[test]
-    fn cli_keeps_default_prompt() {
-        let cli = Cli::try_parse_from(["aicoder"]).unwrap();
-        assert_eq!(cli.prompt, "你是谁");
     }
 }

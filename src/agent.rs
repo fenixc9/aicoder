@@ -1,6 +1,6 @@
 //! Model/tool execution loop with streaming provider support.
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -8,10 +8,13 @@ use async_trait::async_trait;
 use crate::{
     client::ChatClient,
     events::{
-        AgentEvent, AgentEventSink, AgentRawEventHandler, AgentStage, AgentTypeEventAdapter,
-        AgentTypeEventHandler, NoopRawEventHandler, RoundOutcome, emit_full_response_events,
+        AgentEventEmitter, AgentRawEvent, AgentStage, AgentTypeEventHandler, RoundOutcome,
+        emit_full_response_events,
     },
-    tools::ToolDispatcher,
+    tools::{
+        ApprovalHandler, DenyAllApproval, DispatcherConfig, ToolDispatcher, ToolRegistry,
+        default_registry,
+    },
     types::{
         ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ToolChoice, ToolChoiceMode,
         Usage,
@@ -19,13 +22,13 @@ use crate::{
 };
 
 #[async_trait]
-pub(crate) trait ChatCompletionProvider: Send + Sync {
+pub trait ChatCompletionProvider: Send + Sync {
     async fn complete(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse>;
 
     async fn complete_with_events(
         &self,
         request: ChatCompletionRequest,
-        events: AgentEventSink,
+        events: AgentEventEmitter,
     ) -> Result<ChatCompletionResponse> {
         let response = self.complete(request).await?;
         emit_full_response_events(&events, &response);
@@ -46,7 +49,7 @@ impl ChatCompletionProvider for ChatClient {
     async fn complete_with_events(
         &self,
         request: ChatCompletionRequest,
-        events: AgentEventSink,
+        events: AgentEventEmitter,
     ) -> Result<ChatCompletionResponse> {
         if request.stream.unwrap_or(false) {
             self.chat_completion_stream_collect_with_events(request, &events)
@@ -89,6 +92,13 @@ pub struct Agent {
 }
 
 impl Agent {
+    pub fn builder<P>(provider: P) -> AgentBuilder
+    where
+        P: ChatCompletionProvider + 'static,
+    {
+        AgentBuilder::new(provider)
+    }
+
     pub fn new(
         provider: Arc<dyn ChatCompletionProvider>,
         dispatcher: Arc<ToolDispatcher>,
@@ -101,29 +111,27 @@ impl Agent {
         }
     }
 
-    #[allow(dead_code)]
     pub async fn run(&self, request: ChatCompletionRequest) -> Result<AgentRunResult> {
-        self.run_with_raw_event_handler(request, Arc::new(NoopRawEventHandler))
-            .await
+        self.run_with_handler(request, Arc::new(())).await
     }
 
-    pub async fn run_with_raw_event_handler(
+    pub async fn run_with_handler(
         &self,
         request: ChatCompletionRequest,
-        handler: Arc<dyn AgentRawEventHandler>,
+        handler: Arc<dyn AgentTypeEventHandler>,
     ) -> Result<AgentRunResult> {
-        let events = AgentEventSink::new(handler);
-        events.emit(AgentEvent::AgentStarted {
+        let events = AgentEventEmitter::new(handler);
+        events.emit(AgentRawEvent::AgentStarted {
             model: request.model.clone().into(),
         });
 
         let result = self.run_inner(request, &events).await;
         match &result {
-            Ok(result) => events.emit(AgentEvent::AgentCompleted {
+            Ok(result) => events.emit(AgentRawEvent::AgentCompleted {
                 rounds: result.rounds,
                 usage: result.usage.clone().into(),
             }),
-            Err(error) => events.emit(AgentEvent::AgentFailed {
+            Err(error) => events.emit(AgentRawEvent::AgentFailed {
                 stage: AgentStage::Agent,
                 message: format!("{error:#}").into(),
             }),
@@ -132,29 +140,10 @@ impl Agent {
         result
     }
 
-    /// Compatibility alias for callers using the original raw-handler method name.
-    #[allow(dead_code)]
-    pub async fn run_with_handler(
-        &self,
-        request: ChatCompletionRequest,
-        handler: Arc<dyn AgentRawEventHandler>,
-    ) -> Result<AgentRunResult> {
-        self.run_with_raw_event_handler(request, handler).await
-    }
-
-    pub async fn run_with_type_handler(
-        &self,
-        request: ChatCompletionRequest,
-        handler: Arc<dyn AgentTypeEventHandler>,
-    ) -> Result<AgentRunResult> {
-        self.run_with_raw_event_handler(request, Arc::new(AgentTypeEventAdapter::new(handler)))
-            .await
-    }
-
     async fn run_inner(
         &self,
         mut request: ChatCompletionRequest,
-        events: &AgentEventSink,
+        events: &AgentEventEmitter,
     ) -> Result<AgentRunResult> {
         if self.config.max_rounds == 0 {
             anyhow::bail!("Agent max_rounds must be greater than zero");
@@ -172,9 +161,9 @@ impl Agent {
 
         for round in 1..=self.config.max_rounds {
             let round_events = events.for_round(round);
-            round_events.emit(AgentEvent::RoundStarted);
+            round_events.emit(AgentRawEvent::RoundStarted);
             request.messages = messages.clone();
-            round_events.emit(AgentEvent::ModelRequestStarted);
+            round_events.emit(AgentRawEvent::ModelRequestStarted);
             let response = match self
                 .provider
                 .complete_with_events(request.clone(), round_events.clone())
@@ -183,10 +172,10 @@ impl Agent {
             {
                 Ok(response) => response,
                 Err(error) => {
-                    round_events.emit(AgentEvent::ModelResponseFailed {
+                    round_events.emit(AgentRawEvent::ModelResponseFailed {
                         message: format!("{error:#}").into(),
                     });
-                    round_events.emit(AgentEvent::RoundCompleted {
+                    round_events.emit(AgentRawEvent::RoundCompleted {
                         outcome: RoundOutcome::Failed,
                     });
                     return Err(error);
@@ -206,7 +195,7 @@ impl Agent {
             messages.push(assistant_message.clone());
 
             if tool_calls.is_empty() {
-                round_events.emit(AgentEvent::RoundCompleted {
+                round_events.emit(AgentRawEvent::RoundCompleted {
                     outcome: RoundOutcome::FinalAnswer,
                 });
                 return Ok(AgentRunResult {
@@ -229,14 +218,14 @@ impl Agent {
             {
                 Ok(messages) => messages,
                 Err(error) => {
-                    round_events.emit(AgentEvent::RoundCompleted {
+                    round_events.emit(AgentRawEvent::RoundCompleted {
                         outcome: RoundOutcome::Failed,
                     });
                     return Err(error);
                 }
             };
             messages.extend(tool_messages);
-            round_events.emit(AgentEvent::RoundCompleted {
+            round_events.emit(AgentRawEvent::RoundCompleted {
                 outcome: RoundOutcome::ToolCalls {
                     count: tool_calls.len(),
                 },
@@ -247,6 +236,92 @@ impl Agent {
             "Agent exceeded maximum of {} model rounds",
             self.config.max_rounds
         )
+    }
+}
+
+/// Convenience assembly for applications that want the built-in coding tools.
+pub struct AgentBuilder {
+    provider: Arc<dyn ChatCompletionProvider>,
+    registry: Option<Arc<ToolRegistry>>,
+    workspace: PathBuf,
+    approval: Arc<dyn ApprovalHandler>,
+    dispatcher_config: DispatcherConfig,
+    agent_config: AgentConfig,
+}
+
+impl AgentBuilder {
+    pub fn new<P>(provider: P) -> Self
+    where
+        P: ChatCompletionProvider + 'static,
+    {
+        Self::from_shared(Arc::new(provider))
+    }
+
+    pub fn from_shared(provider: Arc<dyn ChatCompletionProvider>) -> Self {
+        Self {
+            provider,
+            registry: None,
+            workspace: PathBuf::from("."),
+            approval: Arc::new(DenyAllApproval),
+            dispatcher_config: DispatcherConfig::default(),
+            agent_config: AgentConfig::default(),
+        }
+    }
+
+    pub fn workspace(mut self, workspace: impl Into<PathBuf>) -> Self {
+        self.workspace = workspace.into();
+        self
+    }
+
+    pub fn registry(mut self, registry: ToolRegistry) -> Self {
+        self.registry = Some(Arc::new(registry));
+        self
+    }
+
+    pub fn shared_registry(mut self, registry: Arc<ToolRegistry>) -> Self {
+        self.registry = Some(registry);
+        self
+    }
+
+    pub fn approval<A>(mut self, approval: A) -> Self
+    where
+        A: ApprovalHandler + 'static,
+    {
+        self.approval = Arc::new(approval);
+        self
+    }
+
+    pub fn shared_approval(mut self, approval: Arc<dyn ApprovalHandler>) -> Self {
+        self.approval = approval;
+        self
+    }
+
+    pub fn dispatcher_config(mut self, config: DispatcherConfig) -> Self {
+        self.dispatcher_config = config;
+        self
+    }
+
+    pub fn config(mut self, config: AgentConfig) -> Self {
+        self.agent_config = config;
+        self
+    }
+
+    pub fn build(self) -> Result<Agent> {
+        let registry = match self.registry {
+            Some(registry) => registry,
+            None => Arc::new(default_registry()?),
+        };
+        let dispatcher = ToolDispatcher::new(
+            registry,
+            self.workspace,
+            self.approval,
+            self.dispatcher_config,
+        )?;
+        Ok(Agent::new(
+            self.provider,
+            Arc::new(dispatcher),
+            self.agent_config,
+        ))
     }
 }
 
