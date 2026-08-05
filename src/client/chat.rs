@@ -381,8 +381,12 @@ impl ChatClient {
         use futures::stream::StreamExt;
 
         request.stream = Some(true);
+        let mut request_value = serde_json::to_value(&request)?;
+        request_value["stream_options"] = serde_json::json!({
+            "include_usage": true,
+        });
         let url = format!("{}/chat/completions", self.config.base_url);
-        let request_body = serde_json::to_string(&request)?;
+        let request_body = serde_json::to_string(&request_value)?;
 
         tracing::debug!(
             url = %sanitize_url(&url),
@@ -466,6 +470,11 @@ impl ChatClient {
                     let delay = retry_delay(None, attempt);
                     let reason = sanitize_text(&error.to_string(), 2048);
                     emit_retry(events, attempt + 1, delay, reason.clone());
+                    tracing::error!(
+                        error = ?error,
+                        attempt,
+                        "Streaming HTTP request failed"
+                    );
                     tracing::warn!(
                         attempt,
                         total_attempts,
@@ -477,6 +486,11 @@ impl ChatClient {
                     continue;
                 }
                 Err(error) => {
+                    tracing::error!(
+                        error = ?error,
+                        attempt,
+                        "Streaming HTTP request failed"
+                    );
                     anyhow::bail!(
                         "Streaming HTTP request failed after {} attempt(s): {}",
                         attempt,
@@ -1196,6 +1210,7 @@ mod tests {
         );
         let body: serde_json::Value = serde_json::from_str(body).unwrap();
         assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
     }
 
     #[tokio::test]
