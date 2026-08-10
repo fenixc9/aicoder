@@ -75,6 +75,21 @@ pub struct FunctionCall {
     pub arguments: String,
 }
 
+/// Options that control metadata returned with a streaming response.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StreamOptions {
+    /// Request a final stream chunk containing token usage.
+    pub include_usage: bool,
+}
+
+impl Default for StreamOptions {
+    fn default() -> Self {
+        Self {
+            include_usage: true,
+        }
+    }
+}
+
 /// Chat Completion 请求
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatCompletionRequest {
@@ -103,6 +118,9 @@ pub struct ChatCompletionRequest {
     /// 是否流式
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stream: Option<bool>,
+    /// 流式响应选项；流式客户端默认请求 usage 数据
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
     /// 停止序列
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stop: Option<Vec<String>>,

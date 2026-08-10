@@ -5,7 +5,8 @@ use std::{
 };
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentEventHandler, ChatClient,
+    Agent, AgentConfig, AgentEventHandler, AgentWorkflow, AgentWorkflowConfig, ChatClient,
+    SessionSelection,
     events::{
         AgentCompletedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
         ReasoningChunkEvent, ReasoningEndedEvent, ReasoningStartedEvent, ToolCallEndedEvent,
@@ -13,7 +14,6 @@ use aicoder_core::{
     },
     session::{JsonlSessionRepository, SessionRepository},
     tools::{AllowAllApproval, ApprovalHandler, ToolInvocation},
-    types::{ChatCompletionRequest, ChatMessage, Role},
 };
 use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
@@ -166,31 +166,6 @@ fn session_root() -> Result<PathBuf> {
     Ok(PathBuf::from(home).join(".aicoder").join("sessions"))
 }
 
-fn system_message() -> ChatMessage {
-    ChatMessage {
-        role: Role::System,
-        content: Some(
-            "You are a helpful coding assistant. Reply in Chinese. Use tools when needed."
-                .to_string(),
-        ),
-        reasoning: None,
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }
-}
-
-fn user_message(content: String) -> ChatMessage {
-    ChatMessage {
-        role: Role::User,
-        content: Some(content),
-        reasoning: None,
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }
-}
-
 fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Result<bool> {
     match &cli.command {
         Some(Command::Sessions) => {
@@ -249,70 +224,40 @@ async fn main() -> Result<()> {
     } else {
         builder.approval(ConsoleApproval).build()?
     };
-
-    let mut session = match &repository {
-        Some(repository) if cli.continue_session => {
-            if let Some(recent) = repository.most_recent(&cli.workspace)? {
-                Some(repository.open(&recent.id)?)
-            } else {
-                Some(repository.create(&cli.workspace)?)
-            }
-        }
-        Some(repository) => match &cli.session {
-            Some(id) => Some(repository.open(id)?),
-            None => Some(repository.create(&cli.workspace)?),
-        },
-        None => None,
-    };
-    if let Some(session) = &session {
-        let workspace = cli
-            .workspace
-            .canonicalize()
-            .with_context(|| format!("Failed to resolve workspace {}", cli.workspace.display()))?;
-        ensure!(
-            session.metadata().cwd == workspace,
-            "Session {} belongs to workspace {}, not {}",
-            session.metadata().id,
-            session.metadata().cwd.display(),
-            workspace.display()
-        );
-        eprintln!("Session: {}", session.metadata().id);
-    }
-
-    let prompt = user_message(cli.prompt);
-    let mut messages = vec![system_message()];
-    if let (Some(repository), Some(session)) = (&repository, &mut session) {
-        repository.append(session, prompt)?;
-        messages.extend(session.chat_messages());
-    } else {
-        messages.push(prompt);
-    }
-    let input_message_count = messages.len();
-    let request = ChatCompletionRequest {
+    let workflow_config = AgentWorkflowConfig {
         model,
-        messages,
+        system_prompt: Some(
+            "You are a helpful coding assistant. Reply in Chinese. Use tools when needed."
+                .to_string(),
+        ),
         temperature: Some(0.7),
         top_p: Some(1.0),
         max_tokens: Some(2048),
         seed: None,
-        tools: None,
-        tool_choice: None,
-        stream: Some(true),
         stop: None,
         response_format: None,
     };
-
-    let result = agent
-        .run_with_handler(request, Arc::new(ConsoleEvents))
-        .await?;
-    if let (Some(repository), Some(session)) = (&repository, &mut session) {
-        let generated_messages = result
-            .messages
-            .get(input_message_count..)
-            .context("Agent returned fewer messages than were supplied in the session context")?;
-        repository.append_all(session, generated_messages.iter().cloned())?;
+    let workflow = AgentWorkflow::new(agent, workflow_config);
+    let handler = Arc::new(ConsoleEvents);
+    let result = match &repository {
+        None => workflow.run(cli.prompt, handler).await?,
+        Some(repository) => {
+            let selection = if cli.continue_session {
+                SessionSelection::ContinueMostRecent
+            } else if let Some(id) = cli.session {
+                SessionSelection::Existing(id)
+            } else {
+                SessionSelection::New
+            };
+            workflow
+                .run_with_session(repository, selection, cli.prompt, handler)
+                .await?
+        }
+    };
+    if let Some(session) = &result.session {
+        eprintln!("Session: {}", session.id);
     }
-    println!("Usage :{:?}", result.usage);
+    println!("Usage :{:?}", result.run.usage);
     Ok(())
 }
 

@@ -1,7 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use aicoder_core::{
-    Agent, AgentRawEvent, ChatCompletionProvider,
+    Agent, AgentRawEvent, AgentWorkflow, AgentWorkflowConfig, ChatCompletionProvider,
+    SessionSelection,
     session::{MemorySessionRepository, SessionRepository},
     tools::ToolRegistry,
     types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role},
@@ -59,6 +60,7 @@ async fn external_application_can_build_agent_and_observe_raw_events() {
         tools: None,
         tool_choice: None,
         stream: None,
+        stream_options: None,
         stop: None,
         response_format: None,
     };
@@ -75,6 +77,30 @@ async fn external_application_can_build_agent_and_observe_raw_events() {
         observed.last(),
         Some(AgentRawEvent::AgentCompleted { .. })
     ));
+}
+
+#[tokio::test]
+async fn external_application_can_run_the_conversation_workflow() {
+    let workspace = tempdir().unwrap();
+    let repository = MemorySessionRepository::new();
+    let agent = Agent::builder(StaticProvider)
+        .workspace(workspace.path())
+        .registry(ToolRegistry::default())
+        .build()
+        .unwrap();
+    let workflow = AgentWorkflow::new(
+        agent,
+        AgentWorkflowConfig::new("test-model").system_prompt("system context"),
+    );
+
+    let result = workflow
+        .run_with_session(&repository, SessionSelection::New, "hello", Arc::new(()))
+        .await
+        .unwrap();
+
+    let session = result.session.unwrap();
+    assert_eq!(result.run.final_message.content.as_deref(), Some("done"));
+    assert_eq!(repository.open(&session.id).unwrap().messages().len(), 2);
 }
 
 #[test]

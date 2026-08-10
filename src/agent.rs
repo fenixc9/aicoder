@@ -16,8 +16,8 @@ use crate::{
         default_registry,
     },
     types::{
-        ChatCompletionRequest, ChatCompletionResponse, ChatMessage, ToolChoice, ToolChoiceMode,
-        Usage,
+        ChatCompletionRequest, ChatCompletionResponse, ChatMessage, FinishReason, ToolChoice,
+        ToolChoiceMode, Usage,
     },
 };
 
@@ -80,6 +80,7 @@ impl Default for AgentConfig {
 #[derive(Debug, Clone)]
 pub struct AgentRunResult {
     pub final_message: ChatMessage,
+    pub finish_reason: Option<FinishReason>,
     pub messages: Vec<ChatMessage>,
     pub usage: Usage,
     pub rounds: usize,
@@ -99,6 +100,10 @@ impl Agent {
         AgentBuilder::new(provider)
     }
 
+    pub fn builder_from_shared(provider: Arc<dyn ChatCompletionProvider>) -> AgentBuilder {
+        AgentBuilder::from_shared(provider)
+    }
+
     pub fn new(
         provider: Arc<dyn ChatCompletionProvider>,
         dispatcher: Arc<ToolDispatcher>,
@@ -109,6 +114,10 @@ impl Agent {
             dispatcher,
             config,
         }
+    }
+
+    pub fn workspace_root(&self) -> &std::path::Path {
+        self.dispatcher.workspace_root()
     }
 
     pub async fn run(&self, request: ChatCompletionRequest) -> Result<AgentRunResult> {
@@ -190,6 +199,7 @@ impl Agent {
                 .into_iter()
                 .next()
                 .context("Model response contains no choices")?;
+            let finish_reason = choice.finish_reason;
             let assistant_message = choice.message;
             let tool_calls = assistant_message.tool_calls.clone().unwrap_or_default();
             messages.push(assistant_message.clone());
@@ -200,6 +210,7 @@ impl Agent {
                 });
                 return Ok(AgentRunResult {
                     final_message: assistant_message,
+                    finish_reason,
                     messages,
                     usage,
                     rounds: round,
@@ -421,6 +432,7 @@ mod tests {
             tools: None,
             tool_choice: None,
             stream: Some(true),
+            stream_options: None,
             stop: None,
             response_format: None,
         }

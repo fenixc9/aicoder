@@ -61,6 +61,10 @@ impl ToolDispatcher {
         &self.registry
     }
 
+    pub fn workspace_root(&self) -> &Path {
+        self.context.workspace_root()
+    }
+
     #[allow(dead_code)]
     pub async fn dispatch(&self, calls: &[ToolCall]) -> Result<Vec<ChatMessage>> {
         self.dispatch_inner(calls, None).await

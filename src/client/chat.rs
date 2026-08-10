@@ -13,7 +13,7 @@ use std::{
 use crate::{
     events::{AgentEventEmitter, AgentRawEvent},
     redaction::{sanitize_text, sanitize_url},
-    types::{ApiError, ChatCompletionRequest, ChatCompletionResponse, StreamChunk},
+    types::{ApiError, ChatCompletionRequest, ChatCompletionResponse, StreamChunk, StreamOptions},
 };
 
 use super::stream::{ChatStreamAccumulator, SseDecoder, SseEvent};
@@ -381,12 +381,11 @@ impl ChatClient {
         use futures::stream::StreamExt;
 
         request.stream = Some(true);
-        let mut request_value = serde_json::to_value(&request)?;
-        request_value["stream_options"] = serde_json::json!({
-            "include_usage": true,
-        });
+        request
+            .stream_options
+            .get_or_insert_with(StreamOptions::default);
         let url = format!("{}/chat/completions", self.config.base_url);
-        let request_body = serde_json::to_string(&request_value)?;
+        let request_body = serde_json::to_string(&request)?;
 
         tracing::debug!(
             url = %sanitize_url(&url),
@@ -873,6 +872,7 @@ mod tests {
             tools: None,
             tool_choice: None,
             stream: Some(stream),
+            stream_options: None,
             stop: None,
             response_format: None,
         }

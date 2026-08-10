@@ -10,9 +10,11 @@ mod redaction;
 pub mod session;
 pub mod tools;
 pub mod types;
+pub mod workflow;
 
 pub use agent::{Agent, AgentBuilder, AgentConfig, AgentRunResult, ChatCompletionProvider};
 pub use client::{ChatClient, ClientConfig};
 pub use events::{
     AgentEventHandler, AgentRawEvent, AgentRawEventEnvelope, RunId, ToolExecutionOutcome,
 };
+pub use workflow::{AgentTurnResult, AgentWorkflow, AgentWorkflowConfig, SessionSelection};

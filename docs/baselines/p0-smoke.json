@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "date": "2026-08-10",
+  "purpose": "P0 real-provider pipeline smoke test, not a benchmark score",
+  "dataset": "princeton-nlp/SWE-bench_Lite",
+  "instance_ids": [
+    "astropy__astropy-12907"
+  ],
+  "configuration": {
+    "model": "deepseek-v4-flash",
+    "temperature": 0.0,
+    "max_rounds": 8,
+    "max_tokens": 2048,
+    "stream": true,
+    "workers": 1
+  },
+  "generation": {
+    "selected": 1,
+    "completed": 0,
+    "incomplete": 0,
+    "failed": 1,
+    "empty_patches": 1,
+    "total_tokens": 7513,
+    "cached_tokens": 3750,
+    "rounds_started": 5,
+    "failure_class": "provider_stream_transport"
+  },
+  "harness": {
+    "status": "not_run",
+    "reason": "No non-empty model patch was generated and the official Python harness is not installed in this environment"
+  }
+}

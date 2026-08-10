@@ -25,6 +25,15 @@
 - [ ] 限制任务总工具调用数、总执行时间和累计输出大小
 - [ ] 以流式、分页或提前终止方式读取大文件和搜索结果，避免先全部载入内存
 
+## P0：评估闭环
+
+- [x] 独立 `aicoder-eval` crate，支持隔离工作区、轨迹和结构化报告
+- [x] SWE-bench JSON/JSONL 数据适配、固定 commit 检出和官方 prediction 导出
+- [x] SWE-bench 批量筛选、有界并发、仓库缓存、断点续跑和逐 case 产物
+- [x] 接入官方 Python/Docker harness 命令并支持汇总报告导入
+- [x] 固化 baseline 参数、token、耗时和失败分类
+- [ ] 基于首轮 baseline 实现在线 completion verifier
+
 ## P1：工具安全
 
 - [ ] 审批 `write_file` 时展示 diff，审批 `bash` 时展示工作目录和命令
@@ -55,12 +64,13 @@
 
 ## P3：工程化
 
-- [ ] 拆分为 library crate 和 binary crate
+- [x] 拆分为 library crate 和 binary crate
 - [ ] 增加多轮工具调用、重试、审批拒绝和上下文裁剪的端到端测试
 - [ ] 增加 SSE 跨 TCP chunk、同 chunk 多事件以及流式 tool call 测试
 - [ ] 增加凭证不进入日志、路径无法逃逸和超时清理子进程等安全回归测试
-- [ ] 配置 CI，执行 `cargo fmt --check`、`cargo test`、Clippy 和依赖安全检查
-- [ ] 补充 README 和 `.env.example`
+- [x] 配置 CI，执行 `cargo fmt --check`、`cargo test` 和 Clippy
+- [x] 补充架构和评估 README
+- [ ] 增加依赖安全检查和 `.env.example`
 - [ ] 统一中英文错误信息和日志格式
 
 ## 后续增强
@@ -76,10 +86,10 @@
 
 ## 建议的下一阶段
 
-1. 加入上下文 token 预算。
-2. 正确实现流式 SSE 和 tool call 拼接。
-3. 增加代理模式配置。
-4. 完善不同 OpenAI 兼容服务的错误格式解析。
-5. 增加 `list_files`、`git_status` 和 `git_diff`。
+1. 在 baseline 数据上实现并验证 completion verifier。
+2. 加入上下文 token 预算、旧工具输出裁剪和历史摘要。
+3. 增加 `list_files`、`git_status` 和 `git_diff`。
+4. 增加任务级工具调用、时间、token 和输出预算。
+5. 完善代理模式与不同 OpenAI 兼容服务的错误格式解析。
 
 当前 `Agent::run` 中的请求和消息 clone 属于性能优化项，不影响正确性，优先级低于以上工作。
