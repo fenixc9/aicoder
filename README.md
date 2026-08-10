@@ -16,6 +16,9 @@ An application constructs an Agent, optionally wraps it in AgentWorkflow, and
 consumes the single AgentEventHandler interface. CLI, TUI, and web applications
 should depend on the core crate rather than reproduce the loop.
 
+Runtime prerequisites are Git, Bash, and ripgrep (`rg`). The SWE-bench grading
+subcommand additionally requires the official Python package and Docker.
+
 ## Verification
 
 ~~~bash
