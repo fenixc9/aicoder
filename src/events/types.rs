@@ -4,6 +4,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
+    state::AgentStateTransition,
     tools::ToolCapability,
     types::{ChatCompletionResponse, FinishReason, ToolCall, Usage},
 };
@@ -95,6 +96,9 @@ pub enum AgentRawEvent {
     AgentFailed {
         stage: AgentStage,
         message: Arc<str>,
+    },
+    StateChanged {
+        transition: AgentStateTransition,
     },
     RoundStarted,
     RoundCompleted {

@@ -9,6 +9,7 @@ pub mod completion;
 pub mod events;
 mod redaction;
 pub mod session;
+pub mod state;
 pub mod tools;
 pub mod types;
 pub mod workflow;
@@ -22,5 +23,8 @@ pub use completion::{
 pub use events::{
     AgentEventHandler, AgentRawEvent, AgentRawEventEnvelope, CompletionVerificationOutcome, RunId,
     ToolExecutionOutcome,
+};
+pub use state::{
+    AgentRunState, AgentRunStateMachine, AgentStateTransition, InvalidAgentStateTransition,
 };
 pub use workflow::{AgentTurnResult, AgentWorkflow, AgentWorkflowConfig, SessionSelection};

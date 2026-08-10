@@ -14,6 +14,7 @@ use crate::{
         AgentEventEmitter, AgentEventHandler, AgentRawEvent, AgentStage, RoundOutcome,
         emit_full_response_events,
     },
+    state::{AgentRunState, AgentRunStateMachine},
     tools::{
         ApprovalHandler, DenyAllApproval, DispatcherConfig, ToolDispatcher, ToolRegistry,
         default_registry,
@@ -152,8 +153,30 @@ impl Agent {
         events.emit(AgentRawEvent::AgentStarted {
             model: request.model.clone().into(),
         });
-
-        let result = self.run_inner(request, &events).await;
+        let mut state = AgentRunStateMachine::new();
+        let execution = match transition_state(&mut state, &events, AgentRunState::Preparing) {
+            Ok(()) => self.run_inner(request, &events, &mut state).await,
+            Err(error) => Err(error),
+        };
+        let result = match execution {
+            Ok(run) => transition_state(
+                &mut state,
+                &events,
+                AgentRunState::Completed { rounds: run.rounds },
+            )
+            .map(|()| run),
+            Err(error) => {
+                let failed = AgentRunState::Failed {
+                    round: state.state().round(),
+                };
+                match transition_state(&mut state, &events, failed) {
+                    Ok(()) => Err(error),
+                    Err(state_error) => Err(error.context(format!(
+                        "Agent state machine also failed while terminating: {state_error}"
+                    ))),
+                }
+            }
+        };
         match &result {
             Ok(result) => events.emit(AgentRawEvent::AgentCompleted {
                 rounds: result.rounds,
@@ -172,6 +195,7 @@ impl Agent {
         &self,
         mut request: ChatCompletionRequest,
         events: &AgentEventEmitter,
+        state: &mut AgentRunStateMachine,
     ) -> Result<AgentRunResult> {
         if self.config.max_rounds == 0 {
             anyhow::bail!("Agent max_rounds must be greater than zero");
@@ -190,6 +214,7 @@ impl Agent {
         for round in 1..=self.config.max_rounds {
             let round_events = events.for_round(round);
             round_events.emit(AgentRawEvent::RoundStarted);
+            transition_state(state, &round_events, AgentRunState::AwaitingModel { round })?;
             request.messages = messages.clone();
             round_events.emit(AgentRawEvent::ModelRequestStarted);
             let response = match self
@@ -224,6 +249,11 @@ impl Agent {
             messages.push(assistant_message.clone());
 
             if tool_calls.is_empty() {
+                transition_state(
+                    state,
+                    &round_events,
+                    AgentRunState::VerifyingCompletion { round },
+                )?;
                 round_events.emit(AgentRawEvent::CompletionVerificationStarted);
                 let verdict = self
                     .completion_verifier
@@ -280,6 +310,14 @@ impl Agent {
                 }
             }
 
+            transition_state(
+                state,
+                &round_events,
+                AgentRunState::ExecutingTools {
+                    round,
+                    count: tool_calls.len(),
+                },
+            )?;
             tracing::debug!(
                 round,
                 calls = tool_calls.len(),
@@ -311,6 +349,16 @@ impl Agent {
             self.config.max_rounds
         )
     }
+}
+
+fn transition_state(
+    state: &mut AgentRunStateMachine,
+    events: &AgentEventEmitter,
+    next: AgentRunState,
+) -> Result<()> {
+    let transition = state.transition(next)?;
+    events.emit(AgentRawEvent::StateChanged { transition });
+    Ok(())
 }
 
 /// Convenience assembly for applications that want the built-in coding tools.
@@ -761,5 +809,23 @@ mod tests {
                 ..
             }
         )));
+        let states = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentRawEvent::StateChanged { transition } => Some(transition.current),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            states,
+            vec![
+                AgentRunState::Preparing,
+                AgentRunState::AwaitingModel { round: 1 },
+                AgentRunState::VerifyingCompletion { round: 1 },
+                AgentRunState::AwaitingModel { round: 2 },
+                AgentRunState::VerifyingCompletion { round: 2 },
+                AgentRunState::Completed { rounds: 2 },
+            ]
+        );
     }
 }

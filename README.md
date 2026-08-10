@@ -13,8 +13,11 @@ are separate crates.
   SWE-bench adapter, batch runner, and official harness integration.
 
 An application constructs an Agent, optionally wraps it in AgentWorkflow, and
-consumes the single AgentEventHandler interface. CLI, TUI, and web applications
-should depend on the core crate rather than reproduce the loop.
+consumes the single AgentEventHandler interface. Every run follows an explicit
+AgentRunState state machine and emits ordered StateChanged events, so CLI, TUI,
+and web applications can present lifecycle state without reconstructing it from
+lower-level model and tool events. Applications should depend on the core crate
+rather than reproduce the loop.
 
 Runtime prerequisites are Git, Bash, and ripgrep (`rg`). The SWE-bench grading
 subcommand additionally requires the official Python package and Docker.

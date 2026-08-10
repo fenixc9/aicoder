@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use aicoder_core::{
-    Agent, AgentRawEvent, AgentWorkflow, AgentWorkflowConfig, ChatCompletionProvider,
-    SessionSelection,
+    Agent, AgentRawEvent, AgentRunState, AgentWorkflow, AgentWorkflowConfig,
+    ChatCompletionProvider, SessionSelection,
     session::{MemorySessionRepository, SessionRepository},
     tools::ToolRegistry,
     types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role},
@@ -77,6 +77,15 @@ async fn external_application_can_build_agent_and_observe_raw_events() {
         observed.last(),
         Some(AgentRawEvent::AgentCompleted { .. })
     ));
+    assert!(observed.iter().any(|event| matches!(
+        event,
+        AgentRawEvent::StateChanged {
+            transition: aicoder_core::AgentStateTransition {
+                current: AgentRunState::VerifyingCompletion { round: 1 },
+                ..
+            }
+        }
+    )));
 }
 
 #[tokio::test]

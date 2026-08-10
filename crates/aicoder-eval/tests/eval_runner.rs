@@ -133,6 +133,8 @@ async fn runner_captures_trace_and_applies_evaluators() {
     assert_eq!(report.run.usage.total_tokens, 5);
     assert!(report.run.usage.provider_reported);
     assert_eq!(report.trajectory.rounds, 1);
+    assert_eq!(report.trajectory.state_transitions, 4);
+    assert_eq!(report.trajectory.final_state.as_deref(), Some("completed"));
     assert_eq!(report.trajectory.model_requests, 1);
     assert!(report.workspace_diff.is_empty());
     assert_eq!(report.evaluations.len(), 3);

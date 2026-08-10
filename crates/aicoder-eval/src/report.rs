@@ -12,6 +12,9 @@ use crate::{
 pub struct TrajectorySummary {
     pub rounds: usize,
     pub final_answer_rounds: usize,
+    pub state_transitions: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub final_state: Option<String>,
     pub model_requests: usize,
     pub model_retries: usize,
     pub completion_candidates: usize,

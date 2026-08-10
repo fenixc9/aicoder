@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::{
+    state::AgentStateTransition,
     tools::ToolCapability,
     types::{FinishReason, ToolCall, Usage},
 };
@@ -55,6 +56,12 @@ pub struct AgentFailedEvent {
     pub meta: AgentEventMeta,
     pub stage: AgentStage,
     pub message: Arc<str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AgentStateChangedEvent {
+    pub meta: AgentEventMeta,
+    pub transition: AgentStateTransition,
 }
 
 meta_event!(RoundStartedEvent);
@@ -209,6 +216,7 @@ pub trait AgentEventHandler: Send + Sync + 'static {
     fn on_agent_started(&self, _event: AgentStartedEvent) {}
     fn on_agent_completed(&self, _event: AgentCompletedEvent) {}
     fn on_agent_failed(&self, _event: AgentFailedEvent) {}
+    fn on_agent_state_changed(&self, _event: AgentStateChangedEvent) {}
     fn on_round_started(&self, _event: RoundStartedEvent) {}
     fn on_round_completed(&self, _event: RoundCompletedEvent) {}
 
@@ -271,6 +279,12 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
                 meta,
                 stage: *stage,
                 message: Arc::clone(message),
+            });
+        }
+        AgentRawEvent::StateChanged { transition } => {
+            handler.on_agent_state_changed(AgentStateChangedEvent {
+                meta,
+                transition: *transition,
             });
         }
         AgentRawEvent::RoundStarted => {
@@ -456,6 +470,14 @@ mod tests {
                 .push(format!("round:{}", event.meta.sequence));
         }
 
+        fn on_agent_state_changed(&self, event: AgentStateChangedEvent) {
+            self.received.lock().unwrap().push(format!(
+                "state:{}:{}",
+                event.meta.sequence,
+                event.transition.current.name()
+            ));
+        }
+
         fn on_reasoning_chunk(&self, event: ReasoningChunkEvent) {
             self.received
                 .lock()
@@ -523,6 +545,18 @@ mod tests {
                 },
             ),
         );
+        dispatch_event(
+            handler.as_ref(),
+            &envelope(
+                5,
+                AgentRawEvent::StateChanged {
+                    transition: AgentStateTransition {
+                        previous: crate::state::AgentRunState::Idle,
+                        current: crate::state::AgentRunState::Preparing,
+                    },
+                },
+            ),
+        );
 
         assert_eq!(
             *handler.received.lock().unwrap(),
@@ -530,9 +564,10 @@ mod tests {
                 "round:1",
                 "reasoning:2:thinking",
                 "content:3:hello",
-                "usage:4:12"
+                "usage:4:12",
+                "state:5:preparing"
             ]
         );
-        assert_eq!(*handler.raw_sequences.lock().unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(*handler.raw_sequences.lock().unwrap(), vec![1, 2, 3, 4, 5]);
     }
 }
