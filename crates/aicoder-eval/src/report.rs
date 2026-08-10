@@ -8,11 +8,15 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct TrajectorySummary {
     pub rounds: usize,
     pub final_answer_rounds: usize,
     pub model_requests: usize,
     pub model_retries: usize,
+    pub completion_candidates: usize,
+    pub completion_rejections: usize,
+    pub completion_verifier_failures: usize,
     pub tool_calls: usize,
     pub successful_tool_calls: usize,
     pub failed_tool_calls: usize,

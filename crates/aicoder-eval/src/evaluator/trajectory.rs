@@ -15,6 +15,7 @@ pub struct TrajectoryEvaluator {
     max_tool_calls: Option<usize>,
     max_tool_failures: Option<usize>,
     max_model_retries: Option<usize>,
+    max_completion_rejections: Option<usize>,
 }
 
 impl TrajectoryEvaluator {
@@ -26,6 +27,7 @@ impl TrajectoryEvaluator {
             max_tool_calls: None,
             max_tool_failures: None,
             max_model_retries: None,
+            max_completion_rejections: None,
         }
     }
 
@@ -56,6 +58,11 @@ impl TrajectoryEvaluator {
 
     pub fn max_model_retries(mut self, maximum: usize) -> Self {
         self.max_model_retries = Some(maximum);
+        self
+    }
+
+    pub fn max_completion_rejections(mut self, maximum: usize) -> Self {
+        self.max_completion_rejections = Some(maximum);
         self
     }
 }
@@ -110,6 +117,23 @@ impl Evaluator for TrajectoryEvaluator {
             summary.model_retries,
             self.max_model_retries,
         );
+        check_limit(
+            &mut findings,
+            "completion_rejection_limit",
+            "completion rejections",
+            summary.completion_rejections,
+            self.max_completion_rejections,
+        );
+        if summary.completion_verifier_failures > 0 {
+            findings.push(EvalFinding::new(
+                EvalSeverity::Error,
+                "completion_verifier_failed",
+                format!(
+                    "Completion verifier failed {} time(s)",
+                    summary.completion_verifier_failures
+                ),
+            ));
+        }
         if summary.failed_tool_calls > 0 && self.max_tool_failures.is_none() {
             findings.push(EvalFinding::new(
                 EvalSeverity::Warning,

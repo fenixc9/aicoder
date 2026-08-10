@@ -15,6 +15,7 @@ Keep these values fixed when comparing agent-loop changes:
 - model and model_name_or_path;
 - hints policy, temperature, maximum output tokens, and maximum rounds;
 - stream mode, worker count, and repository snapshot.
+- completion policy (`--allow-empty-patch` is disabled by default).
 
 Start with one smoke instance, then use 20 to 50 fixed Verified or Lite
 instances. Do not compare runs that selected different instance IDs.
@@ -44,6 +45,10 @@ After generation, run the official harness and preserve its aggregate report
 beside the generation artifacts. The primary metric is resolved rate; retain
 generation failures, empty patches, total tokens, and duration as diagnostic
 metrics rather than hiding them in the resolved-rate denominator.
+
+Generation rejects a final answer when the workspace is still clean and feeds
+that observation back into the next agent round. Use `--allow-empty-patch` only
+for diagnostic runs where a no-change answer is intentionally valid.
 
 The initial real-provider pipeline smoke is recorded in
 [p0-smoke.json](baselines/p0-smoke.json). It is a failed generation sample,

@@ -7,6 +7,9 @@ use async_trait::async_trait;
 
 use crate::{
     client::ChatClient,
+    completion::{
+        AcceptAllCompletionVerifier, CompletionContext, CompletionVerdict, CompletionVerifier,
+    },
     events::{
         AgentEventEmitter, AgentEventHandler, AgentRawEvent, AgentStage, RoundOutcome,
         emit_full_response_events,
@@ -89,6 +92,7 @@ pub struct AgentRunResult {
 pub struct Agent {
     provider: Arc<dyn ChatCompletionProvider>,
     dispatcher: Arc<ToolDispatcher>,
+    completion_verifier: Arc<dyn CompletionVerifier>,
     config: AgentConfig,
 }
 
@@ -109,9 +113,24 @@ impl Agent {
         dispatcher: Arc<ToolDispatcher>,
         config: AgentConfig,
     ) -> Self {
+        Self::new_with_verifier(
+            provider,
+            dispatcher,
+            Arc::new(AcceptAllCompletionVerifier),
+            config,
+        )
+    }
+
+    fn new_with_verifier(
+        provider: Arc<dyn ChatCompletionProvider>,
+        dispatcher: Arc<ToolDispatcher>,
+        completion_verifier: Arc<dyn CompletionVerifier>,
+        config: AgentConfig,
+    ) -> Self {
         Self {
             provider,
             dispatcher,
+            completion_verifier,
             config,
         }
     }
@@ -205,16 +224,60 @@ impl Agent {
             messages.push(assistant_message.clone());
 
             if tool_calls.is_empty() {
-                round_events.emit(AgentRawEvent::RoundCompleted {
-                    outcome: RoundOutcome::FinalAnswer,
-                });
-                return Ok(AgentRunResult {
-                    final_message: assistant_message,
-                    finish_reason,
-                    messages,
-                    usage,
-                    rounds: round,
-                });
+                round_events.emit(AgentRawEvent::CompletionVerificationStarted);
+                let verdict = self
+                    .completion_verifier
+                    .verify(CompletionContext {
+                        workspace: self.workspace_root(),
+                        round,
+                        candidate: &assistant_message,
+                        messages: &messages,
+                        usage: &usage,
+                    })
+                    .await
+                    .with_context(|| {
+                        format!("Completion verification failed in agent round {round}")
+                    });
+                match verdict {
+                    Ok(CompletionVerdict::Accepted) => {
+                        round_events.emit(AgentRawEvent::CompletionVerificationEnded {
+                            outcome: crate::events::CompletionVerificationOutcome::Accepted,
+                            feedback: None,
+                        });
+                        round_events.emit(AgentRawEvent::RoundCompleted {
+                            outcome: RoundOutcome::FinalAnswer,
+                        });
+                        return Ok(AgentRunResult {
+                            final_message: assistant_message,
+                            finish_reason,
+                            messages,
+                            usage,
+                            rounds: round,
+                        });
+                    }
+                    Ok(CompletionVerdict::Rejected { feedback }) => {
+                        let feedback = bounded_verifier_feedback(feedback);
+                        round_events.emit(AgentRawEvent::CompletionVerificationEnded {
+                            outcome: crate::events::CompletionVerificationOutcome::Rejected,
+                            feedback: Some(feedback.clone().into()),
+                        });
+                        messages.push(completion_feedback_message(feedback));
+                        round_events.emit(AgentRawEvent::RoundCompleted {
+                            outcome: RoundOutcome::CompletionRejected,
+                        });
+                        continue;
+                    }
+                    Err(error) => {
+                        round_events.emit(AgentRawEvent::CompletionVerificationEnded {
+                            outcome: crate::events::CompletionVerificationOutcome::Failed,
+                            feedback: Some(format!("{error:#}").into()),
+                        });
+                        round_events.emit(AgentRawEvent::RoundCompleted {
+                            outcome: RoundOutcome::Failed,
+                        });
+                        return Err(error);
+                    }
+                }
             }
 
             tracing::debug!(
@@ -256,6 +319,7 @@ pub struct AgentBuilder {
     registry: Option<Arc<ToolRegistry>>,
     workspace: PathBuf,
     approval: Arc<dyn ApprovalHandler>,
+    completion_verifier: Arc<dyn CompletionVerifier>,
     dispatcher_config: DispatcherConfig,
     agent_config: AgentConfig,
 }
@@ -274,6 +338,7 @@ impl AgentBuilder {
             registry: None,
             workspace: PathBuf::from("."),
             approval: Arc::new(DenyAllApproval),
+            completion_verifier: Arc::new(AcceptAllCompletionVerifier),
             dispatcher_config: DispatcherConfig::default(),
             agent_config: AgentConfig::default(),
         }
@@ -307,6 +372,19 @@ impl AgentBuilder {
         self
     }
 
+    pub fn completion_verifier<V>(mut self, verifier: V) -> Self
+    where
+        V: CompletionVerifier + 'static,
+    {
+        self.completion_verifier = Arc::new(verifier);
+        self
+    }
+
+    pub fn shared_completion_verifier(mut self, verifier: Arc<dyn CompletionVerifier>) -> Self {
+        self.completion_verifier = verifier;
+        self
+    }
+
     pub fn dispatcher_config(mut self, config: DispatcherConfig) -> Self {
         self.dispatcher_config = config;
         self
@@ -328,11 +406,42 @@ impl AgentBuilder {
             self.approval,
             self.dispatcher_config,
         )?;
-        Ok(Agent::new(
+        Ok(Agent::new_with_verifier(
             self.provider,
             Arc::new(dispatcher),
+            self.completion_verifier,
             self.agent_config,
         ))
+    }
+}
+
+const MAX_VERIFIER_FEEDBACK_BYTES: usize = 16 * 1024;
+
+fn bounded_verifier_feedback(mut feedback: String) -> String {
+    if feedback.len() <= MAX_VERIFIER_FEEDBACK_BYTES {
+        return feedback;
+    }
+    let mut boundary = MAX_VERIFIER_FEEDBACK_BYTES;
+    while boundary > 0 && !feedback.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    feedback.truncate(boundary);
+    feedback.push_str("\n[verification feedback truncated]");
+    feedback
+}
+
+fn completion_feedback_message(feedback: String) -> ChatMessage {
+    ChatMessage {
+        // Keep the verifier observation in session history without treating it as a new
+        // application-owned system prompt.
+        role: crate::types::Role::User,
+        content: Some(format!(
+            "Automated completion verification rejected the previous answer. Continue working and address this observation before answering again.\n\n{feedback}"
+        )),
+        reasoning: None,
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
     }
 }
 
@@ -340,7 +449,10 @@ impl AgentBuilder {
 mod tests {
     use std::{
         collections::VecDeque,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use async_trait::async_trait;
@@ -383,6 +495,30 @@ mod tests {
     }
 
     struct EchoTool;
+
+    struct RejectOnceVerifier {
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl CompletionVerifier for RejectOnceVerifier {
+        async fn verify(&self, _context: CompletionContext<'_>) -> Result<CompletionVerdict> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                Ok(CompletionVerdict::rejected("tests have not passed"))
+            } else {
+                Ok(CompletionVerdict::Accepted)
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingHandler(Mutex<Vec<AgentRawEvent>>);
+
+    impl AgentEventHandler for RecordingHandler {
+        fn on_raw_event(&self, event: &crate::events::AgentRawEventEnvelope) {
+            self.0.lock().unwrap().push(event.event.clone());
+        }
+    }
 
     #[async_trait]
     impl ExecutableTool for EchoTool {
@@ -565,5 +701,65 @@ mod tests {
         let tool_result: Value =
             serde_json::from_str(requests[1].messages[2].content.as_ref().unwrap()).unwrap();
         assert_eq!(tool_result["error"]["code"], "unknown_tool");
+    }
+
+    #[tokio::test]
+    async fn agent_continues_after_completion_rejection() {
+        let provider = Arc::new(MockProvider::new(vec![
+            response(json!({
+                "id":"one","object":"chat.completion","created":1,"model":"deepseek-chat",
+                "choices":[{"index":0,"message":{"role":"assistant","content":"done too early"},"finish_reason":"stop"}]
+            })),
+            response(json!({
+                "id":"two","object":"chat.completion","created":2,"model":"deepseek-chat",
+                "choices":[{"index":0,"message":{"role":"assistant","content":"verified"},"finish_reason":"stop"}]
+            })),
+        ]));
+        let directory = tempdir().unwrap();
+        let handler = Arc::new(RecordingHandler::default());
+        let agent = Agent::builder_from_shared(provider.clone())
+            .workspace(directory.path())
+            .approval(AllowAllApproval)
+            .completion_verifier(RejectOnceVerifier {
+                calls: AtomicUsize::new(0),
+            })
+            .build()
+            .unwrap();
+
+        let result = agent
+            .run_with_handler(request(), handler.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(result.rounds, 2);
+        assert_eq!(result.final_message.content.as_deref(), Some("verified"));
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].messages.len(), 3);
+        assert_eq!(requests[1].messages[2].role, crate::types::Role::User);
+        assert!(
+            requests[1].messages[2]
+                .content
+                .as_deref()
+                .unwrap()
+                .contains("tests have not passed")
+        );
+        drop(requests);
+
+        let events = handler.0.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentRawEvent::CompletionVerificationEnded {
+                outcome: crate::events::CompletionVerificationOutcome::Rejected,
+                ..
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentRawEvent::CompletionVerificationEnded {
+                outcome: crate::events::CompletionVerificationOutcome::Accepted,
+                ..
+            }
+        )));
     }
 }

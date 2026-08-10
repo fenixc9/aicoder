@@ -6,7 +6,8 @@ use std::{
 };
 
 use aicoder_core::events::{
-    AgentEventHandler, AgentRawEvent, AgentRawEventEnvelope, RoundOutcome, ToolExecutionOutcome,
+    AgentEventHandler, AgentRawEvent, AgentRawEventEnvelope, CompletionVerificationOutcome,
+    RoundOutcome, ToolExecutionOutcome,
 };
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -35,6 +36,18 @@ impl AgentTrace {
                 } => summary.final_answer_rounds += 1,
                 AgentRawEvent::ModelRequestStarted => summary.model_requests += 1,
                 AgentRawEvent::ModelRetryScheduled { .. } => summary.model_retries += 1,
+                AgentRawEvent::CompletionVerificationStarted => {
+                    summary.completion_candidates += 1;
+                }
+                AgentRawEvent::CompletionVerificationEnded { outcome, .. } => match outcome {
+                    CompletionVerificationOutcome::Rejected => {
+                        summary.completion_rejections += 1;
+                    }
+                    CompletionVerificationOutcome::Failed => {
+                        summary.completion_verifier_failures += 1;
+                    }
+                    CompletionVerificationOutcome::Accepted => {}
+                },
                 AgentRawEvent::ModelResponseCompleted { finish_reason } => {
                     summary.finish_reason = finish_reason.as_ref().map(|reason| {
                         serde_json::to_value(reason)
@@ -118,6 +131,8 @@ fn event_kind(event: &AgentRawEvent) -> &'static str {
         AgentRawEvent::ModelRetryScheduled { .. } => "model_retry_scheduled",
         AgentRawEvent::ModelResponseCompleted { .. } => "model_response_completed",
         AgentRawEvent::ModelResponseFailed { .. } => "model_response_failed",
+        AgentRawEvent::CompletionVerificationStarted => "completion_verification_started",
+        AgentRawEvent::CompletionVerificationEnded { .. } => "completion_verification_ended",
         AgentRawEvent::ReasoningStarted { .. } => "reasoning_started",
         AgentRawEvent::ReasoningChunk { .. } => "reasoning_chunk",
         AgentRawEvent::ReasoningEnded { .. } => "reasoning_ended",

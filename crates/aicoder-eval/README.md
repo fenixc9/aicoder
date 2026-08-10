@@ -44,7 +44,8 @@ where
 ```
 
 Use `run_many` to repeat stochastic cases and obtain pass rate, mean score, and mean duration.
-Subjective LLM judges and online completion gates are intentionally outside the first-phase API.
+Subjective LLM judges remain outside the first-phase API. Deterministic online
+completion gates are available through `CompletionVerifier` in `aicoder-core`.
 
 ## SWE-bench
 
@@ -94,6 +95,10 @@ Every selected case writes report.json, trace.json, and checkpoint.json. The
 batch writes run.json and the official predictions.json. Re-running the same
 command resumes valid checkpoints by default; pass --no-resume to run all
 selected cases again.
+
+The batch runner rejects a final answer while the Git workspace is clean and
+lets the agent continue. Pass `--allow-empty-patch` only when an empty patch is
+an intentional result.
 
 Run the official installed SWE-bench Python/Docker harness separately:
 

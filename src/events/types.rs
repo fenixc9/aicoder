@@ -57,7 +57,15 @@ pub enum StreamEnd {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RoundOutcome {
     FinalAnswer,
+    CompletionRejected,
     ToolCalls { count: usize },
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionVerificationOutcome {
+    Accepted,
+    Rejected,
     Failed,
 }
 
@@ -104,6 +112,11 @@ pub enum AgentRawEvent {
     },
     ModelResponseFailed {
         message: Arc<str>,
+    },
+    CompletionVerificationStarted,
+    CompletionVerificationEnded {
+        outcome: CompletionVerificationOutcome,
+        feedback: Option<Arc<str>>,
     },
     ReasoningStarted {
         choice_index: i32,

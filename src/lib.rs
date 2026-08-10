@@ -5,6 +5,7 @@
 
 pub mod agent;
 pub mod client;
+pub mod completion;
 pub mod events;
 mod redaction;
 pub mod session;
@@ -14,7 +15,12 @@ pub mod workflow;
 
 pub use agent::{Agent, AgentBuilder, AgentConfig, AgentRunResult, ChatCompletionProvider};
 pub use client::{ChatClient, ClientConfig};
+pub use completion::{
+    AcceptAllCompletionVerifier, CompletionContext, CompletionVerdict, CompletionVerifier,
+    WorkspaceChangeVerifier,
+};
 pub use events::{
-    AgentEventHandler, AgentRawEvent, AgentRawEventEnvelope, RunId, ToolExecutionOutcome,
+    AgentEventHandler, AgentRawEvent, AgentRawEventEnvelope, CompletionVerificationOutcome, RunId,
+    ToolExecutionOutcome,
 };
 pub use workflow::{AgentTurnResult, AgentWorkflow, AgentWorkflowConfig, SessionSelection};

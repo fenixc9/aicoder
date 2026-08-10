@@ -6,8 +6,8 @@ use crate::{
 };
 
 use super::{
-    AgentRawEvent, AgentRawEventEnvelope, AgentStage, RoundOutcome, RunId, StreamEnd, ToolCallKey,
-    ToolExecutionOutcome,
+    AgentRawEvent, AgentRawEventEnvelope, AgentStage, CompletionVerificationOutcome, RoundOutcome,
+    RunId, StreamEnd, ToolCallKey, ToolExecutionOutcome,
 };
 
 /// Metadata shared by every typed event.
@@ -86,6 +86,15 @@ pub struct ModelResponseCompletedEvent {
 pub struct ModelResponseFailedEvent {
     pub meta: AgentEventMeta,
     pub message: Arc<str>,
+}
+
+meta_event!(CompletionVerificationStartedEvent);
+
+#[derive(Debug, Clone)]
+pub struct CompletionVerificationEndedEvent {
+    pub meta: AgentEventMeta,
+    pub outcome: CompletionVerificationOutcome,
+    pub feedback: Option<Arc<str>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -208,6 +217,8 @@ pub trait AgentEventHandler: Send + Sync + 'static {
     fn on_model_retry_scheduled(&self, _event: ModelRetryScheduledEvent) {}
     fn on_model_response_completed(&self, _event: ModelResponseCompletedEvent) {}
     fn on_model_response_failed(&self, _event: ModelResponseFailedEvent) {}
+    fn on_completion_verification_started(&self, _event: CompletionVerificationStartedEvent) {}
+    fn on_completion_verification_ended(&self, _event: CompletionVerificationEndedEvent) {}
 
     fn on_reasoning_started(&self, _event: ReasoningStartedEvent) {}
     fn on_reasoning_chunk(&self, _event: ReasoningChunkEvent) {}
@@ -299,6 +310,15 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
                 message: Arc::clone(message),
             })
         }
+        AgentRawEvent::CompletionVerificationStarted => {
+            handler.on_completion_verification_started(CompletionVerificationStartedEvent { meta })
+        }
+        AgentRawEvent::CompletionVerificationEnded { outcome, feedback } => handler
+            .on_completion_verification_ended(CompletionVerificationEndedEvent {
+                meta,
+                outcome: *outcome,
+                feedback: feedback.clone(),
+            }),
         AgentRawEvent::ReasoningStarted { choice_index } => {
             handler.on_reasoning_started(ReasoningStartedEvent {
                 meta,

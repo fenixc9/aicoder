@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use aicoder_core::{Agent, AgentConfig, ChatClient, tools::AllowAllApproval};
+use aicoder_core::{
+    Agent, AgentConfig, ChatClient, WorkspaceChangeVerifier, tools::AllowAllApproval,
+};
 use aicoder_eval::{
     SweBenchAdapter, SweBenchBatchOptions, SweBenchBatchRunner, SweBenchDataset, SweBenchFilter,
     SweBenchHarnessConfig, SweBenchHarnessReport, SweBenchRepositoryCache,
@@ -66,6 +68,9 @@ struct RunArgs {
     temperature: f32,
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     stream: bool,
+    /// Permit a final answer even when the agent produced no workspace changes.
+    #[arg(long)]
+    allow_empty_patch: bool,
 }
 
 #[derive(Debug, Args)]
@@ -146,19 +151,27 @@ async fn run(arguments: RunArgs) -> Result<()> {
             "max_tokens": arguments.max_tokens,
             "max_rounds": arguments.max_rounds,
             "stream": arguments.stream,
+            "require_workspace_change": !arguments.allow_empty_patch,
         }));
     let cases = adapter.adapt_dataset(&selected)?;
     let agent_model = model.clone();
     let max_rounds = arguments.max_rounds;
     let stream = arguments.stream;
+    let allow_empty_patch = arguments.allow_empty_patch;
     let report = SweBenchBatchRunner::new(adapter, options)
         .run(cases, move |workspace| {
             let client = ChatClient::from_env(&agent_model)?;
-            Agent::builder(client)
+            let builder = Agent::builder(client)
                 .workspace(workspace)
                 .approval(AllowAllApproval)
-                .config(AgentConfig { max_rounds, stream })
-                .build()
+                .config(AgentConfig { max_rounds, stream });
+            if allow_empty_patch {
+                builder.build()
+            } else {
+                builder
+                    .completion_verifier(WorkspaceChangeVerifier::new())
+                    .build()
+            }
         })
         .await?;
     println!("{}", serde_json::to_string_pretty(&report.summary)?);
@@ -241,6 +254,7 @@ mod tests {
         };
         assert_eq!(arguments.workers, 2);
         assert!(!arguments.stream);
+        assert!(!arguments.allow_empty_patch);
         assert_eq!(arguments.instance_ids, ["owner__repo-1"]);
     }
 
