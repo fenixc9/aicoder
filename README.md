@@ -7,12 +7,12 @@ are separate crates.
 ## Workspace
 
 - aicoder-core: model client, agent loop, events, tools, sessions, and the
-  application-level AgentWorkflow.
+  application-level AgentTurnRunner.
 - aicoder-cli: current command-line application.
 - aicoder-eval: isolated evaluation runner, deterministic evaluators,
   SWE-bench adapter, batch runner, and official harness integration.
 
-An application constructs an Agent, optionally wraps it in AgentWorkflow, and
+An application constructs an Agent, optionally wraps it in AgentTurnRunner, and
 consumes the single AgentEventHandler interface. Every run follows an explicit
 AgentRunState state machine and emits ordered StateChanged events, so CLI, TUI,
 and web applications can present lifecycle state without reconstructing it from

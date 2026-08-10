@@ -1,4 +1,4 @@
-//! Application-level conversation workflow built on the model/tool Agent loop.
+//! Executes one application-level user turn around the model/tool Agent loop.
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct AgentWorkflowConfig {
+pub struct AgentTurnConfig {
     pub model: String,
     pub system_prompt: Option<String>,
     pub temperature: Option<f32>,
@@ -22,7 +22,7 @@ pub struct AgentWorkflowConfig {
     pub response_format: Option<ResponseType>,
 }
 
-impl AgentWorkflowConfig {
+impl AgentTurnConfig {
     pub fn new(model: impl Into<String>) -> Self {
         Self {
             model: model.into(),
@@ -56,13 +56,13 @@ pub struct AgentTurnResult {
 }
 
 /// Owns request construction and conversation persistence around the lower-level Agent loop.
-pub struct AgentWorkflow {
+pub struct AgentTurnRunner {
     agent: Agent,
-    config: AgentWorkflowConfig,
+    config: AgentTurnConfig,
 }
 
-impl AgentWorkflow {
-    pub fn new(agent: Agent, config: AgentWorkflowConfig) -> Self {
+impl AgentTurnRunner {
+    pub fn new(agent: Agent, config: AgentTurnConfig) -> Self {
         Self { agent, config }
     }
 
@@ -217,7 +217,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .pop_front()
-                .context("No workflow test response")
+                .context("No turn runner test response")
         }
     }
 
@@ -236,10 +236,10 @@ mod tests {
         .unwrap()
     }
 
-    fn workflow(
+    fn runner(
         workspace: &std::path::Path,
         responses: Vec<ChatCompletionResponse>,
-    ) -> (AgentWorkflow, Arc<RecordingProvider>) {
+    ) -> (AgentTurnRunner, Arc<RecordingProvider>) {
         let provider = Arc::new(RecordingProvider {
             responses: Mutex::new(responses.into()),
             requests: Mutex::new(Vec::new()),
@@ -249,20 +249,20 @@ mod tests {
             .registry(ToolRegistry::default())
             .build()
             .unwrap();
-        let config = AgentWorkflowConfig::new("test-model").system_prompt("system context");
-        (AgentWorkflow::new(agent, config), provider)
+        let config = AgentTurnConfig::new("test-model").system_prompt("system context");
+        (AgentTurnRunner::new(agent, config), provider)
     }
 
     #[tokio::test]
-    async fn workflow_persists_and_reopens_conversation_sessions() {
+    async fn turn_runner_persists_and_reopens_conversation_sessions() {
         let workspace = tempdir().unwrap();
         let repository = MemorySessionRepository::new();
-        let (workflow, provider) = workflow(
+        let (runner, provider) = runner(
             workspace.path(),
             vec![response("first answer"), response("second answer")],
         );
 
-        let first = workflow
+        let first = runner
             .run_with_session(
                 &repository,
                 SessionSelection::New,
@@ -272,7 +272,7 @@ mod tests {
             .await
             .unwrap();
         let session_id = first.session.unwrap().id;
-        let second = workflow
+        let second = runner
             .run_with_session(
                 &repository,
                 SessionSelection::Existing(session_id.clone()),
@@ -296,11 +296,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stateless_workflow_does_not_create_a_session() {
+    async fn stateless_turn_does_not_create_a_session() {
         let workspace = tempdir().unwrap();
-        let (workflow, _) = workflow(workspace.path(), vec![response("answer")]);
+        let (runner, _) = runner(workspace.path(), vec![response("answer")]);
 
-        let result = workflow.run("question", Arc::new(())).await.unwrap();
+        let result = runner.run("question", Arc::new(())).await.unwrap();
 
         assert!(result.session.is_none());
         assert_eq!(result.run.final_message.content.as_deref(), Some("answer"));

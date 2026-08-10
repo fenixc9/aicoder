@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use aicoder_core::{
-    Agent, AgentRawEvent, AgentRunState, AgentWorkflow, AgentWorkflowConfig,
-    ChatCompletionProvider, SessionSelection,
+    Agent, AgentRawEvent, AgentRunState, AgentTurnConfig, AgentTurnRunner, ChatCompletionProvider,
+    SessionSelection,
     session::{MemorySessionRepository, SessionRepository},
     tools::ToolRegistry,
     types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role},
@@ -89,7 +89,7 @@ async fn external_application_can_build_agent_and_observe_raw_events() {
 }
 
 #[tokio::test]
-async fn external_application_can_run_the_conversation_workflow() {
+async fn external_application_can_run_a_persisted_turn() {
     let workspace = tempdir().unwrap();
     let repository = MemorySessionRepository::new();
     let agent = Agent::builder(StaticProvider)
@@ -97,12 +97,12 @@ async fn external_application_can_run_the_conversation_workflow() {
         .registry(ToolRegistry::default())
         .build()
         .unwrap();
-    let workflow = AgentWorkflow::new(
+    let runner = AgentTurnRunner::new(
         agent,
-        AgentWorkflowConfig::new("test-model").system_prompt("system context"),
+        AgentTurnConfig::new("test-model").system_prompt("system context"),
     );
 
-    let result = workflow
+    let result = runner
         .run_with_session(&repository, SessionSelection::New, "hello", Arc::new(()))
         .await
         .unwrap();

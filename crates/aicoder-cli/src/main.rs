@@ -5,7 +5,7 @@ use std::{
 };
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentEventHandler, AgentWorkflow, AgentWorkflowConfig, ChatClient,
+    Agent, AgentConfig, AgentEventHandler, AgentTurnConfig, AgentTurnRunner, ChatClient,
     SessionSelection,
     events::{
         AgentCompletedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
@@ -224,7 +224,7 @@ async fn main() -> Result<()> {
     } else {
         builder.approval(ConsoleApproval).build()?
     };
-    let workflow_config = AgentWorkflowConfig {
+    let turn_config = AgentTurnConfig {
         model,
         system_prompt: Some(
             "You are a helpful coding assistant. Reply in Chinese. Use tools when needed."
@@ -237,10 +237,10 @@ async fn main() -> Result<()> {
         stop: None,
         response_format: None,
     };
-    let workflow = AgentWorkflow::new(agent, workflow_config);
+    let runner = AgentTurnRunner::new(agent, turn_config);
     let handler = Arc::new(ConsoleEvents);
     let result = match &repository {
-        None => workflow.run(cli.prompt, handler).await?,
+        None => runner.run(cli.prompt, handler).await?,
         Some(repository) => {
             let selection = if cli.continue_session {
                 SessionSelection::ContinueMostRecent
@@ -249,7 +249,7 @@ async fn main() -> Result<()> {
             } else {
                 SessionSelection::New
             };
-            workflow
+            runner
                 .run_with_session(repository, selection, cli.prompt, handler)
                 .await?
         }

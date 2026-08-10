@@ -11,8 +11,8 @@ mod redaction;
 pub mod session;
 pub mod state;
 pub mod tools;
+pub mod turn;
 pub mod types;
-pub mod workflow;
 
 pub use agent::{Agent, AgentBuilder, AgentConfig, AgentRunResult, ChatCompletionProvider};
 pub use client::{ChatClient, ClientConfig};
@@ -27,4 +27,4 @@ pub use events::{
 pub use state::{
     AgentRunState, AgentRunStateMachine, AgentStateTransition, InvalidAgentStateTransition,
 };
-pub use workflow::{AgentTurnResult, AgentWorkflow, AgentWorkflowConfig, SessionSelection};
+pub use turn::{AgentTurnConfig, AgentTurnResult, AgentTurnRunner, SessionSelection};
