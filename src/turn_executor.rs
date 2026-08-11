@@ -1,4 +1,4 @@
-//! Model/tool execution loop with streaming provider support.
+//! Executes one agent turn through its model, tool, and completion-verification rounds.
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -67,12 +67,12 @@ impl ChatCompletionProvider for ChatClient {
 }
 
 #[derive(Debug, Clone)]
-pub struct AgentLoopConfig {
+pub struct TurnExecutionConfig {
     pub max_rounds: usize,
     pub stream: bool,
 }
 
-impl Default for AgentLoopConfig {
+impl Default for TurnExecutionConfig {
     fn default() -> Self {
         Self {
             max_rounds: 8,
@@ -82,7 +82,7 @@ impl Default for AgentLoopConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct AgentLoopResult {
+pub struct TurnExecutionResult {
     pub final_message: ChatMessage,
     pub finish_reason: Option<FinishReason>,
     pub messages: Vec<ChatMessage>,
@@ -90,29 +90,29 @@ pub struct AgentLoopResult {
     pub rounds: usize,
 }
 
-pub struct AgentLoop {
+pub struct TurnExecutor {
     provider: Arc<dyn ChatCompletionProvider>,
     dispatcher: Arc<ToolDispatcher>,
     completion_verifier: Arc<dyn CompletionVerifier>,
-    config: AgentLoopConfig,
+    config: TurnExecutionConfig,
 }
 
-impl AgentLoop {
-    pub fn builder<P>(provider: P) -> AgentLoopBuilder
+impl TurnExecutor {
+    pub fn builder<P>(provider: P) -> TurnExecutorBuilder
     where
         P: ChatCompletionProvider + 'static,
     {
-        AgentLoopBuilder::new(provider)
+        TurnExecutorBuilder::new(provider)
     }
 
-    pub fn builder_from_shared(provider: Arc<dyn ChatCompletionProvider>) -> AgentLoopBuilder {
-        AgentLoopBuilder::from_shared(provider)
+    pub fn builder_from_shared(provider: Arc<dyn ChatCompletionProvider>) -> TurnExecutorBuilder {
+        TurnExecutorBuilder::from_shared(provider)
     }
 
     pub fn new(
         provider: Arc<dyn ChatCompletionProvider>,
         dispatcher: Arc<ToolDispatcher>,
-        config: AgentLoopConfig,
+        config: TurnExecutionConfig,
     ) -> Self {
         Self::new_with_verifier(
             provider,
@@ -126,7 +126,7 @@ impl AgentLoop {
         provider: Arc<dyn ChatCompletionProvider>,
         dispatcher: Arc<ToolDispatcher>,
         completion_verifier: Arc<dyn CompletionVerifier>,
-        config: AgentLoopConfig,
+        config: TurnExecutionConfig,
     ) -> Self {
         Self {
             provider,
@@ -140,7 +140,7 @@ impl AgentLoop {
         self.dispatcher.workspace_root()
     }
 
-    pub async fn run(&self, request: ChatCompletionRequest) -> Result<AgentLoopResult> {
+    pub async fn run(&self, request: ChatCompletionRequest) -> Result<TurnExecutionResult> {
         self.run_with_handler(request, Arc::new(())).await
     }
 
@@ -148,7 +148,7 @@ impl AgentLoop {
         &self,
         request: ChatCompletionRequest,
         handler: Arc<dyn AgentEventHandler>,
-    ) -> Result<AgentLoopResult> {
+    ) -> Result<TurnExecutionResult> {
         let events = AgentEventEmitter::new(handler);
         events.emit(AgentRawEvent::AgentStarted {
             model: request.model.clone().into(),
@@ -172,7 +172,7 @@ impl AgentLoop {
                 match transition_state(&mut state, &events, failed) {
                     Ok(()) => Err(error),
                     Err(state_error) => Err(error.context(format!(
-                        "Agent loop state machine also failed while terminating: {state_error}"
+                        "Turn execution state machine also failed while terminating: {state_error}"
                     ))),
                 }
             }
@@ -183,7 +183,7 @@ impl AgentLoop {
                 usage: result.usage.clone().into(),
             }),
             Err(error) => events.emit(AgentRawEvent::AgentFailed {
-                stage: AgentStage::Loop,
+                stage: AgentStage::Turn,
                 message: format!("{error:#}").into(),
             }),
         }
@@ -196,9 +196,9 @@ impl AgentLoop {
         mut request: ChatCompletionRequest,
         events: &AgentEventEmitter,
         state: &mut AgentRunStateMachine,
-    ) -> Result<AgentLoopResult> {
+    ) -> Result<TurnExecutionResult> {
         if self.config.max_rounds == 0 {
-            anyhow::bail!("Agent loop max_rounds must be greater than zero");
+            anyhow::bail!("Turn execution max_rounds must be greater than zero");
         }
 
         request.stream = Some(self.config.stream);
@@ -277,7 +277,7 @@ impl AgentLoop {
                         round_events.emit(AgentRawEvent::RoundCompleted {
                             outcome: RoundOutcome::FinalAnswer,
                         });
-                        return Ok(AgentLoopResult {
+                        return Ok(TurnExecutionResult {
                             final_message: assistant_message,
                             finish_reason,
                             messages,
@@ -345,7 +345,7 @@ impl AgentLoop {
         }
 
         anyhow::bail!(
-            "Agent loop exceeded maximum of {} model rounds",
+            "Turn execution exceeded maximum of {} model rounds",
             self.config.max_rounds
         )
     }
@@ -362,17 +362,17 @@ fn transition_state(
 }
 
 /// Convenience assembly for applications that want the built-in coding tools.
-pub struct AgentLoopBuilder {
+pub struct TurnExecutorBuilder {
     provider: Arc<dyn ChatCompletionProvider>,
     registry: Option<Arc<ToolRegistry>>,
     workspace: PathBuf,
     approval: Arc<dyn ApprovalHandler>,
     completion_verifier: Arc<dyn CompletionVerifier>,
     dispatcher_config: DispatcherConfig,
-    loop_config: AgentLoopConfig,
+    execution_config: TurnExecutionConfig,
 }
 
-impl AgentLoopBuilder {
+impl TurnExecutorBuilder {
     pub fn new<P>(provider: P) -> Self
     where
         P: ChatCompletionProvider + 'static,
@@ -388,7 +388,7 @@ impl AgentLoopBuilder {
             approval: Arc::new(DenyAllApproval),
             completion_verifier: Arc::new(AcceptAllCompletionVerifier),
             dispatcher_config: DispatcherConfig::default(),
-            loop_config: AgentLoopConfig::default(),
+            execution_config: TurnExecutionConfig::default(),
         }
     }
 
@@ -438,12 +438,12 @@ impl AgentLoopBuilder {
         self
     }
 
-    pub fn config(mut self, config: AgentLoopConfig) -> Self {
-        self.loop_config = config;
+    pub fn config(mut self, config: TurnExecutionConfig) -> Self {
+        self.execution_config = config;
         self
     }
 
-    pub fn build(self) -> Result<AgentLoop> {
+    pub fn build(self) -> Result<TurnExecutor> {
         let registry = match self.registry {
             Some(registry) => registry,
             None => Arc::new(default_registry()?),
@@ -454,11 +454,11 @@ impl AgentLoopBuilder {
             self.approval,
             self.dispatcher_config,
         )?;
-        Ok(AgentLoop::new_with_verifier(
+        Ok(TurnExecutor::new_with_verifier(
             self.provider,
             Arc::new(dispatcher),
             self.completion_verifier,
-            self.loop_config,
+            self.execution_config,
         ))
     }
 }
@@ -652,7 +652,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let agent = AgentLoop::new(provider.clone(), dispatcher, AgentLoopConfig::default());
+        let agent = TurnExecutor::new(provider.clone(), dispatcher, TurnExecutionConfig::default());
 
         let result = agent.run(request()).await.unwrap();
 
@@ -703,10 +703,10 @@ mod tests {
             )
             .unwrap(),
         );
-        let agent = AgentLoop::new(
+        let agent = TurnExecutor::new(
             provider,
             dispatcher,
-            AgentLoopConfig {
+            TurnExecutionConfig {
                 max_rounds: 2,
                 stream: true,
             },
@@ -740,7 +740,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let agent = AgentLoop::new(provider.clone(), dispatcher, AgentLoopConfig::default());
+        let agent = TurnExecutor::new(provider.clone(), dispatcher, TurnExecutionConfig::default());
 
         let result = agent.run(request()).await.unwrap();
 
@@ -765,7 +765,7 @@ mod tests {
         ]));
         let directory = tempdir().unwrap();
         let handler = Arc::new(RecordingHandler::default());
-        let agent = AgentLoop::builder_from_shared(provider.clone())
+        let agent = TurnExecutor::builder_from_shared(provider.clone())
             .workspace(directory.path())
             .approval(AllowAllApproval)
             .completion_verifier(RejectOnceVerifier {

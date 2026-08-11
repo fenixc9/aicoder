@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, ensure};
 
 use crate::{
-    AgentEventHandler, AgentLoop, AgentLoopResult,
+    AgentEventHandler, TurnExecutionResult, TurnExecutor,
     session::{Session, SessionMetadata, SessionRepository},
     types::{ChatCompletionRequest, ChatMessage, ResponseType, Role},
 };
@@ -51,23 +51,26 @@ pub enum SessionSelection {
 
 #[derive(Debug, Clone)]
 pub struct AgentTurnResult {
-    pub loop_result: AgentLoopResult,
+    pub execution_result: TurnExecutionResult,
     pub session: Option<SessionMetadata>,
 }
 
-/// Owns request construction and optional conversation persistence around an `AgentLoop`.
+/// Owns request construction and optional conversation persistence around a `TurnExecutor`.
 pub struct Agent {
-    agent_loop: AgentLoop,
+    turn_executor: TurnExecutor,
     config: AgentConfig,
 }
 
 impl Agent {
-    pub fn new(agent_loop: AgentLoop, config: AgentConfig) -> Self {
-        Self { agent_loop, config }
+    pub fn new(turn_executor: TurnExecutor, config: AgentConfig) -> Self {
+        Self {
+            turn_executor,
+            config,
+        }
     }
 
-    pub fn agent_loop(&self) -> &AgentLoop {
-        &self.agent_loop
+    pub fn turn_executor(&self) -> &TurnExecutor {
+        &self.turn_executor
     }
 
     pub async fn run(
@@ -77,12 +80,12 @@ impl Agent {
     ) -> Result<AgentTurnResult> {
         let mut messages = self.system_messages();
         messages.push(user_message(prompt.into()));
-        let loop_result = self
-            .agent_loop
+        let execution_result = self
+            .turn_executor
             .run_with_handler(self.completion_request(messages), handler)
             .await?;
         Ok(AgentTurnResult {
-            loop_result,
+            execution_result,
             session: None,
         })
     }
@@ -97,7 +100,7 @@ impl Agent {
     where
         R: SessionRepository,
     {
-        let workspace = self.agent_loop.workspace_root();
+        let workspace = self.turn_executor.workspace_root();
         let mut session = select_session(repository, workspace, selection)?;
         ensure!(
             session.metadata().cwd == workspace,
@@ -111,17 +114,17 @@ impl Agent {
         let mut messages = self.system_messages();
         messages.extend(session.chat_messages());
         let input_message_count = messages.len();
-        let loop_result = self
-            .agent_loop
+        let execution_result = self
+            .turn_executor
             .run_with_handler(self.completion_request(messages), handler)
             .await?;
-        let generated_messages = loop_result
+        let generated_messages = execution_result
             .messages
             .get(input_message_count..)
-            .context("AgentLoop returned fewer messages than supplied conversation context")?;
+            .context("TurnExecutor returned fewer messages than supplied conversation context")?;
         repository.append_all(&mut session, generated_messages.iter().cloned())?;
         Ok(AgentTurnResult {
-            loop_result,
+            execution_result,
             session: Some(session.metadata().clone()),
         })
     }
@@ -247,13 +250,13 @@ mod tests {
             responses: Mutex::new(responses.into()),
             requests: Mutex::new(Vec::new()),
         });
-        let agent_loop = AgentLoop::builder_from_shared(provider.clone())
+        let turn_executor = TurnExecutor::builder_from_shared(provider.clone())
             .workspace(workspace)
             .registry(ToolRegistry::default())
             .build()
             .unwrap();
         let config = AgentConfig::new("test-model").system_prompt("system context");
-        (Agent::new(agent_loop, config), provider)
+        (Agent::new(turn_executor, config), provider)
     }
 
     #[tokio::test]
@@ -307,7 +310,7 @@ mod tests {
 
         assert!(result.session.is_none());
         assert_eq!(
-            result.loop_result.final_message.content.as_deref(),
+            result.execution_result.final_message.content.as_deref(),
             Some("answer")
         );
     }

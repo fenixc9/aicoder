@@ -75,6 +75,7 @@
 
 ## 后续增强
 
+- [ ] 实现 `LoopAgent`（命名预留）：在 `TurnExecutor` 之上组合 Planner、Evaluator 和持久化 `LoopState`，负责跨 turn 的自主规划、执行、评估与继续/终止决策
 - [ ] MCP 工具接入
 - [ ] LSP 和语法树搜索
 - [ ] 多 workspace 支持

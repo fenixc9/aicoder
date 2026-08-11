@@ -1,6 +1,8 @@
 use std::{path::Path, sync::Arc, time::Instant};
 
-use aicoder_core::{AgentLoop, AgentLoopResult, events::AgentEventHandler, types::FinishReason};
+use aicoder_core::{
+    TurnExecutionResult, TurnExecutor, events::AgentEventHandler, types::FinishReason,
+};
 use anyhow::{Context, Result, ensure};
 
 use crate::{
@@ -35,9 +37,9 @@ impl EvalRunner {
         self
     }
 
-    pub async fn run<F>(&self, case: &EvalCase, agent_factory: &F) -> Result<EvalReport>
+    pub async fn run<F>(&self, case: &EvalCase, executor_factory: &F) -> Result<EvalReport>
     where
-        F: Fn(&Path) -> Result<AgentLoop>,
+        F: Fn(&Path) -> Result<TurnExecutor>,
     {
         let temporary = tempfile::Builder::new()
             .prefix("aicoder-eval-")
@@ -45,11 +47,12 @@ impl EvalRunner {
             .context("Failed to create temporary evaluation workspace")?;
         prepare_fixture(&case.fixture, temporary.path())?;
         let before = WorkspaceSnapshot::capture(temporary.path())?;
-        let agent = agent_factory(temporary.path()).context("Failed to build evaluation agent")?;
+        let executor = executor_factory(temporary.path())
+            .context("Failed to build evaluation turn executor")?;
         let recorder = AgentTraceRecorder::shared();
         let event_handler: Arc<dyn AgentEventHandler> = recorder.clone();
         let started_at = Instant::now();
-        let execution = agent
+        let execution = executor
             .run_with_handler(case.request.clone(), event_handler)
             .await;
         let duration = started_at.elapsed();
@@ -95,15 +98,15 @@ impl EvalRunner {
         &self,
         case: &EvalCase,
         repetitions: usize,
-        agent_factory: &F,
+        executor_factory: &F,
     ) -> Result<EvalSuiteReport>
     where
-        F: Fn(&Path) -> Result<AgentLoop>,
+        F: Fn(&Path) -> Result<TurnExecutor>,
     {
         ensure!(repetitions > 0, "Evaluation repetitions must be positive");
         let mut runs = Vec::with_capacity(repetitions);
         for _ in 0..repetitions {
-            runs.push(self.run(case, agent_factory).await?);
+            runs.push(self.run(case, executor_factory).await?);
         }
         Ok(EvalSuiteReport::from_runs(case.metadata(), runs))
     }
@@ -124,7 +127,7 @@ impl EvalRunner {
     }
 }
 
-fn infer_outcome(result: Option<&AgentLoopResult>, run_error: Option<&str>) -> EvalRunOutcome {
+fn infer_outcome(result: Option<&TurnExecutionResult>, run_error: Option<&str>) -> EvalRunOutcome {
     if run_error.is_some() || result.is_none() {
         EvalRunOutcome::Failed
     } else if result.is_some_and(|result| {
@@ -142,7 +145,7 @@ fn infer_outcome(result: Option<&AgentLoopResult>, run_error: Option<&str>) -> E
 }
 
 fn build_run_summary(
-    result: Option<&AgentLoopResult>,
+    result: Option<&TurnExecutionResult>,
     error: Option<String>,
     outcome: EvalRunOutcome,
     duration: std::time::Duration,

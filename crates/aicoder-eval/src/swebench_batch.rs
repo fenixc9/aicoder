@@ -6,7 +6,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use aicoder_core::AgentLoop;
+use aicoder_core::TurnExecutor;
 use anyhow::{Context, Result, ensure};
 use futures::{StreamExt, stream};
 use serde::{Deserialize, Serialize};
@@ -132,10 +132,10 @@ impl SweBenchBatchRunner {
     pub async fn run<F>(
         &self,
         cases: Vec<SweBenchCase>,
-        agent_factory: F,
+        executor_factory: F,
     ) -> Result<SweBenchBatchReport>
     where
-        F: Fn(&Path) -> Result<AgentLoop> + Send + Sync + 'static,
+        F: Fn(&Path) -> Result<TurnExecutor> + Send + Sync + 'static,
     {
         ensure!(
             self.options.concurrency > 0,
@@ -159,7 +159,7 @@ impl SweBenchBatchRunner {
             .unwrap_or_default()
             .as_secs();
         let started = Instant::now();
-        let factory = Arc::new(agent_factory);
+        let factory = Arc::new(executor_factory);
         let adapter = Arc::new(self.adapter.clone());
         let runner = Arc::new(self.eval_runner.clone());
         let options = Arc::new(self.options.clone());
@@ -269,7 +269,7 @@ async fn run_case<F>(
     factory: Arc<F>,
 ) -> CaseRunResult
 where
-    F: Fn(&Path) -> Result<AgentLoop> + Send + Sync + 'static,
+    F: Fn(&Path) -> Result<TurnExecutor> + Send + Sync + 'static,
 {
     let instance_id = case.instance.instance_id.clone();
     let case_dir = options

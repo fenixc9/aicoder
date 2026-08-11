@@ -2,21 +2,21 @@
 
 Offline evaluation infrastructure for `aicoder-core`. Each run gets a temporary workspace copied
 from a fixture, a complete raw event trace, deterministic post-run evaluators, and a serializable
-report. Evaluation never changes the AgentLoop or feeds grader output back into the model.
+report. Evaluation never changes the TurnExecutor or feeds grader output back into the model.
 
 ```rust,no_run
 use std::path::Path;
 
-use aicoder_core::{AgentLoop, types::ChatCompletionRequest};
+use aicoder_core::{TurnExecutor, types::ChatCompletionRequest};
 use aicoder_eval::{
     CommandEvaluator, EvalCase, EvalRunner, TrajectoryEvaluator, WorkspaceDiffEvaluator,
     WorkspaceFixture,
 };
 use anyhow::Result;
 
-async fn evaluate<F>(request: ChatCompletionRequest, build_agent: F) -> Result<()>
+async fn evaluate<F>(request: ChatCompletionRequest, build_executor: F) -> Result<()>
 where
-    F: Fn(&Path) -> Result<AgentLoop>,
+    F: Fn(&Path) -> Result<TurnExecutor>,
 {
     let case = EvalCase::new(
         "edit-task",
@@ -37,7 +37,7 @@ where
                 .max_tool_failures(0),
         );
 
-    let report = runner.run(&case, &build_agent).await?;
+    let report = runner.run(&case, &build_executor).await?;
     report.write_json("eval-report.json")?;
     Ok(())
 }

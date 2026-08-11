@@ -5,8 +5,8 @@ use std::{
 };
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentEventHandler, AgentLoop, AgentLoopConfig, ChatClient,
-    SessionSelection,
+    Agent, AgentConfig, AgentEventHandler, ChatClient, SessionSelection, TurnExecutionConfig,
+    TurnExecutor,
     events::{
         AgentCompletedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
         ReasoningChunkEvent, ReasoningEndedEvent, ReasoningStartedEvent, ToolCallEndedEvent,
@@ -216,10 +216,10 @@ async fn main() -> Result<()> {
     };
     let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string());
     let client = ChatClient::from_env(&model)?;
-    let builder = AgentLoop::builder(client)
+    let builder = TurnExecutor::builder(client)
         .workspace(&cli.workspace)
-        .config(AgentLoopConfig::default());
-    let agent_loop = if cli.yes {
+        .config(TurnExecutionConfig::default());
+    let turn_executor = if cli.yes {
         builder.approval(AllowAllApproval).build()?
     } else {
         builder.approval(ConsoleApproval).build()?
@@ -237,7 +237,7 @@ async fn main() -> Result<()> {
         stop: None,
         response_format: None,
     };
-    let agent = Agent::new(agent_loop, agent_config);
+    let agent = Agent::new(turn_executor, agent_config);
     let handler = Arc::new(ConsoleEvents);
     let result = match &repository {
         None => agent.run(cli.prompt, handler).await?,
@@ -257,7 +257,7 @@ async fn main() -> Result<()> {
     if let Some(session) = &result.session {
         eprintln!("Session: {}", session.id);
     }
-    println!("Usage :{:?}", result.loop_result.usage);
+    println!("Usage :{:?}", result.execution_result.usage);
     Ok(())
 }
 

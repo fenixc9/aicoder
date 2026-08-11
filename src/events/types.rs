@@ -44,7 +44,7 @@ impl fmt::Display for RunId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentStage {
-    Loop,
+    Turn,
     Model,
     Tool,
 }

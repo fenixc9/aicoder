@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
 use aicoder_core::{
-    AgentLoop, AgentLoopConfig, ChatCompletionProvider,
+    ChatCompletionProvider, TurnExecutionConfig, TurnExecutor,
     tools::ToolRegistry,
     types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role},
 };
@@ -105,8 +105,8 @@ fn request() -> ChatCompletionRequest {
     }
 }
 
-fn build_agent(workspace: &Path) -> Result<AgentLoop> {
-    AgentLoop::builder(StaticProvider)
+fn build_executor(workspace: &Path) -> Result<TurnExecutor> {
+    TurnExecutor::builder(StaticProvider)
         .workspace(workspace)
         .registry(ToolRegistry::default())
         .build()
@@ -126,7 +126,7 @@ async fn runner_captures_trace_and_applies_evaluators() {
         .evaluator(TrajectoryEvaluator::new().max_rounds(1).max_tool_calls(0))
         .evaluator(WorkspaceDiffEvaluator::new());
 
-    let report = runner.run(&case, &build_agent).await.unwrap();
+    let report = runner.run(&case, &build_executor).await.unwrap();
 
     assert_eq!(report.verdict, EvalVerdict::Passed);
     assert_eq!(report.run.outcome, EvalRunOutcome::Completed);
@@ -155,7 +155,7 @@ async fn suite_aggregates_repeated_runs_and_required_change_failures() {
     let runner =
         EvalRunner::new().evaluator(WorkspaceDiffEvaluator::new().require_change("seed.txt"));
 
-    let report = runner.run_many(&case, 2, &build_agent).await.unwrap();
+    let report = runner.run_many(&case, 2, &build_executor).await.unwrap();
 
     assert_eq!(report.summary.runs, 2);
     assert_eq!(report.summary.failed, 2);
@@ -173,7 +173,7 @@ async fn evaluator_errors_are_reported_without_losing_the_run() {
     let case = EvalCase::new("broken-grader", request(), WorkspaceFixture::Empty);
     let runner = EvalRunner::new().evaluator(BrokenEvaluator);
 
-    let report = runner.run(&case, &build_agent).await.unwrap();
+    let report = runner.run(&case, &build_executor).await.unwrap();
 
     assert_eq!(report.run.outcome, EvalRunOutcome::Completed);
     assert_eq!(report.verdict, EvalVerdict::EvaluatorError);
@@ -190,9 +190,9 @@ async fn failed_agent_run_retains_provider_usage_from_trace() {
     let case = EvalCase::new("round-limit", request(), WorkspaceFixture::Empty);
     let report = EvalRunner::new()
         .run(&case, &|workspace| {
-            AgentLoop::builder(ToolOnlyProvider)
+            TurnExecutor::builder(ToolOnlyProvider)
                 .workspace(workspace)
-                .config(AgentLoopConfig {
+                .config(TurnExecutionConfig {
                     max_rounds: 1,
                     stream: false,
                 })
