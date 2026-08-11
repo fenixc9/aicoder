@@ -52,6 +52,15 @@ impl AgentTrace {
                     }
                     CompletionVerificationOutcome::Accepted => {}
                 },
+                AgentRawEvent::ContextCompactionCompleted {
+                    removed_messages, ..
+                } => {
+                    summary.context_compactions += 1;
+                    summary.compacted_messages += removed_messages;
+                }
+                AgentRawEvent::ContextCompactionFailed { .. } => {
+                    summary.context_compaction_failures += 1;
+                }
                 AgentRawEvent::ModelResponseCompleted { finish_reason } => {
                     summary.finish_reason = finish_reason.as_ref().map(|reason| {
                         serde_json::to_value(reason)
@@ -138,6 +147,9 @@ fn event_kind(event: &AgentRawEvent) -> &'static str {
         AgentRawEvent::ModelResponseFailed { .. } => "model_response_failed",
         AgentRawEvent::CompletionVerificationStarted => "completion_verification_started",
         AgentRawEvent::CompletionVerificationEnded { .. } => "completion_verification_ended",
+        AgentRawEvent::ContextCompactionStarted { .. } => "context_compaction_started",
+        AgentRawEvent::ContextCompactionCompleted { .. } => "context_compaction_completed",
+        AgentRawEvent::ContextCompactionFailed { .. } => "context_compaction_failed",
         AgentRawEvent::ReasoningStarted { .. } => "reasoning_started",
         AgentRawEvent::ReasoningChunk { .. } => "reasoning_chunk",
         AgentRawEvent::ReasoningEnded { .. } => "reasoning_ended",
@@ -199,5 +211,51 @@ impl AgentEventHandler for AgentTraceRecorder {
                 elapsed: self.started_at.elapsed(),
                 envelope: event.clone(),
             });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aicoder_core::events::RunId;
+
+    #[test]
+    fn summary_counts_context_compaction_activity() {
+        let run_id = RunId::new();
+        let trace = AgentTrace {
+            events: vec![
+                TimedAgentEvent {
+                    elapsed: Duration::ZERO,
+                    envelope: AgentRawEventEnvelope {
+                        run_id,
+                        sequence: 1,
+                        round: Some(1),
+                        event: AgentRawEvent::ContextCompactionCompleted {
+                            strategy: "test".into(),
+                            estimated_tokens_before: 100,
+                            estimated_tokens_after: 50,
+                            removed_messages: 3,
+                        },
+                    },
+                },
+                TimedAgentEvent {
+                    elapsed: Duration::ZERO,
+                    envelope: AgentRawEventEnvelope {
+                        run_id,
+                        sequence: 2,
+                        round: Some(2),
+                        event: AgentRawEvent::ContextCompactionFailed {
+                            strategy: "test".into(),
+                            message: "failed".into(),
+                        },
+                    },
+                },
+            ],
+        };
+
+        let summary = trace.summary();
+        assert_eq!(summary.context_compactions, 1);
+        assert_eq!(summary.context_compaction_failures, 1);
+        assert_eq!(summary.compacted_messages, 3);
     }
 }

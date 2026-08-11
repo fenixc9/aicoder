@@ -104,6 +104,30 @@ pub struct CompletionVerificationEndedEvent {
     pub feedback: Option<Arc<str>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ContextCompactionStartedEvent {
+    pub meta: AgentEventMeta,
+    pub strategy: Arc<str>,
+    pub estimated_tokens: usize,
+    pub target_tokens: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextCompactionCompletedEvent {
+    pub meta: AgentEventMeta,
+    pub strategy: Arc<str>,
+    pub estimated_tokens_before: usize,
+    pub estimated_tokens_after: usize,
+    pub removed_messages: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContextCompactionFailedEvent {
+    pub meta: AgentEventMeta,
+    pub strategy: Arc<str>,
+    pub message: Arc<str>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ReasoningStartedEvent {
     pub meta: AgentEventMeta,
@@ -227,6 +251,9 @@ pub trait AgentEventHandler: Send + Sync + 'static {
     fn on_model_response_failed(&self, _event: ModelResponseFailedEvent) {}
     fn on_completion_verification_started(&self, _event: CompletionVerificationStartedEvent) {}
     fn on_completion_verification_ended(&self, _event: CompletionVerificationEndedEvent) {}
+    fn on_context_compaction_started(&self, _event: ContextCompactionStartedEvent) {}
+    fn on_context_compaction_completed(&self, _event: ContextCompactionCompletedEvent) {}
+    fn on_context_compaction_failed(&self, _event: ContextCompactionFailedEvent) {}
 
     fn on_reasoning_started(&self, _event: ReasoningStartedEvent) {}
     fn on_reasoning_chunk(&self, _event: ReasoningChunkEvent) {}
@@ -332,6 +359,34 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
                 meta,
                 outcome: *outcome,
                 feedback: feedback.clone(),
+            }),
+        AgentRawEvent::ContextCompactionStarted {
+            strategy,
+            estimated_tokens,
+            target_tokens,
+        } => handler.on_context_compaction_started(ContextCompactionStartedEvent {
+            meta,
+            strategy: Arc::clone(strategy),
+            estimated_tokens: *estimated_tokens,
+            target_tokens: *target_tokens,
+        }),
+        AgentRawEvent::ContextCompactionCompleted {
+            strategy,
+            estimated_tokens_before,
+            estimated_tokens_after,
+            removed_messages,
+        } => handler.on_context_compaction_completed(ContextCompactionCompletedEvent {
+            meta,
+            strategy: Arc::clone(strategy),
+            estimated_tokens_before: *estimated_tokens_before,
+            estimated_tokens_after: *estimated_tokens_after,
+            removed_messages: *removed_messages,
+        }),
+        AgentRawEvent::ContextCompactionFailed { strategy, message } => handler
+            .on_context_compaction_failed(ContextCompactionFailedEvent {
+                meta,
+                strategy: Arc::clone(strategy),
+                message: Arc::clone(message),
             }),
         AgentRawEvent::ReasoningStarted { choice_index } => {
             handler.on_reasoning_started(ReasoningStartedEvent {

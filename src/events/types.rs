@@ -122,6 +122,21 @@ pub enum AgentRawEvent {
         outcome: CompletionVerificationOutcome,
         feedback: Option<Arc<str>>,
     },
+    ContextCompactionStarted {
+        strategy: Arc<str>,
+        estimated_tokens: usize,
+        target_tokens: usize,
+    },
+    ContextCompactionCompleted {
+        strategy: Arc<str>,
+        estimated_tokens_before: usize,
+        estimated_tokens_after: usize,
+        removed_messages: usize,
+    },
+    ContextCompactionFailed {
+        strategy: Arc<str>,
+        message: Arc<str>,
+    },
     ReasoningStarted {
         choice_index: i32,
     },

@@ -20,6 +20,10 @@ and web applications can present lifecycle state without reconstructing it from
 lower-level model and tool events. Applications should depend on the core crate
 rather than reproduce the loop.
 
+Long-running sessions can opt into context-window budgeting through a pluggable
+ContextCompactor. See [context compaction](docs/context-compaction.md) for the
+first deterministic policy and the semantic-summary extension boundary.
+
 Runtime prerequisites are Git, Bash, and ripgrep (`rg`). The SWE-bench grading
 subcommand additionally requires the official Python package and Docker.
 

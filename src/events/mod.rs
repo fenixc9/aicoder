@@ -8,7 +8,8 @@ pub use emitter::AgentEventEmitter;
 pub use handler::{
     AgentCompletedEvent, AgentEventHandler, AgentEventMeta, AgentFailedEvent, AgentStartedEvent,
     AgentStateChangedEvent, CompletionVerificationEndedEvent, CompletionVerificationStartedEvent,
-    ContentChunkEvent, ContentEndedEvent, ContentStartedEvent, ModelRequestStartedEvent,
+    ContentChunkEvent, ContentEndedEvent, ContentStartedEvent, ContextCompactionCompletedEvent,
+    ContextCompactionFailedEvent, ContextCompactionStartedEvent, ModelRequestStartedEvent,
     ModelResponseCompletedEvent, ModelResponseFailedEvent, ModelResponseStartedEvent,
     ModelRetryScheduledEvent, ReasoningChunkEvent, ReasoningEndedEvent, ReasoningStartedEvent,
     RoundCompletedEvent, RoundStartedEvent, ToolApprovalRequestedEvent, ToolApprovalResolvedEvent,

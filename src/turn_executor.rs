@@ -10,6 +10,7 @@ use crate::{
     completion::{
         AcceptAllCompletionVerifier, CompletionContext, CompletionVerdict, CompletionVerifier,
     },
+    context::{ContextCompaction, ContextCompactionInput, ContextCompactor},
     events::{
         AgentEventEmitter, AgentEventHandler, AgentRawEvent, AgentStage, RoundOutcome,
         emit_full_response_events,
@@ -94,6 +95,7 @@ pub struct TurnExecutor {
     provider: Arc<dyn ChatCompletionProvider>,
     dispatcher: Arc<ToolDispatcher>,
     completion_verifier: Arc<dyn CompletionVerifier>,
+    context_compactor: Option<Arc<dyn ContextCompactor>>,
     config: TurnExecutionConfig,
 }
 
@@ -118,6 +120,7 @@ impl TurnExecutor {
             provider,
             dispatcher,
             Arc::new(AcceptAllCompletionVerifier),
+            None,
             config,
         )
     }
@@ -126,12 +129,14 @@ impl TurnExecutor {
         provider: Arc<dyn ChatCompletionProvider>,
         dispatcher: Arc<ToolDispatcher>,
         completion_verifier: Arc<dyn CompletionVerifier>,
+        context_compactor: Option<Arc<dyn ContextCompactor>>,
         config: TurnExecutionConfig,
     ) -> Self {
         Self {
             provider,
             dispatcher,
             completion_verifier,
+            context_compactor,
             config,
         }
     }
@@ -208,14 +213,65 @@ impl TurnExecutor {
             request.tool_choice = Some(ToolChoice::Mode(ToolChoiceMode::Auto));
         }
 
-        let mut messages = request.messages.clone();
+        let mut transcript = request.messages.clone();
+        let mut context_messages = transcript.clone();
         let mut usage = Usage::default();
 
         for round in 1..=self.config.max_rounds {
             let round_events = events.for_round(round);
             round_events.emit(AgentRawEvent::RoundStarted);
             transition_state(state, &round_events, AgentRunState::AwaitingModel { round })?;
-            request.messages = messages.clone();
+            if let Some(compactor) = &self.context_compactor {
+                let input = ContextCompactionInput {
+                    model: &request.model,
+                    messages: &context_messages,
+                    tools: request.tools.as_deref(),
+                    max_output_tokens: request.max_tokens,
+                };
+                let estimated_tokens = compactor.estimate_tokens(input);
+                let target_tokens = compactor.target_tokens(input);
+                if estimated_tokens > target_tokens {
+                    transition_state(state, &round_events, AgentRunState::Compacting { round })?;
+                    round_events.emit(AgentRawEvent::ContextCompactionStarted {
+                        strategy: compactor.name().into(),
+                        estimated_tokens,
+                        target_tokens,
+                    });
+                    let compacted = match compactor.compact(input).await.and_then(|compacted| {
+                        ensure_valid_compaction(&compacted, target_tokens)?;
+                        Ok(compacted)
+                    }) {
+                        Ok(compacted) => compacted,
+                        Err(error) => {
+                            round_events.emit(AgentRawEvent::ContextCompactionFailed {
+                                strategy: compactor.name().into(),
+                                message: format!("{error:#}").into(),
+                            });
+                            round_events.emit(AgentRawEvent::RoundCompleted {
+                                outcome: RoundOutcome::Failed,
+                            });
+                            return Err(error).with_context(|| {
+                                format!("Context compaction failed in agent round {round}")
+                            });
+                        }
+                    };
+                    if compacted.usage.total_tokens > 0 {
+                        round_events.emit(AgentRawEvent::UsageUpdated {
+                            usage: compacted.usage.clone().into(),
+                        });
+                    }
+                    usage.accumulate(&compacted.usage);
+                    context_messages = compacted.messages;
+                    round_events.emit(AgentRawEvent::ContextCompactionCompleted {
+                        strategy: compactor.name().into(),
+                        estimated_tokens_before: compacted.estimated_tokens_before,
+                        estimated_tokens_after: compacted.estimated_tokens_after,
+                        removed_messages: compacted.removed_messages,
+                    });
+                    transition_state(state, &round_events, AgentRunState::AwaitingModel { round })?;
+                }
+            }
+            request.messages = context_messages.clone();
             round_events.emit(AgentRawEvent::ModelRequestStarted);
             let response = match self
                 .provider
@@ -246,7 +302,8 @@ impl TurnExecutor {
             let finish_reason = choice.finish_reason;
             let assistant_message = choice.message;
             let tool_calls = assistant_message.tool_calls.clone().unwrap_or_default();
-            messages.push(assistant_message.clone());
+            transcript.push(assistant_message.clone());
+            context_messages.push(assistant_message.clone());
 
             if tool_calls.is_empty() {
                 transition_state(
@@ -261,7 +318,7 @@ impl TurnExecutor {
                         workspace: self.workspace_root(),
                         round,
                         candidate: &assistant_message,
-                        messages: &messages,
+                        messages: &transcript,
                         usage: &usage,
                     })
                     .await
@@ -280,7 +337,7 @@ impl TurnExecutor {
                         return Ok(TurnExecutionResult {
                             final_message: assistant_message,
                             finish_reason,
-                            messages,
+                            messages: transcript,
                             usage,
                             rounds: round,
                         });
@@ -291,7 +348,9 @@ impl TurnExecutor {
                             outcome: crate::events::CompletionVerificationOutcome::Rejected,
                             feedback: Some(feedback.clone().into()),
                         });
-                        messages.push(completion_feedback_message(feedback));
+                        let feedback = completion_feedback_message(feedback);
+                        transcript.push(feedback.clone());
+                        context_messages.push(feedback);
                         round_events.emit(AgentRawEvent::RoundCompleted {
                             outcome: RoundOutcome::CompletionRejected,
                         });
@@ -336,7 +395,8 @@ impl TurnExecutor {
                     return Err(error);
                 }
             };
-            messages.extend(tool_messages);
+            transcript.extend(tool_messages.iter().cloned());
+            context_messages.extend(tool_messages);
             round_events.emit(AgentRawEvent::RoundCompleted {
                 outcome: RoundOutcome::ToolCalls {
                     count: tool_calls.len(),
@@ -361,6 +421,19 @@ fn transition_state(
     Ok(())
 }
 
+fn ensure_valid_compaction(compaction: &ContextCompaction, target_tokens: usize) -> Result<()> {
+    if compaction.estimated_tokens_after > target_tokens {
+        anyhow::bail!(
+            "Context compactor returned an estimated {} tokens, above the {target_tokens}-token target",
+            compaction.estimated_tokens_after
+        );
+    }
+    if compaction.estimated_tokens_after >= compaction.estimated_tokens_before {
+        anyhow::bail!("Context compactor did not reduce the estimated context size");
+    }
+    Ok(())
+}
+
 /// Convenience assembly for applications that want the built-in coding tools.
 pub struct TurnExecutorBuilder {
     provider: Arc<dyn ChatCompletionProvider>,
@@ -368,6 +441,7 @@ pub struct TurnExecutorBuilder {
     workspace: PathBuf,
     approval: Arc<dyn ApprovalHandler>,
     completion_verifier: Arc<dyn CompletionVerifier>,
+    context_compactor: Option<Arc<dyn ContextCompactor>>,
     dispatcher_config: DispatcherConfig,
     execution_config: TurnExecutionConfig,
 }
@@ -387,6 +461,7 @@ impl TurnExecutorBuilder {
             workspace: PathBuf::from("."),
             approval: Arc::new(DenyAllApproval),
             completion_verifier: Arc::new(AcceptAllCompletionVerifier),
+            context_compactor: None,
             dispatcher_config: DispatcherConfig::default(),
             execution_config: TurnExecutionConfig::default(),
         }
@@ -433,6 +508,19 @@ impl TurnExecutorBuilder {
         self
     }
 
+    pub fn context_compactor<C>(mut self, compactor: C) -> Self
+    where
+        C: ContextCompactor + 'static,
+    {
+        self.context_compactor = Some(Arc::new(compactor));
+        self
+    }
+
+    pub fn shared_context_compactor(mut self, compactor: Arc<dyn ContextCompactor>) -> Self {
+        self.context_compactor = Some(compactor);
+        self
+    }
+
     pub fn dispatcher_config(mut self, config: DispatcherConfig) -> Self {
         self.dispatcher_config = config;
         self
@@ -458,6 +546,7 @@ impl TurnExecutorBuilder {
             self.provider,
             Arc::new(dispatcher),
             self.completion_verifier,
+            self.context_compactor,
             self.execution_config,
         ))
     }
@@ -509,6 +598,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        context::{ContextWindowConfig, PruningContextCompactor},
         tools::{
             AllowAllApproval, DispatcherConfig, ExecutableTool, ToolCapability, ToolContext,
             ToolFailure, ToolRegistry, ToolSuccess,
@@ -825,6 +915,111 @@ mod tests {
                 AgentRunState::AwaitingModel { round: 2 },
                 AgentRunState::VerifyingCompletion { round: 2 },
                 AgentRunState::Completed { rounds: 2 },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn turn_executor_compacts_model_context_but_preserves_transcript() {
+        let provider = Arc::new(MockProvider::new(vec![response(json!({
+            "id":"compact","object":"chat.completion","created":1,"model":"deepseek-chat",
+            "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]
+        }))]));
+        let directory = tempdir().unwrap();
+        let handler = Arc::new(RecordingHandler::default());
+        let compactor = PruningContextCompactor::new(ContextWindowConfig {
+            max_context_tokens: 180,
+            reserved_output_tokens: 40,
+            preserve_recent_tokens: 30,
+        })
+        .unwrap();
+        let executor = TurnExecutor::builder_from_shared(provider.clone())
+            .workspace(directory.path())
+            .registry(ToolRegistry::default())
+            .context_compactor(compactor)
+            .build()
+            .unwrap();
+        let mut request = request();
+        request.max_tokens = Some(40);
+        let old_context = "old context ".repeat(100);
+        request.messages = vec![
+            ChatMessage {
+                role: crate::types::Role::System,
+                content: Some("system".to_string()),
+                reasoning: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ChatMessage {
+                role: crate::types::Role::User,
+                content: Some(old_context.clone()),
+                reasoning: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ChatMessage {
+                role: crate::types::Role::User,
+                content: Some("latest request".to_string()),
+                reasoning: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        ];
+
+        let result = executor
+            .run_with_handler(request, handler.clone())
+            .await
+            .unwrap();
+
+        assert_eq!(result.messages.len(), 4);
+        assert_eq!(
+            result.messages[1].content.as_deref(),
+            Some(old_context.as_str())
+        );
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].messages.len(), 3);
+        assert!(requests[0].messages.iter().any(|message| {
+            message
+                .content
+                .as_deref()
+                .is_some_and(|content| content.contains("Context compaction removed"))
+        }));
+        assert!(
+            !requests[0]
+                .messages
+                .iter()
+                .any(|message| message.content.as_deref() == Some(old_context.as_str()))
+        );
+        drop(requests);
+
+        let events = handler.0.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentRawEvent::ContextCompactionCompleted {
+                removed_messages: 1,
+                ..
+            }
+        )));
+        let states = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentRawEvent::StateChanged { transition } => Some(transition.current),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            states,
+            vec![
+                AgentRunState::Preparing,
+                AgentRunState::AwaitingModel { round: 1 },
+                AgentRunState::Compacting { round: 1 },
+                AgentRunState::AwaitingModel { round: 1 },
+                AgentRunState::VerifyingCompletion { round: 1 },
+                AgentRunState::Completed { rounds: 1 },
             ]
         );
     }

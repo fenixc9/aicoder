@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod client;
 pub mod completion;
+pub mod context;
 pub mod events;
 mod redaction;
 pub mod session;
@@ -19,6 +20,10 @@ pub use client::{ChatClient, ClientConfig};
 pub use completion::{
     AcceptAllCompletionVerifier, CompletionContext, CompletionVerdict, CompletionVerifier,
     WorkspaceChangeVerifier,
+};
+pub use context::{
+    ContextCompaction, ContextCompactionInput, ContextCompactor, ContextWindowConfig,
+    PruningContextCompactor, estimate_context_tokens,
 };
 pub use events::{
     AgentEventHandler, AgentRawEvent, AgentRawEventEnvelope, CompletionVerificationOutcome, RunId,

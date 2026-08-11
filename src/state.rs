@@ -16,7 +16,6 @@ pub enum AgentRunState {
         round: usize,
         count: usize,
     },
-    /// Reserved for context compaction once the loop supports it.
     Compacting {
         round: usize,
     },
@@ -214,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn supports_reserved_compaction_and_abort_paths() {
+    fn supports_compaction_and_reserved_abort_paths() {
         let mut machine = AgentRunStateMachine::new();
         machine.transition(AgentRunState::Preparing).unwrap();
         machine

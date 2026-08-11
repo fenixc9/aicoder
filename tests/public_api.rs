@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentRawEvent, AgentRunState, ChatCompletionProvider, SessionSelection,
-    TurnExecutor,
+    Agent, AgentConfig, AgentRawEvent, AgentRunState, ChatCompletionProvider, ContextWindowConfig,
+    PruningContextCompactor, SessionSelection, TurnExecutor,
     session::{MemorySessionRepository, SessionRepository},
     tools::ToolRegistry,
     types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role},
@@ -36,6 +36,14 @@ async fn external_application_can_build_turn_executor_and_observe_raw_events() {
     let turn_executor = TurnExecutor::builder(StaticProvider)
         .workspace(workspace.path())
         .registry(ToolRegistry::default())
+        .context_compactor(
+            PruningContextCompactor::new(ContextWindowConfig {
+                max_context_tokens: 32_768,
+                reserved_output_tokens: 2_048,
+                preserve_recent_tokens: 8_192,
+            })
+            .unwrap(),
+        )
         .build()
         .unwrap();
     let observed = Arc::new(Mutex::new(Vec::new()));

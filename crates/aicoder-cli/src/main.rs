@@ -5,12 +5,12 @@ use std::{
 };
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentEventHandler, ChatClient, SessionSelection, TurnExecutionConfig,
-    TurnExecutor,
+    Agent, AgentConfig, AgentEventHandler, ChatClient, ContextWindowConfig,
+    PruningContextCompactor, SessionSelection, TurnExecutionConfig, TurnExecutor,
     events::{
         AgentCompletedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
-        ReasoningChunkEvent, ReasoningEndedEvent, ReasoningStartedEvent, ToolCallEndedEvent,
-        ToolExecutionEndedEvent,
+        ContextCompactionCompletedEvent, ReasoningChunkEvent, ReasoningEndedEvent,
+        ReasoningStartedEvent, ToolCallEndedEvent, ToolExecutionEndedEvent,
     },
     session::{JsonlSessionRepository, SessionRepository},
     tools::{AllowAllApproval, ApprovalHandler, ToolInvocation},
@@ -45,6 +45,10 @@ struct Cli {
     /// Run without creating or updating a session.
     #[arg(long, conflicts_with_all = ["continue_session", "session"])]
     no_session: bool,
+
+    /// Enable deterministic context pruning for a model with this total context window.
+    #[arg(long, value_name = "TOKENS")]
+    context_window: Option<usize>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -101,6 +105,13 @@ impl AgentEventHandler for ConsoleEvents {
 
     fn on_tool_execution_ended(&self, event: ToolExecutionEndedEvent) {
         println!("[ToolExec]{:?}", event.name);
+    }
+
+    fn on_context_compaction_completed(&self, event: ContextCompactionCompletedEvent) {
+        eprintln!(
+            "[Context] {} -> {} estimated tokens, removed {} messages",
+            event.estimated_tokens_before, event.estimated_tokens_after, event.removed_messages
+        );
     }
 
     fn on_reasoning_started(&self, _event: ReasoningStartedEvent) {
@@ -219,6 +230,16 @@ async fn main() -> Result<()> {
     let builder = TurnExecutor::builder(client)
         .workspace(&cli.workspace)
         .config(TurnExecutionConfig::default());
+    let builder = match cli.context_window {
+        Some(max_context_tokens) => {
+            builder.context_compactor(PruningContextCompactor::new(ContextWindowConfig {
+                max_context_tokens,
+                reserved_output_tokens: 4_096,
+                preserve_recent_tokens: 8_192.min(max_context_tokens.saturating_sub(4_097)),
+            })?)
+        }
+        None => builder,
+    };
     let turn_executor = if cli.yes {
         builder.approval(AllowAllApproval).build()?
     } else {
@@ -274,6 +295,20 @@ mod tests {
         assert!(!cli.continue_session);
         assert!(cli.session.is_none());
         assert!(!cli.no_session);
+    }
+
+    #[test]
+    fn cli_accepts_context_window() {
+        let cli = Cli::try_parse_from([
+            "aicoder",
+            "--prompt",
+            "检查当前项目",
+            "--context-window",
+            "65536",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.context_window, Some(65_536));
     }
 
     #[test]

@@ -19,7 +19,8 @@
 - [ ] 编辑文件时支持原内容 hash/version 校验，防止覆盖并发修改
 - [ ] 添加结构化的 `list_files` 工具，支持深度、glob 和忽略规则
 - [ ] 添加只读的 `git_status`、`git_diff` 工具
-- [ ] 加入上下文 token 预算、旧工具输出裁剪和历史摘要
+- [x] 加入可配置的上下文 token 预算，按完整工具调用单元裁剪旧历史
+- [ ] 增加模型语义摘要压缩策略，并支持 provider 精确 tokenizer
 - [ ] 区分 `stop`、`length`、`content_filter`、空回复和异常 tool call
 - [ ] 超过最大轮次时返回消息、Usage 等部分执行结果
 - [ ] 限制任务总工具调用数、总执行时间和累计输出大小
