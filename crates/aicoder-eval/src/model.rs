@@ -1,6 +1,6 @@
 use std::{path::PathBuf, time::Duration};
 
-use aicoder_core::{AgentRunResult, types::ChatCompletionRequest};
+use aicoder_core::{AgentLoopResult, types::ChatCompletionRequest};
 use serde::{Deserialize, Serialize};
 
 use crate::{AgentTrace, WorkspaceDiff, WorkspaceSnapshot};
@@ -60,7 +60,7 @@ pub struct EvalCaseMetadata {
     pub model: String,
 }
 
-/// Outcome inferred from both the Agent result and its final provider finish reason.
+/// Outcome inferred from both the AgentLoop result and its final provider finish reason.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum EvalRunOutcome {
@@ -161,7 +161,7 @@ impl EvaluationResult {
 pub struct EvaluationContext<'a> {
     pub case: &'a EvalCaseMetadata,
     pub workspace: &'a std::path::Path,
-    pub result: Option<&'a AgentRunResult>,
+    pub result: Option<&'a AgentLoopResult>,
     pub run_error: Option<&'a str>,
     pub outcome: EvalRunOutcome,
     pub duration: Duration,

@@ -1,7 +1,7 @@
 use std::{fs, path::Path};
 
 use aicoder_core::{
-    Agent, AgentConfig, ChatCompletionProvider,
+    AgentLoop, AgentLoopConfig, ChatCompletionProvider,
     tools::ToolRegistry,
     types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role},
 };
@@ -105,8 +105,8 @@ fn request() -> ChatCompletionRequest {
     }
 }
 
-fn build_agent(workspace: &Path) -> Result<Agent> {
-    Agent::builder(StaticProvider)
+fn build_agent(workspace: &Path) -> Result<AgentLoop> {
+    AgentLoop::builder(StaticProvider)
         .workspace(workspace)
         .registry(ToolRegistry::default())
         .build()
@@ -190,9 +190,9 @@ async fn failed_agent_run_retains_provider_usage_from_trace() {
     let case = EvalCase::new("round-limit", request(), WorkspaceFixture::Empty);
     let report = EvalRunner::new()
         .run(&case, &|workspace| {
-            Agent::builder(ToolOnlyProvider)
+            AgentLoop::builder(ToolOnlyProvider)
                 .workspace(workspace)
-                .config(AgentConfig {
+                .config(AgentLoopConfig {
                     max_rounds: 1,
                     stream: false,
                 })

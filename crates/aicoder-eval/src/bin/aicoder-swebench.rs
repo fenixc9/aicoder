@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use aicoder_core::{
-    Agent, AgentConfig, ChatClient, WorkspaceChangeVerifier, tools::AllowAllApproval,
+    AgentLoop, AgentLoopConfig, ChatClient, WorkspaceChangeVerifier, tools::AllowAllApproval,
 };
 use aicoder_eval::{
     SweBenchAdapter, SweBenchBatchOptions, SweBenchBatchRunner, SweBenchDataset, SweBenchFilter,
@@ -161,10 +161,10 @@ async fn run(arguments: RunArgs) -> Result<()> {
     let report = SweBenchBatchRunner::new(adapter, options)
         .run(cases, move |workspace| {
             let client = ChatClient::from_env(&agent_model)?;
-            let builder = Agent::builder(client)
+            let builder = AgentLoop::builder(client)
                 .workspace(workspace)
                 .approval(AllowAllApproval)
-                .config(AgentConfig { max_rounds, stream });
+                .config(AgentLoopConfig { max_rounds, stream });
             if allow_empty_patch {
                 builder.build()
             } else {

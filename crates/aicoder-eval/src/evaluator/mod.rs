@@ -11,7 +11,7 @@ pub use command::CommandEvaluator;
 pub use trajectory::TrajectoryEvaluator;
 pub use workspace_diff::WorkspaceDiffEvaluator;
 
-/// Independent grader applied after an Agent run.
+/// Independent grader applied after an AgentLoop run.
 #[async_trait]
 pub trait Evaluator: Send + Sync {
     fn name(&self) -> &str;

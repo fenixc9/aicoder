@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, fs, path::Path, process::Command, sync::Mutex};
 
 use aicoder_core::{
-    Agent, ChatCompletionProvider,
+    AgentLoop, ChatCompletionProvider,
     tools::AllowAllApproval,
     types::{ChatCompletionRequest, ChatCompletionResponse},
 };
@@ -139,7 +139,7 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
     let runner = EvalRunner::new();
     let report = runner
         .run(&case.eval_case, &|workspace| {
-            Agent::builder(PatchProvider::new())
+            AgentLoop::builder(PatchProvider::new())
                 .workspace(workspace)
                 .approval(AllowAllApproval)
                 .build()
@@ -169,7 +169,7 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
         .run(
             vec![adapter.adapt(&dataset.instances[0]).unwrap()],
             |workspace| {
-                Agent::builder(PatchProvider::new())
+                AgentLoop::builder(PatchProvider::new())
                     .workspace(workspace)
                     .approval(AllowAllApproval)
                     .build()
@@ -205,7 +205,7 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
     .run(
         vec![adapter.adapt(&dataset.instances[0]).unwrap()],
         |workspace| {
-            Agent::builder(PatchProvider::new())
+            AgentLoop::builder(PatchProvider::new())
                 .workspace(workspace)
                 .approval(AllowAllApproval)
                 .build()

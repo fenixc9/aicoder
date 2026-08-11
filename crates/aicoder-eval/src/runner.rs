@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc, time::Instant};
 
-use aicoder_core::{Agent, AgentRunResult, events::AgentEventHandler, types::FinishReason};
+use aicoder_core::{AgentLoop, AgentLoopResult, events::AgentEventHandler, types::FinishReason};
 use anyhow::{Context, Result, ensure};
 
 use crate::{
@@ -37,7 +37,7 @@ impl EvalRunner {
 
     pub async fn run<F>(&self, case: &EvalCase, agent_factory: &F) -> Result<EvalReport>
     where
-        F: Fn(&Path) -> Result<Agent>,
+        F: Fn(&Path) -> Result<AgentLoop>,
     {
         let temporary = tempfile::Builder::new()
             .prefix("aicoder-eval-")
@@ -98,7 +98,7 @@ impl EvalRunner {
         agent_factory: &F,
     ) -> Result<EvalSuiteReport>
     where
-        F: Fn(&Path) -> Result<Agent>,
+        F: Fn(&Path) -> Result<AgentLoop>,
     {
         ensure!(repetitions > 0, "Evaluation repetitions must be positive");
         let mut runs = Vec::with_capacity(repetitions);
@@ -124,7 +124,7 @@ impl EvalRunner {
     }
 }
 
-fn infer_outcome(result: Option<&AgentRunResult>, run_error: Option<&str>) -> EvalRunOutcome {
+fn infer_outcome(result: Option<&AgentLoopResult>, run_error: Option<&str>) -> EvalRunOutcome {
     if run_error.is_some() || result.is_none() {
         EvalRunOutcome::Failed
     } else if result.is_some_and(|result| {
@@ -142,7 +142,7 @@ fn infer_outcome(result: Option<&AgentRunResult>, run_error: Option<&str>) -> Ev
 }
 
 fn build_run_summary(
-    result: Option<&AgentRunResult>,
+    result: Option<&AgentLoopResult>,
     error: Option<String>,
     outcome: EvalRunOutcome,
     duration: std::time::Duration,

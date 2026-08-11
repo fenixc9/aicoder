@@ -5,7 +5,7 @@ use std::{
 };
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentEventHandler, AgentTurnConfig, AgentTurnRunner, ChatClient,
+    Agent, AgentConfig, AgentEventHandler, AgentLoop, AgentLoopConfig, ChatClient,
     SessionSelection,
     events::{
         AgentCompletedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
@@ -216,15 +216,15 @@ async fn main() -> Result<()> {
     };
     let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string());
     let client = ChatClient::from_env(&model)?;
-    let builder = Agent::builder(client)
+    let builder = AgentLoop::builder(client)
         .workspace(&cli.workspace)
-        .config(AgentConfig::default());
-    let agent = if cli.yes {
+        .config(AgentLoopConfig::default());
+    let agent_loop = if cli.yes {
         builder.approval(AllowAllApproval).build()?
     } else {
         builder.approval(ConsoleApproval).build()?
     };
-    let turn_config = AgentTurnConfig {
+    let agent_config = AgentConfig {
         model,
         system_prompt: Some(
             "You are a helpful coding assistant. Reply in Chinese. Use tools when needed."
@@ -237,10 +237,10 @@ async fn main() -> Result<()> {
         stop: None,
         response_format: None,
     };
-    let runner = AgentTurnRunner::new(agent, turn_config);
+    let agent = Agent::new(agent_loop, agent_config);
     let handler = Arc::new(ConsoleEvents);
     let result = match &repository {
-        None => runner.run(cli.prompt, handler).await?,
+        None => agent.run(cli.prompt, handler).await?,
         Some(repository) => {
             let selection = if cli.continue_session {
                 SessionSelection::ContinueMostRecent
@@ -249,7 +249,7 @@ async fn main() -> Result<()> {
             } else {
                 SessionSelection::New
             };
-            runner
+            agent
                 .run_with_session(repository, selection, cli.prompt, handler)
                 .await?
         }
@@ -257,7 +257,7 @@ async fn main() -> Result<()> {
     if let Some(session) = &result.session {
         eprintln!("Session: {}", session.id);
     }
-    println!("Usage :{:?}", result.run.usage);
+    println!("Usage :{:?}", result.loop_result.usage);
     Ok(())
 }
 

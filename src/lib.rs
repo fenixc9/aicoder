@@ -4,6 +4,7 @@
 //! CLI, TUI, server, or embedded application can choose its own configuration and presentation.
 
 pub mod agent;
+pub mod agent_loop;
 pub mod client;
 pub mod completion;
 pub mod events;
@@ -11,10 +12,12 @@ mod redaction;
 pub mod session;
 pub mod state;
 pub mod tools;
-pub mod turn;
 pub mod types;
 
-pub use agent::{Agent, AgentBuilder, AgentConfig, AgentRunResult, ChatCompletionProvider};
+pub use agent::{Agent, AgentConfig, AgentTurnResult, SessionSelection};
+pub use agent_loop::{
+    AgentLoop, AgentLoopBuilder, AgentLoopConfig, AgentLoopResult, ChatCompletionProvider,
+};
 pub use client::{ChatClient, ClientConfig};
 pub use completion::{
     AcceptAllCompletionVerifier, CompletionContext, CompletionVerdict, CompletionVerifier,
@@ -27,4 +30,3 @@ pub use events::{
 pub use state::{
     AgentRunState, AgentRunStateMachine, AgentStateTransition, InvalidAgentStateTransition,
 };
-pub use turn::{AgentTurnConfig, AgentTurnResult, AgentTurnRunner, SessionSelection};

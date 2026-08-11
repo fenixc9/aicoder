@@ -1,491 +1,188 @@
-//! Model/tool execution loop with streaming provider support.
+//! High-level agent API for stateless or session-backed user turns.
 
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
-use anyhow::{Context, Result};
-use async_trait::async_trait;
+use anyhow::{Context, Result, ensure};
 
 use crate::{
-    client::ChatClient,
-    completion::{
-        AcceptAllCompletionVerifier, CompletionContext, CompletionVerdict, CompletionVerifier,
-    },
-    events::{
-        AgentEventEmitter, AgentEventHandler, AgentRawEvent, AgentStage, RoundOutcome,
-        emit_full_response_events,
-    },
-    state::{AgentRunState, AgentRunStateMachine},
-    tools::{
-        ApprovalHandler, DenyAllApproval, DispatcherConfig, ToolDispatcher, ToolRegistry,
-        default_registry,
-    },
-    types::{
-        ChatCompletionRequest, ChatCompletionResponse, ChatMessage, FinishReason, ToolChoice,
-        ToolChoiceMode, Usage,
-    },
+    AgentEventHandler, AgentLoop, AgentLoopResult,
+    session::{Session, SessionMetadata, SessionRepository},
+    types::{ChatCompletionRequest, ChatMessage, ResponseType, Role},
 };
-
-#[async_trait]
-pub trait ChatCompletionProvider: Send + Sync {
-    async fn complete(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse>;
-
-    async fn complete_with_events(
-        &self,
-        request: ChatCompletionRequest,
-        events: AgentEventEmitter,
-    ) -> Result<ChatCompletionResponse> {
-        let response = self.complete(request).await?;
-        emit_full_response_events(&events, &response);
-        Ok(response)
-    }
-}
-
-#[async_trait]
-impl ChatCompletionProvider for ChatClient {
-    async fn complete(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
-        if request.stream.unwrap_or(false) {
-            self.chat_completion_stream_collect(request).await
-        } else {
-            self.chat_completion(request).await
-        }
-    }
-
-    async fn complete_with_events(
-        &self,
-        request: ChatCompletionRequest,
-        events: AgentEventEmitter,
-    ) -> Result<ChatCompletionResponse> {
-        if request.stream.unwrap_or(false) {
-            self.chat_completion_stream_collect_with_events(request, &events)
-                .await
-        } else {
-            let response = self.chat_completion_with_events(request, &events).await?;
-            emit_full_response_events(&events, &response);
-            Ok(response)
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
-    pub max_rounds: usize,
-    pub stream: bool,
+    pub model: String,
+    pub system_prompt: Option<String>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub max_tokens: Option<i32>,
+    pub seed: Option<i32>,
+    pub stop: Option<Vec<String>>,
+    pub response_format: Option<ResponseType>,
 }
 
-impl Default for AgentConfig {
-    fn default() -> Self {
+impl AgentConfig {
+    pub fn new(model: impl Into<String>) -> Self {
         Self {
-            max_rounds: 8,
-            stream: true,
+            model: model.into(),
+            system_prompt: None,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+            seed: None,
+            stop: None,
+            response_format: None,
         }
+    }
+
+    pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = Some(prompt.into());
+        self
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AgentRunResult {
-    pub final_message: ChatMessage,
-    pub finish_reason: Option<FinishReason>,
-    pub messages: Vec<ChatMessage>,
-    pub usage: Usage,
-    pub rounds: usize,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionSelection {
+    New,
+    ContinueMostRecent,
+    Existing(String),
 }
 
+#[derive(Debug, Clone)]
+pub struct AgentTurnResult {
+    pub loop_result: AgentLoopResult,
+    pub session: Option<SessionMetadata>,
+}
+
+/// Owns request construction and optional conversation persistence around an `AgentLoop`.
 pub struct Agent {
-    provider: Arc<dyn ChatCompletionProvider>,
-    dispatcher: Arc<ToolDispatcher>,
-    completion_verifier: Arc<dyn CompletionVerifier>,
+    agent_loop: AgentLoop,
     config: AgentConfig,
 }
 
 impl Agent {
-    pub fn builder<P>(provider: P) -> AgentBuilder
-    where
-        P: ChatCompletionProvider + 'static,
-    {
-        AgentBuilder::new(provider)
+    pub fn new(agent_loop: AgentLoop, config: AgentConfig) -> Self {
+        Self { agent_loop, config }
     }
 
-    pub fn builder_from_shared(provider: Arc<dyn ChatCompletionProvider>) -> AgentBuilder {
-        AgentBuilder::from_shared(provider)
+    pub fn agent_loop(&self) -> &AgentLoop {
+        &self.agent_loop
     }
 
-    pub fn new(
-        provider: Arc<dyn ChatCompletionProvider>,
-        dispatcher: Arc<ToolDispatcher>,
-        config: AgentConfig,
-    ) -> Self {
-        Self::new_with_verifier(
-            provider,
-            dispatcher,
-            Arc::new(AcceptAllCompletionVerifier),
-            config,
-        )
-    }
-
-    fn new_with_verifier(
-        provider: Arc<dyn ChatCompletionProvider>,
-        dispatcher: Arc<ToolDispatcher>,
-        completion_verifier: Arc<dyn CompletionVerifier>,
-        config: AgentConfig,
-    ) -> Self {
-        Self {
-            provider,
-            dispatcher,
-            completion_verifier,
-            config,
-        }
-    }
-
-    pub fn workspace_root(&self) -> &std::path::Path {
-        self.dispatcher.workspace_root()
-    }
-
-    pub async fn run(&self, request: ChatCompletionRequest) -> Result<AgentRunResult> {
-        self.run_with_handler(request, Arc::new(())).await
-    }
-
-    pub async fn run_with_handler(
+    pub async fn run(
         &self,
-        request: ChatCompletionRequest,
+        prompt: impl Into<String>,
         handler: Arc<dyn AgentEventHandler>,
-    ) -> Result<AgentRunResult> {
-        let events = AgentEventEmitter::new(handler);
-        events.emit(AgentRawEvent::AgentStarted {
-            model: request.model.clone().into(),
-        });
-        let mut state = AgentRunStateMachine::new();
-        let execution = match transition_state(&mut state, &events, AgentRunState::Preparing) {
-            Ok(()) => self.run_inner(request, &events, &mut state).await,
-            Err(error) => Err(error),
-        };
-        let result = match execution {
-            Ok(run) => transition_state(
-                &mut state,
-                &events,
-                AgentRunState::Completed { rounds: run.rounds },
-            )
-            .map(|()| run),
-            Err(error) => {
-                let failed = AgentRunState::Failed {
-                    round: state.state().round(),
-                };
-                match transition_state(&mut state, &events, failed) {
-                    Ok(()) => Err(error),
-                    Err(state_error) => Err(error.context(format!(
-                        "Agent state machine also failed while terminating: {state_error}"
-                    ))),
-                }
-            }
-        };
-        match &result {
-            Ok(result) => events.emit(AgentRawEvent::AgentCompleted {
-                rounds: result.rounds,
-                usage: result.usage.clone().into(),
-            }),
-            Err(error) => events.emit(AgentRawEvent::AgentFailed {
-                stage: AgentStage::Agent,
-                message: format!("{error:#}").into(),
-            }),
-        }
-        events.shutdown().await;
-        result
+    ) -> Result<AgentTurnResult> {
+        let mut messages = self.system_messages();
+        messages.push(user_message(prompt.into()));
+        let loop_result = self
+            .agent_loop
+            .run_with_handler(self.completion_request(messages), handler)
+            .await?;
+        Ok(AgentTurnResult {
+            loop_result,
+            session: None,
+        })
     }
 
-    async fn run_inner(
+    pub async fn run_with_session<R>(
         &self,
-        mut request: ChatCompletionRequest,
-        events: &AgentEventEmitter,
-        state: &mut AgentRunStateMachine,
-    ) -> Result<AgentRunResult> {
-        if self.config.max_rounds == 0 {
-            anyhow::bail!("Agent max_rounds must be greater than zero");
-        }
-
-        request.stream = Some(self.config.stream);
-        let definitions = self.dispatcher.registry().definitions();
-        if !definitions.is_empty() {
-            request.tools = Some(definitions);
-            request.tool_choice = Some(ToolChoice::Mode(ToolChoiceMode::Auto));
-        }
-
-        let mut messages = request.messages.clone();
-        let mut usage = Usage::default();
-
-        for round in 1..=self.config.max_rounds {
-            let round_events = events.for_round(round);
-            round_events.emit(AgentRawEvent::RoundStarted);
-            transition_state(state, &round_events, AgentRunState::AwaitingModel { round })?;
-            request.messages = messages.clone();
-            round_events.emit(AgentRawEvent::ModelRequestStarted);
-            let response = match self
-                .provider
-                .complete_with_events(request.clone(), round_events.clone())
-                .await
-                .with_context(|| format!("Model request failed in agent round {round}"))
-            {
-                Ok(response) => response,
-                Err(error) => {
-                    round_events.emit(AgentRawEvent::ModelResponseFailed {
-                        message: format!("{error:#}").into(),
-                    });
-                    round_events.emit(AgentRawEvent::RoundCompleted {
-                        outcome: RoundOutcome::Failed,
-                    });
-                    return Err(error);
-                }
-            };
-            if let Some(round_usage) = response.usage {
-                usage.accumulate(&round_usage);
-            }
-
-            let choice = response
-                .choices
-                .into_iter()
-                .next()
-                .context("Model response contains no choices")?;
-            let finish_reason = choice.finish_reason;
-            let assistant_message = choice.message;
-            let tool_calls = assistant_message.tool_calls.clone().unwrap_or_default();
-            messages.push(assistant_message.clone());
-
-            if tool_calls.is_empty() {
-                transition_state(
-                    state,
-                    &round_events,
-                    AgentRunState::VerifyingCompletion { round },
-                )?;
-                round_events.emit(AgentRawEvent::CompletionVerificationStarted);
-                let verdict = self
-                    .completion_verifier
-                    .verify(CompletionContext {
-                        workspace: self.workspace_root(),
-                        round,
-                        candidate: &assistant_message,
-                        messages: &messages,
-                        usage: &usage,
-                    })
-                    .await
-                    .with_context(|| {
-                        format!("Completion verification failed in agent round {round}")
-                    });
-                match verdict {
-                    Ok(CompletionVerdict::Accepted) => {
-                        round_events.emit(AgentRawEvent::CompletionVerificationEnded {
-                            outcome: crate::events::CompletionVerificationOutcome::Accepted,
-                            feedback: None,
-                        });
-                        round_events.emit(AgentRawEvent::RoundCompleted {
-                            outcome: RoundOutcome::FinalAnswer,
-                        });
-                        return Ok(AgentRunResult {
-                            final_message: assistant_message,
-                            finish_reason,
-                            messages,
-                            usage,
-                            rounds: round,
-                        });
-                    }
-                    Ok(CompletionVerdict::Rejected { feedback }) => {
-                        let feedback = bounded_verifier_feedback(feedback);
-                        round_events.emit(AgentRawEvent::CompletionVerificationEnded {
-                            outcome: crate::events::CompletionVerificationOutcome::Rejected,
-                            feedback: Some(feedback.clone().into()),
-                        });
-                        messages.push(completion_feedback_message(feedback));
-                        round_events.emit(AgentRawEvent::RoundCompleted {
-                            outcome: RoundOutcome::CompletionRejected,
-                        });
-                        continue;
-                    }
-                    Err(error) => {
-                        round_events.emit(AgentRawEvent::CompletionVerificationEnded {
-                            outcome: crate::events::CompletionVerificationOutcome::Failed,
-                            feedback: Some(format!("{error:#}").into()),
-                        });
-                        round_events.emit(AgentRawEvent::RoundCompleted {
-                            outcome: RoundOutcome::Failed,
-                        });
-                        return Err(error);
-                    }
-                }
-            }
-
-            transition_state(
-                state,
-                &round_events,
-                AgentRunState::ExecutingTools {
-                    round,
-                    count: tool_calls.len(),
-                },
-            )?;
-            tracing::debug!(
-                round,
-                calls = tool_calls.len(),
-                "Dispatching model tool calls"
-            );
-            let tool_messages = match self
-                .dispatcher
-                .dispatch_with_events(&tool_calls, &round_events)
-                .await
-            {
-                Ok(messages) => messages,
-                Err(error) => {
-                    round_events.emit(AgentRawEvent::RoundCompleted {
-                        outcome: RoundOutcome::Failed,
-                    });
-                    return Err(error);
-                }
-            };
-            messages.extend(tool_messages);
-            round_events.emit(AgentRawEvent::RoundCompleted {
-                outcome: RoundOutcome::ToolCalls {
-                    count: tool_calls.len(),
-                },
-            });
-        }
-
-        anyhow::bail!(
-            "Agent exceeded maximum of {} model rounds",
-            self.config.max_rounds
-        )
-    }
-}
-
-fn transition_state(
-    state: &mut AgentRunStateMachine,
-    events: &AgentEventEmitter,
-    next: AgentRunState,
-) -> Result<()> {
-    let transition = state.transition(next)?;
-    events.emit(AgentRawEvent::StateChanged { transition });
-    Ok(())
-}
-
-/// Convenience assembly for applications that want the built-in coding tools.
-pub struct AgentBuilder {
-    provider: Arc<dyn ChatCompletionProvider>,
-    registry: Option<Arc<ToolRegistry>>,
-    workspace: PathBuf,
-    approval: Arc<dyn ApprovalHandler>,
-    completion_verifier: Arc<dyn CompletionVerifier>,
-    dispatcher_config: DispatcherConfig,
-    agent_config: AgentConfig,
-}
-
-impl AgentBuilder {
-    pub fn new<P>(provider: P) -> Self
+        repository: &R,
+        selection: SessionSelection,
+        prompt: impl Into<String>,
+        handler: Arc<dyn AgentEventHandler>,
+    ) -> Result<AgentTurnResult>
     where
-        P: ChatCompletionProvider + 'static,
+        R: SessionRepository,
     {
-        Self::from_shared(Arc::new(provider))
+        let workspace = self.agent_loop.workspace_root();
+        let mut session = select_session(repository, workspace, selection)?;
+        ensure!(
+            session.metadata().cwd == workspace,
+            "Session {} belongs to workspace {}, not {}",
+            session.metadata().id,
+            session.metadata().cwd.display(),
+            workspace.display()
+        );
+
+        repository.append(&mut session, user_message(prompt.into()))?;
+        let mut messages = self.system_messages();
+        messages.extend(session.chat_messages());
+        let input_message_count = messages.len();
+        let loop_result = self
+            .agent_loop
+            .run_with_handler(self.completion_request(messages), handler)
+            .await?;
+        let generated_messages = loop_result
+            .messages
+            .get(input_message_count..)
+            .context("AgentLoop returned fewer messages than supplied conversation context")?;
+        repository.append_all(&mut session, generated_messages.iter().cloned())?;
+        Ok(AgentTurnResult {
+            loop_result,
+            session: Some(session.metadata().clone()),
+        })
     }
 
-    pub fn from_shared(provider: Arc<dyn ChatCompletionProvider>) -> Self {
-        Self {
-            provider,
-            registry: None,
-            workspace: PathBuf::from("."),
-            approval: Arc::new(DenyAllApproval),
-            completion_verifier: Arc::new(AcceptAllCompletionVerifier),
-            dispatcher_config: DispatcherConfig::default(),
-            agent_config: AgentConfig::default(),
+    fn system_messages(&self) -> Vec<ChatMessage> {
+        self.config
+            .system_prompt
+            .as_ref()
+            .filter(|prompt| !prompt.is_empty())
+            .map(|prompt| ChatMessage {
+                role: Role::System,
+                content: Some(prompt.clone()),
+                reasoning: None,
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            })
+            .into_iter()
+            .collect()
+    }
+
+    fn completion_request(&self, messages: Vec<ChatMessage>) -> ChatCompletionRequest {
+        ChatCompletionRequest {
+            model: self.config.model.clone(),
+            messages,
+            temperature: self.config.temperature,
+            top_p: self.config.top_p,
+            max_tokens: self.config.max_tokens,
+            seed: self.config.seed,
+            tools: None,
+            tool_choice: None,
+            stream: None,
+            stream_options: None,
+            stop: self.config.stop.clone(),
+            response_format: self.config.response_format.clone(),
         }
     }
+}
 
-    pub fn workspace(mut self, workspace: impl Into<PathBuf>) -> Self {
-        self.workspace = workspace.into();
-        self
-    }
-
-    pub fn registry(mut self, registry: ToolRegistry) -> Self {
-        self.registry = Some(Arc::new(registry));
-        self
-    }
-
-    pub fn shared_registry(mut self, registry: Arc<ToolRegistry>) -> Self {
-        self.registry = Some(registry);
-        self
-    }
-
-    pub fn approval<A>(mut self, approval: A) -> Self
-    where
-        A: ApprovalHandler + 'static,
-    {
-        self.approval = Arc::new(approval);
-        self
-    }
-
-    pub fn shared_approval(mut self, approval: Arc<dyn ApprovalHandler>) -> Self {
-        self.approval = approval;
-        self
-    }
-
-    pub fn completion_verifier<V>(mut self, verifier: V) -> Self
-    where
-        V: CompletionVerifier + 'static,
-    {
-        self.completion_verifier = Arc::new(verifier);
-        self
-    }
-
-    pub fn shared_completion_verifier(mut self, verifier: Arc<dyn CompletionVerifier>) -> Self {
-        self.completion_verifier = verifier;
-        self
-    }
-
-    pub fn dispatcher_config(mut self, config: DispatcherConfig) -> Self {
-        self.dispatcher_config = config;
-        self
-    }
-
-    pub fn config(mut self, config: AgentConfig) -> Self {
-        self.agent_config = config;
-        self
-    }
-
-    pub fn build(self) -> Result<Agent> {
-        let registry = match self.registry {
-            Some(registry) => registry,
-            None => Arc::new(default_registry()?),
-        };
-        let dispatcher = ToolDispatcher::new(
-            registry,
-            self.workspace,
-            self.approval,
-            self.dispatcher_config,
-        )?;
-        Ok(Agent::new_with_verifier(
-            self.provider,
-            Arc::new(dispatcher),
-            self.completion_verifier,
-            self.agent_config,
-        ))
+fn select_session<R>(
+    repository: &R,
+    workspace: &std::path::Path,
+    selection: SessionSelection,
+) -> Result<Session>
+where
+    R: SessionRepository,
+{
+    match selection {
+        SessionSelection::New => repository.create(workspace),
+        SessionSelection::ContinueMostRecent => match repository.most_recent(workspace)? {
+            Some(recent) => repository.open(&recent.id),
+            None => repository.create(workspace),
+        },
+        SessionSelection::Existing(id) => repository.open(&id),
     }
 }
 
-const MAX_VERIFIER_FEEDBACK_BYTES: usize = 16 * 1024;
-
-fn bounded_verifier_feedback(mut feedback: String) -> String {
-    if feedback.len() <= MAX_VERIFIER_FEEDBACK_BYTES {
-        return feedback;
-    }
-    let mut boundary = MAX_VERIFIER_FEEDBACK_BYTES;
-    while boundary > 0 && !feedback.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-    feedback.truncate(boundary);
-    feedback.push_str("\n[verification feedback truncated]");
-    feedback
-}
-
-fn completion_feedback_message(feedback: String) -> ChatMessage {
+fn user_message(content: String) -> ChatMessage {
     ChatMessage {
-        // Keep the verifier observation in session history without treating it as a new
-        // application-owned system prompt.
-        role: crate::types::Role::User,
-        content: Some(format!(
-            "Automated completion verification rejected the previous answer. Continue working and address this observation before answering again.\n\n{feedback}"
-        )),
+        role: Role::User,
+        content: Some(content),
         reasoning: None,
         tool_calls: None,
         tool_call_id: None,
@@ -497,335 +194,121 @@ fn completion_feedback_message(feedback: String) -> ChatMessage {
 mod tests {
     use std::{
         collections::VecDeque,
-        sync::{
-            Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::{Arc, Mutex},
     };
 
     use async_trait::async_trait;
-    use serde_json::{Value, json};
+    use serde_json::json;
     use tempfile::tempdir;
 
     use super::*;
     use crate::{
-        tools::{
-            AllowAllApproval, DispatcherConfig, ExecutableTool, ToolCapability, ToolContext,
-            ToolFailure, ToolRegistry, ToolSuccess,
-        },
-        types::FunctionDefinition,
+        ChatCompletionProvider, session::MemorySessionRepository, tools::ToolRegistry,
+        types::ChatCompletionResponse,
     };
 
-    struct MockProvider {
+    struct RecordingProvider {
         responses: Mutex<VecDeque<ChatCompletionResponse>>,
         requests: Mutex<Vec<ChatCompletionRequest>>,
     }
 
-    impl MockProvider {
-        fn new(responses: Vec<ChatCompletionResponse>) -> Self {
-            Self {
-                responses: Mutex::new(responses.into()),
-                requests: Mutex::new(Vec::new()),
-            }
-        }
-    }
-
     #[async_trait]
-    impl ChatCompletionProvider for MockProvider {
+    impl ChatCompletionProvider for RecordingProvider {
         async fn complete(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
             self.requests.lock().unwrap().push(request);
             self.responses
                 .lock()
                 .unwrap()
                 .pop_front()
-                .context("No mock response available")
+                .context("No turn runner test response")
         }
     }
 
-    struct EchoTool;
-
-    struct RejectOnceVerifier {
-        calls: AtomicUsize,
+    fn response(content: &str) -> ChatCompletionResponse {
+        serde_json::from_value(json!({
+            "id": "response",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "test-model",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop"
+            }]
+        }))
+        .unwrap()
     }
 
-    #[async_trait]
-    impl CompletionVerifier for RejectOnceVerifier {
-        async fn verify(&self, _context: CompletionContext<'_>) -> Result<CompletionVerdict> {
-            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-                Ok(CompletionVerdict::rejected("tests have not passed"))
-            } else {
-                Ok(CompletionVerdict::Accepted)
-            }
-        }
-    }
-
-    #[derive(Default)]
-    struct RecordingHandler(Mutex<Vec<AgentRawEvent>>);
-
-    impl AgentEventHandler for RecordingHandler {
-        fn on_raw_event(&self, event: &crate::events::AgentRawEventEnvelope) {
-            self.0.lock().unwrap().push(event.event.clone());
-        }
-    }
-
-    #[async_trait]
-    impl ExecutableTool for EchoTool {
-        fn definition(&self) -> FunctionDefinition {
-            FunctionDefinition {
-                name: "echo".to_string(),
-                description: Some("Echo a value".to_string()),
-                parameters: Some(json!({"type":"object"})),
-            }
-        }
-
-        fn capability(&self) -> ToolCapability {
-            ToolCapability::ReadOnly
-        }
-
-        async fn execute(
-            &self,
-            _context: &ToolContext,
-            arguments: Value,
-        ) -> std::result::Result<ToolSuccess, ToolFailure> {
-            Ok(ToolSuccess {
-                output: arguments,
-                truncated: false,
-            })
-        }
-    }
-
-    fn response(value: Value) -> ChatCompletionResponse {
-        serde_json::from_value(value).unwrap()
-    }
-
-    fn request() -> ChatCompletionRequest {
-        ChatCompletionRequest {
-            model: "deepseek-chat".to_string(),
-            messages: vec![ChatMessage {
-                role: crate::types::Role::User,
-                content: Some("echo hello".to_string()),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            }],
-            temperature: None,
-            top_p: None,
-            max_tokens: Some(128),
-            seed: None,
-            tools: None,
-            tool_choice: None,
-            stream: Some(true),
-            stream_options: None,
-            stop: None,
-            response_format: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn agent_executes_tool_and_returns_final_answer() {
-        let provider = Arc::new(MockProvider::new(vec![
-            response(json!({
-                "id":"one","object":"chat.completion","created":1,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":null,
-                    "tool_calls":[{"id":"call-1","type":"function","function":{"name":"echo","arguments":"{\"value\":\"hello\"}"}}]},
-                    "finish_reason":"tool_calls"}],
-                "usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,
-                    "prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":2}}
-            })),
-            response(json!({
-                "id":"two","object":"chat.completion","created":2,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
-                "usage":{"prompt_tokens":15,"completion_tokens":1,"total_tokens":16,
-                    "prompt_tokens_details":{"cached_tokens":10}}
-            })),
-        ]));
-        let directory = tempdir().unwrap();
-        let mut registry = ToolRegistry::default();
-        registry.register(EchoTool).unwrap();
-        let dispatcher = Arc::new(
-            ToolDispatcher::new(
-                Arc::new(registry),
-                directory.path(),
-                Arc::new(AllowAllApproval),
-                DispatcherConfig::default(),
-            )
-            .unwrap(),
-        );
-        let agent = Agent::new(provider.clone(), dispatcher, AgentConfig::default());
-
-        let result = agent.run(request()).await.unwrap();
-
-        assert_eq!(result.final_message.content.as_deref(), Some("done"));
-        assert_eq!(result.rounds, 2);
-        assert_eq!(result.usage.total_tokens, 28);
-        assert_eq!(result.usage.cached_tokens(), 14);
-        assert_eq!(result.usage.uncached_tokens(), 11);
-        assert_eq!(
-            result
-                .usage
-                .prompt_tokens_details
-                .as_ref()
-                .unwrap()
-                .cache_write_tokens,
-            Some(2)
-        );
-        assert_eq!(result.messages.len(), 4);
-        assert_eq!(result.messages[2].tool_call_id.as_deref(), Some("call-1"));
-
-        let requests = provider.requests.lock().unwrap();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].stream, Some(true));
-        assert_eq!(requests[0].tools.as_ref().unwrap().len(), 1);
-        assert_eq!(requests[1].messages.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn agent_stops_at_round_limit() {
-        let tool_response = || {
-            response(json!({
-                "id":"loop","object":"chat.completion","created":1,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":null,
-                    "tool_calls":[{"id":"call-loop","type":"function","function":{"name":"echo","arguments":"{}"}}]},
-                    "finish_reason":"tool_calls"}]
-            }))
-        };
-        let provider = Arc::new(MockProvider::new(vec![tool_response(), tool_response()]));
-        let directory = tempdir().unwrap();
-        let mut registry = ToolRegistry::default();
-        registry.register(EchoTool).unwrap();
-        let dispatcher = Arc::new(
-            ToolDispatcher::new(
-                Arc::new(registry),
-                directory.path(),
-                Arc::new(AllowAllApproval),
-                DispatcherConfig::default(),
-            )
-            .unwrap(),
-        );
-        let agent = Agent::new(
-            provider,
-            dispatcher,
-            AgentConfig {
-                max_rounds: 2,
-                stream: true,
-            },
-        );
-
-        let error = agent.run(request()).await.unwrap_err();
-        assert!(error.to_string().contains("exceeded maximum"));
-    }
-
-    #[tokio::test]
-    async fn agent_feeds_tool_error_back_to_model() {
-        let provider = Arc::new(MockProvider::new(vec![
-            response(json!({
-                "id":"one","object":"chat.completion","created":1,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":null,
-                    "tool_calls":[{"id":"bad-call","type":"function","function":{"name":"missing","arguments":"{}"}}]},
-                    "finish_reason":"tool_calls"}]
-            })),
-            response(json!({
-                "id":"two","object":"chat.completion","created":2,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":"recovered"},"finish_reason":"stop"}]
-            })),
-        ]));
-        let directory = tempdir().unwrap();
-        let dispatcher = Arc::new(
-            ToolDispatcher::new(
-                Arc::new(ToolRegistry::default()),
-                directory.path(),
-                Arc::new(AllowAllApproval),
-                DispatcherConfig::default(),
-            )
-            .unwrap(),
-        );
-        let agent = Agent::new(provider.clone(), dispatcher, AgentConfig::default());
-
-        let result = agent.run(request()).await.unwrap();
-
-        assert_eq!(result.final_message.content.as_deref(), Some("recovered"));
-        let requests = provider.requests.lock().unwrap();
-        let tool_result: Value =
-            serde_json::from_str(requests[1].messages[2].content.as_ref().unwrap()).unwrap();
-        assert_eq!(tool_result["error"]["code"], "unknown_tool");
-    }
-
-    #[tokio::test]
-    async fn agent_continues_after_completion_rejection() {
-        let provider = Arc::new(MockProvider::new(vec![
-            response(json!({
-                "id":"one","object":"chat.completion","created":1,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":"done too early"},"finish_reason":"stop"}]
-            })),
-            response(json!({
-                "id":"two","object":"chat.completion","created":2,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":"verified"},"finish_reason":"stop"}]
-            })),
-        ]));
-        let directory = tempdir().unwrap();
-        let handler = Arc::new(RecordingHandler::default());
-        let agent = Agent::builder_from_shared(provider.clone())
-            .workspace(directory.path())
-            .approval(AllowAllApproval)
-            .completion_verifier(RejectOnceVerifier {
-                calls: AtomicUsize::new(0),
-            })
+    fn agent(
+        workspace: &std::path::Path,
+        responses: Vec<ChatCompletionResponse>,
+    ) -> (Agent, Arc<RecordingProvider>) {
+        let provider = Arc::new(RecordingProvider {
+            responses: Mutex::new(responses.into()),
+            requests: Mutex::new(Vec::new()),
+        });
+        let agent_loop = AgentLoop::builder_from_shared(provider.clone())
+            .workspace(workspace)
+            .registry(ToolRegistry::default())
             .build()
             .unwrap();
+        let config = AgentConfig::new("test-model").system_prompt("system context");
+        (Agent::new(agent_loop, config), provider)
+    }
 
-        let result = agent
-            .run_with_handler(request(), handler.clone())
+    #[tokio::test]
+    async fn agent_persists_and_reopens_conversation_sessions() {
+        let workspace = tempdir().unwrap();
+        let repository = MemorySessionRepository::new();
+        let (agent, provider) = agent(
+            workspace.path(),
+            vec![response("first answer"), response("second answer")],
+        );
+
+        let first = agent
+            .run_with_session(
+                &repository,
+                SessionSelection::New,
+                "first question",
+                Arc::new(()),
+            )
+            .await
+            .unwrap();
+        let session_id = first.session.unwrap().id;
+        let second = agent
+            .run_with_session(
+                &repository,
+                SessionSelection::Existing(session_id.clone()),
+                "second question",
+                Arc::new(()),
+            )
             .await
             .unwrap();
 
-        assert_eq!(result.rounds, 2);
-        assert_eq!(result.final_message.content.as_deref(), Some("verified"));
+        assert_eq!(second.session.unwrap().id, session_id);
+        let stored = repository.open(&session_id).unwrap();
+        assert_eq!(stored.messages().len(), 4);
         let requests = provider.requests.lock().unwrap();
-        assert_eq!(requests.len(), 2);
-        assert_eq!(requests[1].messages.len(), 3);
-        assert_eq!(requests[1].messages[2].role, crate::types::Role::User);
-        assert!(
-            requests[1].messages[2]
-                .content
-                .as_deref()
-                .unwrap()
-                .contains("tests have not passed")
-        );
-        drop(requests);
-
-        let events = handler.0.lock().unwrap();
-        assert!(events.iter().any(|event| matches!(
-            event,
-            AgentRawEvent::CompletionVerificationEnded {
-                outcome: crate::events::CompletionVerificationOutcome::Rejected,
-                ..
-            }
-        )));
-        assert!(events.iter().any(|event| matches!(
-            event,
-            AgentRawEvent::CompletionVerificationEnded {
-                outcome: crate::events::CompletionVerificationOutcome::Accepted,
-                ..
-            }
-        )));
-        let states = events
-            .iter()
-            .filter_map(|event| match event {
-                AgentRawEvent::StateChanged { transition } => Some(transition.current),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        assert_eq!(requests[0].messages.len(), 2);
+        assert_eq!(requests[1].messages.len(), 4);
+        assert_eq!(requests[1].messages[0].role, Role::System);
         assert_eq!(
-            states,
-            vec![
-                AgentRunState::Preparing,
-                AgentRunState::AwaitingModel { round: 1 },
-                AgentRunState::VerifyingCompletion { round: 1 },
-                AgentRunState::AwaitingModel { round: 2 },
-                AgentRunState::VerifyingCompletion { round: 2 },
-                AgentRunState::Completed { rounds: 2 },
-            ]
+            requests[1].messages[3].content.as_deref(),
+            Some("second question")
+        );
+    }
+
+    #[tokio::test]
+    async fn stateless_turn_does_not_create_a_session() {
+        let workspace = tempdir().unwrap();
+        let (agent, _) = agent(workspace.path(), vec![response("answer")]);
+
+        let result = agent.run("question", Arc::new(())).await.unwrap();
+
+        assert!(result.session.is_none());
+        assert_eq!(
+            result.loop_result.final_message.content.as_deref(),
+            Some("answer")
         );
     }
 }

@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use aicoder_core::{
-    Agent, AgentRawEvent, AgentRunState, AgentTurnConfig, AgentTurnRunner, ChatCompletionProvider,
+    Agent, AgentConfig, AgentLoop, AgentRawEvent, AgentRunState, ChatCompletionProvider,
     SessionSelection,
     session::{MemorySessionRepository, SessionRepository},
     tools::ToolRegistry,
@@ -33,7 +33,7 @@ impl ChatCompletionProvider for StaticProvider {
 #[tokio::test]
 async fn external_application_can_build_agent_and_observe_raw_events() {
     let workspace = tempdir().unwrap();
-    let agent = Agent::builder(StaticProvider)
+    let agent_loop = AgentLoop::builder(StaticProvider)
         .workspace(workspace.path())
         .registry(ToolRegistry::default())
         .build()
@@ -65,7 +65,7 @@ async fn external_application_can_build_agent_and_observe_raw_events() {
         response_format: None,
     };
 
-    let result = agent.run_with_handler(request, handler).await.unwrap();
+    let result = agent_loop.run_with_handler(request, handler).await.unwrap();
 
     assert_eq!(result.final_message.content.as_deref(), Some("done"));
     let observed = observed.lock().unwrap();
@@ -92,23 +92,26 @@ async fn external_application_can_build_agent_and_observe_raw_events() {
 async fn external_application_can_run_a_persisted_turn() {
     let workspace = tempdir().unwrap();
     let repository = MemorySessionRepository::new();
-    let agent = Agent::builder(StaticProvider)
+    let agent_loop = AgentLoop::builder(StaticProvider)
         .workspace(workspace.path())
         .registry(ToolRegistry::default())
         .build()
         .unwrap();
-    let runner = AgentTurnRunner::new(
-        agent,
-        AgentTurnConfig::new("test-model").system_prompt("system context"),
+    let agent = Agent::new(
+        agent_loop,
+        AgentConfig::new("test-model").system_prompt("system context"),
     );
 
-    let result = runner
+    let result = agent
         .run_with_session(&repository, SessionSelection::New, "hello", Arc::new(()))
         .await
         .unwrap();
 
     let session = result.session.unwrap();
-    assert_eq!(result.run.final_message.content.as_deref(), Some("done"));
+    assert_eq!(
+        result.loop_result.final_message.content.as_deref(),
+        Some("done")
+    );
     assert_eq!(repository.open(&session.id).unwrap().messages().len(), 2);
 }
 
