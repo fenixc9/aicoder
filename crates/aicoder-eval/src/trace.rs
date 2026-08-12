@@ -86,8 +86,10 @@ impl AgentTrace {
                         summary.failed_tool_calls += 1;
                         summary.approval_denials += 1;
                     }
+                    ToolExecutionOutcome::Cancelled => {}
                 },
                 AgentRawEvent::AgentFailed { .. } => summary.agent_failures += 1,
+                AgentRawEvent::AgentAborted { .. } => summary.agent_aborts += 1,
                 _ => {}
             }
         }
@@ -137,6 +139,7 @@ fn event_kind(event: &AgentRawEvent) -> &'static str {
         AgentRawEvent::AgentStarted { .. } => "agent_started",
         AgentRawEvent::AgentCompleted { .. } => "agent_completed",
         AgentRawEvent::AgentFailed { .. } => "agent_failed",
+        AgentRawEvent::AgentAborted { .. } => "agent_aborted",
         AgentRawEvent::StateChanged { .. } => "state_changed",
         AgentRawEvent::RoundStarted => "round_started",
         AgentRawEvent::RoundCompleted { .. } => "round_completed",

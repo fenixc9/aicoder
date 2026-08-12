@@ -399,6 +399,28 @@ async fn bash_reports_non_zero_exit() {
 }
 
 #[tokio::test]
+async fn dropping_bash_execution_kills_its_process_group() {
+    let directory = tempdir().unwrap();
+    let marker = directory.path().join("background-finished");
+    let context = ToolContext::new(directory.path(), Duration::from_secs(5), 1024).unwrap();
+    {
+        let execution = BashTool.execute(
+            &context,
+            json!({"command": "(sleep 0.4; touch background-finished) & wait"}),
+        );
+        tokio::pin!(execution);
+
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+            result = &mut execution => panic!("bash finished before cancellation: {result:?}"),
+        }
+    }
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    assert!(!marker.exists(), "background process survived cancellation");
+}
+
+#[tokio::test]
 async fn grep_finds_workspace_matches() {
     let directory = tempdir().unwrap();
     std::fs::write(directory.path().join("sample.rs"), "alpha\nbeta alpha\n").unwrap();

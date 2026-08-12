@@ -30,6 +30,7 @@ pub struct TrajectorySummary {
     pub approval_denials: usize,
     pub truncated_tool_outputs: usize,
     pub agent_failures: usize,
+    pub agent_aborts: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
 }

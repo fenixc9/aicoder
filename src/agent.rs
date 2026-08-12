@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, ensure};
 
 use crate::{
-    AgentEventHandler, TurnExecutionResult, TurnExecutor,
+    AgentEventHandler, TurnExecutionContext, TurnExecutionResult, TurnExecutor,
     session::{Session, SessionMetadata, SessionRepository},
     types::{ChatCompletionRequest, ChatMessage, ResponseType, Role},
 };
@@ -78,11 +78,21 @@ impl Agent {
         prompt: impl Into<String>,
         handler: Arc<dyn AgentEventHandler>,
     ) -> Result<AgentTurnResult> {
+        self.run_with_context(prompt, handler, TurnExecutionContext::new())
+            .await
+    }
+
+    pub async fn run_with_context(
+        &self,
+        prompt: impl Into<String>,
+        handler: Arc<dyn AgentEventHandler>,
+        context: TurnExecutionContext,
+    ) -> Result<AgentTurnResult> {
         let mut messages = self.system_messages();
         messages.push(user_message(prompt.into()));
         let execution_result = self
             .turn_executor
-            .run_with_handler(self.completion_request(messages), handler)
+            .run_with_context(self.completion_request(messages), handler, context)
             .await?;
         Ok(AgentTurnResult {
             execution_result,
@@ -100,6 +110,30 @@ impl Agent {
     where
         R: SessionRepository,
     {
+        self.run_with_session_context(
+            repository,
+            selection,
+            prompt,
+            handler,
+            TurnExecutionContext::new(),
+        )
+        .await
+    }
+
+    pub async fn run_with_session_context<R>(
+        &self,
+        repository: &R,
+        selection: SessionSelection,
+        prompt: impl Into<String>,
+        handler: Arc<dyn AgentEventHandler>,
+        context: TurnExecutionContext,
+    ) -> Result<AgentTurnResult>
+    where
+        R: SessionRepository,
+    {
+        if context.is_cancelled() {
+            return Err(context.error().into());
+        }
         let workspace = self.turn_executor.workspace_root();
         let mut session = select_session(repository, workspace, selection)?;
         ensure!(
@@ -116,7 +150,7 @@ impl Agent {
         let input_message_count = messages.len();
         let execution_result = self
             .turn_executor
-            .run_with_handler(self.completion_request(messages), handler)
+            .run_with_context(self.completion_request(messages), handler, context)
             .await?;
         let generated_messages = execution_result
             .messages
@@ -213,6 +247,21 @@ mod tests {
     struct RecordingProvider {
         responses: Mutex<VecDeque<ChatCompletionResponse>>,
         requests: Mutex<Vec<ChatCompletionRequest>>,
+    }
+
+    struct PendingProvider {
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl ChatCompletionProvider for PendingProvider {
+        async fn complete(
+            &self,
+            _request: ChatCompletionRequest,
+        ) -> Result<ChatCompletionResponse> {
+            self.started.notify_one();
+            std::future::pending().await
+        }
     }
 
     #[async_trait]
@@ -313,5 +362,69 @@ mod tests {
             result.execution_result.final_message.content.as_deref(),
             Some("answer")
         );
+    }
+
+    #[tokio::test]
+    async fn pre_cancelled_session_turn_does_not_create_a_session() {
+        let workspace = tempdir().unwrap();
+        let repository = MemorySessionRepository::new();
+        let (agent, _) = agent(workspace.path(), vec![response("unused")]);
+        let context = TurnExecutionContext::new();
+        context.cancel("cancel before model request");
+
+        let error = agent
+            .run_with_session_context(
+                &repository,
+                SessionSelection::New,
+                "question",
+                Arc::new(()),
+                context,
+            )
+            .await
+            .unwrap_err();
+
+        assert!(error.downcast_ref::<crate::TurnCancelled>().is_some());
+        let sessions = repository.list(workspace.path()).unwrap();
+        assert!(sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn inflight_cancelled_session_turn_keeps_only_the_user_prompt() {
+        let workspace = tempdir().unwrap();
+        let repository = Arc::new(MemorySessionRepository::new());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let executor = TurnExecutor::builder(PendingProvider {
+            started: Arc::clone(&started),
+        })
+        .workspace(workspace.path())
+        .registry(ToolRegistry::default())
+        .build()
+        .unwrap();
+        let agent = Agent::new(executor, AgentConfig::new("test-model"));
+        let context = TurnExecutionContext::new();
+        let cancellation = context.clone();
+        let repository_for_run = Arc::clone(&repository);
+
+        let run = tokio::spawn(async move {
+            agent
+                .run_with_session_context(
+                    repository_for_run.as_ref(),
+                    SessionSelection::New,
+                    "question",
+                    Arc::new(()),
+                    context,
+                )
+                .await
+        });
+        started.notified().await;
+        cancellation.cancel("stop inflight turn");
+        let error = run.await.unwrap().unwrap_err();
+
+        assert!(error.downcast_ref::<crate::TurnCancelled>().is_some());
+        let sessions = repository.list(workspace.path()).unwrap();
+        assert_eq!(sessions.len(), 1);
+        let stored = repository.open(&sessions[0].id).unwrap();
+        assert_eq!(stored.messages().len(), 1);
+        assert_eq!(stored.messages()[0].message.role, Role::User);
     }
 }

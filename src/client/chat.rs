@@ -11,6 +11,7 @@ use std::{
 };
 
 use crate::{
+    cancellation::TurnExecutionContext,
     events::{AgentEventEmitter, AgentRawEvent},
     redaction::{sanitize_text, sanitize_url},
     types::{ApiError, ChatCompletionRequest, ChatCompletionResponse, StreamChunk, StreamOptions},
@@ -598,6 +599,56 @@ impl ChatClient {
                     accumulator.abort_events(events, error.to_string());
                     return Err(error);
                 }
+            }
+        }
+        let response = accumulator.finish_with_events(events)?;
+        events.emit(AgentRawEvent::ModelResponseCompleted {
+            finish_reason: response
+                .choices
+                .first()
+                .and_then(|choice| choice.finish_reason.clone()),
+        });
+        Ok(response)
+    }
+
+    pub(crate) async fn chat_completion_stream_collect_with_context(
+        &self,
+        mut request: ChatCompletionRequest,
+        events: &AgentEventEmitter,
+        context: &TurnExecutionContext,
+    ) -> Result<ChatCompletionResponse> {
+        use futures::StreamExt;
+
+        request.stream = Some(true);
+        let stream = tokio::select! {
+            biased;
+            cancelled = context.cancelled() => return Err(cancelled.into()),
+            stream = self.chat_completion_stream_inner(request, Some(events)) => stream?,
+        };
+        events.emit(AgentRawEvent::ModelResponseStarted);
+        futures::pin_mut!(stream);
+        let mut accumulator = ChatStreamAccumulator::default();
+        loop {
+            let chunk = tokio::select! {
+                biased;
+                cancelled = context.cancelled() => {
+                    accumulator.abort_events(events, cancelled.reason());
+                    return Err(cancelled.into());
+                },
+                chunk = stream.next() => chunk,
+            };
+            match chunk {
+                Some(Ok(chunk)) => {
+                    if let Err(error) = accumulator.push_with_events(chunk, events) {
+                        accumulator.abort_events(events, error.to_string());
+                        return Err(error);
+                    }
+                }
+                Some(Err(error)) => {
+                    accumulator.abort_events(events, error.to_string());
+                    return Err(error);
+                }
+                None => break,
             }
         }
         let response = accumulator.finish_with_events(events)?;
@@ -1246,6 +1297,83 @@ mod tests {
         assert_eq!(call.function.name, "edit_file");
         assert_eq!(call.function.arguments, "{\"path\":\"a.rs\"}");
         assert_eq!(response.usage.unwrap().total_tokens, 12);
+    }
+
+    #[tokio::test]
+    async fn cancellation_drops_inflight_stream_and_closes_open_content_event() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let read = socket.read(&mut buffer).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let chunk = concat!(
+                "data: {\"id\":\"cancel-stream\",\"object\":\"chat.completion.chunk\",",
+                "\"created\":123,\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,",
+                "\"delta\":{\"role\":\"assistant\",\"content\":\"partial\"},",
+                "\"finish_reason\":null}]}\n\n"
+            );
+            let headers = concat!(
+                "HTTP/1.1 200 OK\r\n",
+                "Content-Type: text/event-stream\r\n",
+                "Transfer-Encoding: chunked\r\n",
+                "Connection: close\r\n\r\n"
+            );
+            socket.write_all(headers.as_bytes()).await.unwrap();
+            socket
+                .write_all(format!("{:x}\r\n{chunk}\r\n", chunk.len()).as_bytes())
+                .await
+                .unwrap();
+            socket.flush().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let client = test_client(format!("http://{address}"));
+        let delivered = Arc::new(Mutex::new(Vec::<AgentRawEventEnvelope>::new()));
+        let content_started = Arc::new(tokio::sync::Notify::new());
+        let captured = Arc::clone(&delivered);
+        let started = Arc::clone(&content_started);
+        let events = AgentEventEmitter::new(Arc::new(move |event: &AgentRawEventEnvelope| {
+            captured.lock().unwrap().push(event.clone());
+            if matches!(event.event, AgentRawEvent::ContentChunk { .. }) {
+                started.notify_one();
+            }
+        }));
+        let context = TurnExecutionContext::new();
+        let cancellation = context.clone();
+        let cancel_task = tokio::spawn(async move {
+            tokio::time::timeout(Duration::from_secs(2), content_started.notified())
+                .await
+                .expect("stream content was not delivered");
+            cancellation.cancel("stop streaming response");
+        });
+
+        let result = client
+            .chat_completion_stream_collect_with_context(test_request(true), &events, &context)
+            .await;
+        cancel_task.await.unwrap();
+        let error = result.unwrap_err();
+        assert!(error.downcast_ref::<crate::TurnCancelled>().is_some());
+        events.shutdown().await;
+        server.abort();
+
+        let delivered = delivered.lock().unwrap();
+        assert!(delivered.iter().any(|event| matches!(
+            &event.event,
+            AgentRawEvent::ContentEnded {
+                outcome: crate::events::StreamEnd::Aborted { reason },
+                ..
+            } if reason.as_ref() == "stop streaming response"
+        )));
+        assert!(
+            !delivered
+                .iter()
+                .any(|event| matches!(event.event, AgentRawEvent::ModelResponseCompleted { .. }))
+        );
     }
 
     #[tokio::test]

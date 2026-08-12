@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{os::unix::process::CommandExt, time::Duration};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -69,6 +69,7 @@ impl ExecutableTool for BashTool {
             .arg(&arguments.command)
             .current_dir(context.workspace_root())
             .kill_on_drop(true);
+        command.as_std_mut().process_group(0);
         for secret in [
             "OPENAI_API_KEY",
             "ANTHROPIC_API_KEY",
@@ -78,18 +79,29 @@ impl ExecutableTool for BashTool {
             command.env_remove(secret);
         }
 
-        let output = timeout(command_timeout, command.output())
-            .await
-            .map_err(|_| {
-                ToolFailure::new(
+        let child = command
+            .spawn()
+            .map_err(|error| ToolFailure::new("command_failed", error.to_string()))?;
+        let mut process_group = ProcessGroupGuard::new(child.id());
+        let output = timeout(command_timeout, child.wait_with_output()).await;
+        let output = match output {
+            Ok(Ok(output)) => {
+                process_group.disarm();
+                output
+            }
+            Ok(Err(error)) => {
+                return Err(ToolFailure::new("command_failed", error.to_string()));
+            }
+            Err(_) => {
+                return Err(ToolFailure::new(
                     "timeout",
                     format!(
                         "Command exceeded {} second timeout",
                         command_timeout.as_secs()
                     ),
-                )
-            })?
-            .map_err(|error| ToolFailure::new("command_failed", error.to_string()))?;
+                ));
+            }
+        };
 
         let per_stream_limit = (context.max_output_bytes() / 2).max(1);
         let (stdout, stdout_truncated) =
@@ -115,5 +127,32 @@ impl ExecutableTool for BashTool {
             output: details,
             truncated: stdout_truncated || stderr_truncated,
         })
+    }
+}
+
+struct ProcessGroupGuard {
+    process_group: Option<i32>,
+}
+
+impl ProcessGroupGuard {
+    fn new(child_id: Option<u32>) -> Self {
+        Self {
+            process_group: child_id.and_then(|id| i32::try_from(id).ok()),
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.process_group = None;
+    }
+}
+
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        if let Some(process_group) = self.process_group {
+            // The shell is its own process-group leader, so a negative pid targets all descendants.
+            unsafe {
+                libc::kill(-process_group, libc::SIGKILL);
+            }
+        }
     }
 }

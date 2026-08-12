@@ -4,6 +4,7 @@
 //! CLI, TUI, server, or embedded application can choose its own configuration and presentation.
 
 pub mod agent;
+pub mod cancellation;
 pub mod client;
 pub mod completion;
 pub mod context;
@@ -16,6 +17,7 @@ pub mod turn_executor;
 pub mod types;
 
 pub use agent::{Agent, AgentConfig, AgentTurnResult, SessionSelection};
+pub use cancellation::{TurnCancelled, TurnExecutionContext};
 pub use client::{ChatClient, ClientConfig};
 pub use completion::{
     AcceptAllCompletionVerifier, CompletionContext, CompletionVerdict, CompletionVerifier,

@@ -24,6 +24,12 @@ Long-running sessions can opt into context-window budgeting through a pluggable
 ContextCompactor. See [context compaction](docs/context-compaction.md) for the
 first deterministic policy and the semantic-summary extension boundary.
 
+Interactive frontends can pass a cloneable `TurnExecutionContext` to `Agent` or
+`TurnExecutor` and call `cancel(reason)` to cooperatively stop the active model
+request, stream, approval, compaction, verification, or tool execution. A
+cancelled run transitions to `AgentRunState::Aborted`, emits `AgentAborted`, and
+returns a downcastable `TurnCancelled` error.
+
 Runtime prerequisites are Git, Bash, and ripgrep (`rg`). The SWE-bench grading
 subcommand additionally requires the official Python package and Docker.
 

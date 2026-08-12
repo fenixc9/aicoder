@@ -6,15 +6,15 @@ mod types;
 pub use emitter::AgentEventEmitter;
 #[allow(unused_imports)]
 pub use handler::{
-    AgentCompletedEvent, AgentEventHandler, AgentEventMeta, AgentFailedEvent, AgentStartedEvent,
-    AgentStateChangedEvent, CompletionVerificationEndedEvent, CompletionVerificationStartedEvent,
-    ContentChunkEvent, ContentEndedEvent, ContentStartedEvent, ContextCompactionCompletedEvent,
-    ContextCompactionFailedEvent, ContextCompactionStartedEvent, ModelRequestStartedEvent,
-    ModelResponseCompletedEvent, ModelResponseFailedEvent, ModelResponseStartedEvent,
-    ModelRetryScheduledEvent, ReasoningChunkEvent, ReasoningEndedEvent, ReasoningStartedEvent,
-    RoundCompletedEvent, RoundStartedEvent, ToolApprovalRequestedEvent, ToolApprovalResolvedEvent,
-    ToolCallChunkEvent, ToolCallEndedEvent, ToolCallStartedEvent, ToolExecutionEndedEvent,
-    ToolExecutionStartedEvent, UsageUpdatedEvent,
+    AgentAbortedEvent, AgentCompletedEvent, AgentEventHandler, AgentEventMeta, AgentFailedEvent,
+    AgentStartedEvent, AgentStateChangedEvent, CompletionVerificationEndedEvent,
+    CompletionVerificationStartedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
+    ContextCompactionCompletedEvent, ContextCompactionFailedEvent, ContextCompactionStartedEvent,
+    ModelRequestStartedEvent, ModelResponseCompletedEvent, ModelResponseFailedEvent,
+    ModelResponseStartedEvent, ModelRetryScheduledEvent, ReasoningChunkEvent, ReasoningEndedEvent,
+    ReasoningStartedEvent, RoundCompletedEvent, RoundStartedEvent, ToolApprovalRequestedEvent,
+    ToolApprovalResolvedEvent, ToolCallChunkEvent, ToolCallEndedEvent, ToolCallStartedEvent,
+    ToolExecutionEndedEvent, ToolExecutionStartedEvent, UsageUpdatedEvent,
 };
 pub use types::{
     AgentRawEvent, AgentRawEventEnvelope, AgentStage, CompletionVerificationOutcome, RoundOutcome,

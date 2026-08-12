@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use tokio::time::timeout;
 
 use crate::{
+    cancellation::{TurnCancelled, TurnExecutionContext},
     events::{AgentEventEmitter, AgentRawEvent, ToolExecutionOutcome},
     redaction::sanitize_text,
     types::{ChatMessage, Role, ToolCall},
@@ -70,6 +71,7 @@ impl ToolDispatcher {
         self.dispatch_inner(calls, None).await
     }
 
+    #[cfg(test)]
     pub(crate) async fn dispatch_with_events(
         &self,
         calls: &[ToolCall],
@@ -78,10 +80,32 @@ impl ToolDispatcher {
         self.dispatch_inner(calls, Some(events)).await
     }
 
+    pub(crate) async fn dispatch_with_context(
+        &self,
+        calls: &[ToolCall],
+        events: &AgentEventEmitter,
+        context: &TurnExecutionContext,
+    ) -> Result<Vec<ChatMessage>> {
+        if context.is_cancelled() {
+            return Err(context.error().into());
+        }
+        self.dispatch_inner_with_context(calls, Some(events), Some(context))
+            .await
+    }
+
     async fn dispatch_inner(
         &self,
         calls: &[ToolCall],
         events: Option<&AgentEventEmitter>,
+    ) -> Result<Vec<ChatMessage>> {
+        self.dispatch_inner_with_context(calls, events, None).await
+    }
+
+    async fn dispatch_inner_with_context(
+        &self,
+        calls: &[ToolCall],
+        events: Option<&AgentEventEmitter>,
+        context: Option<&TurnExecutionContext>,
     ) -> Result<Vec<ChatMessage>> {
         if calls.len() > self.config.max_calls_per_round {
             anyhow::bail!(
@@ -104,12 +128,12 @@ impl ToolDispatcher {
                 }
                 let futures = calls[start..index]
                     .iter()
-                    .map(|call| self.execute_call(call, events));
+                    .map(|call| self.execute_call(call, events, context));
                 for (offset, message) in join_all(futures).await.into_iter().enumerate() {
-                    results[start + offset] = Some(message);
+                    results[start + offset] = Some(message?);
                 }
             } else {
-                results[index] = Some(self.execute_call(&calls[index], events).await);
+                results[index] = Some(self.execute_call(&calls[index], events, context).await?);
                 index += 1;
             }
         }
@@ -128,7 +152,8 @@ impl ToolDispatcher {
         &self,
         call: &ToolCall,
         events: Option<&AgentEventEmitter>,
-    ) -> ChatMessage {
+        context: Option<&TurnExecutionContext>,
+    ) -> Result<ChatMessage> {
         emit_event(
             events,
             AgentRawEvent::ToolExecutionStarted {
@@ -140,26 +165,26 @@ impl ToolDispatcher {
         let arguments = match serde_json::from_str::<Value>(&call.function.arguments) {
             Ok(arguments) => arguments,
             Err(error) => {
-                return failed_tool_message(
+                return Ok(failed_tool_message(
                     events,
                     call,
                     ToolFailure::new(
                         "invalid_arguments",
                         format!("Arguments are not valid JSON: {error}"),
                     ),
-                );
+                ));
             }
         };
 
         let Some(tool) = self.registry.get(&call.function.name) else {
-            return failed_tool_message(
+            return Ok(failed_tool_message(
                 events,
                 call,
                 ToolFailure::new(
                     "unknown_tool",
                     format!("Unknown tool: {}", call.function.name),
                 ),
-            );
+            ));
         };
 
         let invocation = ToolInvocation {
@@ -178,7 +203,16 @@ impl ToolDispatcher {
                     capability: invocation.capability,
                 },
             );
-            match self.approval.approve(&invocation).await {
+            let approval = self.approval.approve(&invocation);
+            let approval = match context {
+                Some(context) => tokio::select! {
+                    biased;
+                    cancelled = context.cancelled() => Err(anyhow::Error::from(cancelled)),
+                    approval = approval => approval,
+                },
+                None => approval.await,
+            };
+            match approval {
                 Ok(true) => emit_event(
                     events,
                     AgentRawEvent::ToolApprovalResolved {
@@ -194,11 +228,29 @@ impl ToolDispatcher {
                             approved: false,
                         },
                     );
-                    return failed_tool_message(
+                    return Ok(failed_tool_message(
                         events,
                         call,
                         ToolFailure::new("approval_denied", "User denied tool execution"),
+                    ));
+                }
+                Err(error) if error.downcast_ref::<TurnCancelled>().is_some() => {
+                    emit_event(
+                        events,
+                        AgentRawEvent::ToolApprovalResolved {
+                            call_id: invocation.call_id.clone().into(),
+                            approved: false,
+                        },
                     );
+                    emit_event(
+                        events,
+                        AgentRawEvent::ToolExecutionEnded {
+                            call_id: call.id.clone().into(),
+                            name: call.function.name.clone().into(),
+                            outcome: ToolExecutionOutcome::Cancelled.into(),
+                        },
+                    );
+                    return Err(error);
                 }
                 Err(error) => {
                     emit_event(
@@ -208,11 +260,11 @@ impl ToolDispatcher {
                             approved: false,
                         },
                     );
-                    return failed_tool_message(
+                    return Ok(failed_tool_message(
                         events,
                         call,
                         ToolFailure::new("approval_failed", error.to_string()),
-                    );
+                    ));
                 }
             }
         }
@@ -223,12 +275,29 @@ impl ToolDispatcher {
             arguments_bytes = invocation.arguments.to_string().len(),
             "Executing tool"
         );
-        let (envelope, outcome) = match timeout(
+        let execution = timeout(
             self.config.tool_timeout,
             tool.execute(&self.context, arguments),
-        )
-        .await
-        {
+        );
+        let execution = match context {
+            Some(context) => tokio::select! {
+                biased;
+                cancelled = context.cancelled() => {
+                    emit_event(
+                        events,
+                        AgentRawEvent::ToolExecutionEnded {
+                            call_id: call.id.clone().into(),
+                            name: call.function.name.clone().into(),
+                            outcome: ToolExecutionOutcome::Cancelled.into(),
+                        },
+                    );
+                    return Err(cancelled.into());
+                },
+                execution = execution => execution,
+            },
+            None => execution.await,
+        };
+        let (envelope, outcome) = match execution {
             Ok(Ok(success)) => success_envelope(success, self.config.max_output_bytes),
             Ok(Err(error)) => {
                 let outcome = failure_outcome(&error);
@@ -253,7 +322,7 @@ impl ToolDispatcher {
                 outcome: outcome.into(),
             },
         );
-        tool_message(call, envelope)
+        Ok(tool_message(call, envelope))
     }
 }
 

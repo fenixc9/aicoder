@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use aicoder_core::{
     Agent, AgentConfig, AgentRawEvent, AgentRunState, ChatCompletionProvider, ContextWindowConfig,
-    PruningContextCompactor, SessionSelection, TurnExecutor,
+    PruningContextCompactor, SessionSelection, TurnCancelled, TurnExecutionContext, TurnExecutor,
     session::{MemorySessionRepository, SessionRepository},
     tools::ToolRegistry,
     types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role},
@@ -154,5 +154,44 @@ fn external_application_can_manage_conversation_sessions() {
             .unwrap()
             .id,
         session.metadata().id
+    );
+}
+
+#[tokio::test]
+async fn external_application_can_cancel_a_turn() {
+    let workspace = tempdir().unwrap();
+    let turn_executor = TurnExecutor::builder(StaticProvider)
+        .workspace(workspace.path())
+        .registry(ToolRegistry::default())
+        .build()
+        .unwrap();
+    let context = TurnExecutionContext::new();
+    context.cancel("application shutdown");
+
+    let error = turn_executor
+        .run_with_context(
+            ChatCompletionRequest {
+                model: "test-model".to_string(),
+                messages: Vec::new(),
+                temperature: None,
+                top_p: None,
+                max_tokens: None,
+                seed: None,
+                tools: None,
+                tool_choice: None,
+                stream: None,
+                stream_options: None,
+                stop: None,
+                response_format: None,
+            },
+            Arc::new(()),
+            context,
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error.downcast_ref::<TurnCancelled>().unwrap().reason(),
+        "application shutdown"
     );
 }

@@ -25,7 +25,7 @@ pub enum AgentRunState {
     Failed {
         round: Option<usize>,
     },
-    /// Reserved terminal state for cooperative cancellation support.
+    /// Terminal state reached when cooperative cancellation stops the run.
     Aborted {
         round: Option<usize>,
     },
@@ -213,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn supports_compaction_and_reserved_abort_paths() {
+    fn supports_compaction_and_abort_paths() {
         let mut machine = AgentRunStateMachine::new();
         machine.transition(AgentRunState::Preparing).unwrap();
         machine
@@ -230,5 +230,26 @@ mod tests {
             .unwrap();
         assert!(machine.state().is_terminal());
         assert_eq!(machine.state().name(), "aborted");
+    }
+
+    #[test]
+    fn aborts_from_every_active_state() {
+        let active_states = [
+            AgentRunState::Preparing,
+            AgentRunState::AwaitingModel { round: 1 },
+            AgentRunState::VerifyingCompletion { round: 1 },
+            AgentRunState::ExecutingTools { round: 1, count: 1 },
+            AgentRunState::Compacting { round: 1 },
+        ];
+
+        for active in active_states {
+            let requested = AgentRunState::Aborted {
+                round: active.round(),
+            };
+            assert!(
+                valid_transition(active, requested),
+                "expected {active:?} -> {requested:?} to be valid"
+            );
+        }
     }
 }

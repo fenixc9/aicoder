@@ -61,6 +61,7 @@ pub enum RoundOutcome {
     CompletionRejected,
     ToolCalls { count: usize },
     Failed,
+    Aborted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -82,6 +83,7 @@ pub enum ToolExecutionOutcome {
     Failed { code: String, message: String },
     TimedOut,
     ApprovalDenied,
+    Cancelled,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +98,9 @@ pub enum AgentRawEvent {
     AgentFailed {
         stage: AgentStage,
         message: Arc<str>,
+    },
+    AgentAborted {
+        reason: Arc<str>,
     },
     StateChanged {
         transition: AgentStateTransition,

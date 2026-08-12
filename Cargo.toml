@@ -10,6 +10,7 @@ resolver = "3"
 [dependencies]
 # 异步运行时
 tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
 
 # HTTP 客户端（用于调用 LLM API）
 reqwest = { version = "0.12", features = ["json", "stream", "hickory-dns"] }
@@ -20,6 +21,7 @@ serde_json = "1"
 regex = "1"
 httpdate = "1"
 fs2 = "0.4"
+libc = "0.2"
 
 # 异常处理
 anyhow = "1"

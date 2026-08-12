@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 
 use crate::{
+    cancellation::{TurnCancelled, TurnExecutionContext},
     client::ChatClient,
     completion::{
         AcceptAllCompletionVerifier, CompletionContext, CompletionVerdict, CompletionVerifier,
@@ -39,6 +40,19 @@ pub trait ChatCompletionProvider: Send + Sync {
         emit_full_response_events(&events, &response);
         Ok(response)
     }
+
+    async fn complete_with_context(
+        &self,
+        request: ChatCompletionRequest,
+        events: AgentEventEmitter,
+        context: &TurnExecutionContext,
+    ) -> Result<ChatCompletionResponse> {
+        tokio::select! {
+            biased;
+            cancelled = context.cancelled() => Err(cancelled.into()),
+            response = self.complete_with_events(request, events) => response,
+        }
+    }
 }
 
 #[async_trait]
@@ -63,6 +77,24 @@ impl ChatCompletionProvider for ChatClient {
             let response = self.chat_completion_with_events(request, &events).await?;
             emit_full_response_events(&events, &response);
             Ok(response)
+        }
+    }
+
+    async fn complete_with_context(
+        &self,
+        request: ChatCompletionRequest,
+        events: AgentEventEmitter,
+        context: &TurnExecutionContext,
+    ) -> Result<ChatCompletionResponse> {
+        if request.stream.unwrap_or(false) {
+            self.chat_completion_stream_collect_with_context(request, &events, context)
+                .await
+        } else {
+            tokio::select! {
+                biased;
+                cancelled = context.cancelled() => Err(cancelled.into()),
+                response = self.chat_completion_with_events(request, &events) => response,
+            }
         }
     }
 }
@@ -146,7 +178,8 @@ impl TurnExecutor {
     }
 
     pub async fn run(&self, request: ChatCompletionRequest) -> Result<TurnExecutionResult> {
-        self.run_with_handler(request, Arc::new(())).await
+        self.run_with_context(request, Arc::new(()), TurnExecutionContext::new())
+            .await
     }
 
     pub async fn run_with_handler(
@@ -154,13 +187,23 @@ impl TurnExecutor {
         request: ChatCompletionRequest,
         handler: Arc<dyn AgentEventHandler>,
     ) -> Result<TurnExecutionResult> {
+        self.run_with_context(request, handler, TurnExecutionContext::new())
+            .await
+    }
+
+    pub async fn run_with_context(
+        &self,
+        request: ChatCompletionRequest,
+        handler: Arc<dyn AgentEventHandler>,
+        context: TurnExecutionContext,
+    ) -> Result<TurnExecutionResult> {
         let events = AgentEventEmitter::new(handler);
         events.emit(AgentRawEvent::AgentStarted {
             model: request.model.clone().into(),
         });
         let mut state = AgentRunStateMachine::new();
         let execution = match transition_state(&mut state, &events, AgentRunState::Preparing) {
-            Ok(()) => self.run_inner(request, &events, &mut state).await,
+            Ok(()) => self.run_inner(request, &events, &mut state, &context).await,
             Err(error) => Err(error),
         };
         let result = match execution {
@@ -170,6 +213,12 @@ impl TurnExecutor {
                 AgentRunState::Completed { rounds: run.rounds },
             )
             .map(|()| run),
+            Err(error) if error.downcast_ref::<TurnCancelled>().is_some() => {
+                let aborted = AgentRunState::Aborted {
+                    round: state.state().round(),
+                };
+                transition_state(&mut state, &events, aborted).map(|()| Err(error))?
+            }
             Err(error) => {
                 let failed = AgentRunState::Failed {
                     round: state.state().round(),
@@ -187,10 +236,15 @@ impl TurnExecutor {
                 rounds: result.rounds,
                 usage: result.usage.clone().into(),
             }),
-            Err(error) => events.emit(AgentRawEvent::AgentFailed {
-                stage: AgentStage::Turn,
-                message: format!("{error:#}").into(),
-            }),
+            Err(error) => match error.downcast_ref::<TurnCancelled>() {
+                Some(cancelled) => events.emit(AgentRawEvent::AgentAborted {
+                    reason: cancelled.reason().into(),
+                }),
+                None => events.emit(AgentRawEvent::AgentFailed {
+                    stage: AgentStage::Turn,
+                    message: format!("{error:#}").into(),
+                }),
+            },
         }
         events.shutdown().await;
         result
@@ -201,7 +255,11 @@ impl TurnExecutor {
         mut request: ChatCompletionRequest,
         events: &AgentEventEmitter,
         state: &mut AgentRunStateMachine,
+        context: &TurnExecutionContext,
     ) -> Result<TurnExecutionResult> {
+        if context.is_cancelled() {
+            return Err(context.error().into());
+        }
         if self.config.max_rounds == 0 {
             anyhow::bail!("Turn execution max_rounds must be greater than zero");
         }
@@ -237,11 +295,25 @@ impl TurnExecutor {
                         estimated_tokens,
                         target_tokens,
                     });
-                    let compacted = match compactor.compact(input).await.and_then(|compacted| {
-                        ensure_valid_compaction(&compacted, target_tokens)?;
-                        Ok(compacted)
-                    }) {
+                    let compacted = match tokio::select! {
+                        biased;
+                        cancelled = context.cancelled() => Err(cancelled.into()),
+                        compacted = compactor.compact(input) => compacted.and_then(|compacted| {
+                            ensure_valid_compaction(&compacted, target_tokens)?;
+                            Ok(compacted)
+                        }),
+                    } {
                         Ok(compacted) => compacted,
+                        Err(error) if error.downcast_ref::<TurnCancelled>().is_some() => {
+                            round_events.emit(AgentRawEvent::ContextCompactionFailed {
+                                strategy: compactor.name().into(),
+                                message: context.reason(),
+                            });
+                            round_events.emit(AgentRawEvent::RoundCompleted {
+                                outcome: RoundOutcome::Aborted,
+                            });
+                            return Err(error);
+                        }
                         Err(error) => {
                             round_events.emit(AgentRawEvent::ContextCompactionFailed {
                                 strategy: compactor.name().into(),
@@ -275,11 +347,20 @@ impl TurnExecutor {
             round_events.emit(AgentRawEvent::ModelRequestStarted);
             let response = match self
                 .provider
-                .complete_with_events(request.clone(), round_events.clone())
+                .complete_with_context(request.clone(), round_events.clone(), context)
                 .await
                 .with_context(|| format!("Model request failed in agent round {round}"))
             {
                 Ok(response) => response,
+                Err(error) if error.downcast_ref::<TurnCancelled>().is_some() => {
+                    round_events.emit(AgentRawEvent::ModelResponseFailed {
+                        message: context.reason(),
+                    });
+                    round_events.emit(AgentRawEvent::RoundCompleted {
+                        outcome: RoundOutcome::Aborted,
+                    });
+                    return Err(error);
+                }
                 Err(error) => {
                     round_events.emit(AgentRawEvent::ModelResponseFailed {
                         message: format!("{error:#}").into(),
@@ -312,19 +393,19 @@ impl TurnExecutor {
                     AgentRunState::VerifyingCompletion { round },
                 )?;
                 round_events.emit(AgentRawEvent::CompletionVerificationStarted);
-                let verdict = self
-                    .completion_verifier
-                    .verify(CompletionContext {
-                        workspace: self.workspace_root(),
-                        round,
-                        candidate: &assistant_message,
-                        messages: &transcript,
-                        usage: &usage,
-                    })
-                    .await
-                    .with_context(|| {
-                        format!("Completion verification failed in agent round {round}")
-                    });
+                let verification = self.completion_verifier.verify(CompletionContext {
+                    workspace: self.workspace_root(),
+                    round,
+                    candidate: &assistant_message,
+                    messages: &transcript,
+                    usage: &usage,
+                });
+                let verdict = tokio::select! {
+                    biased;
+                    cancelled = context.cancelled() => Err(anyhow::Error::from(cancelled)),
+                    verdict = verification => verdict,
+                }
+                .with_context(|| format!("Completion verification failed in agent round {round}"));
                 match verdict {
                     Ok(CompletionVerdict::Accepted) => {
                         round_events.emit(AgentRawEvent::CompletionVerificationEnded {
@@ -356,6 +437,16 @@ impl TurnExecutor {
                         });
                         continue;
                     }
+                    Err(error) if error.downcast_ref::<TurnCancelled>().is_some() => {
+                        round_events.emit(AgentRawEvent::CompletionVerificationEnded {
+                            outcome: crate::events::CompletionVerificationOutcome::Failed,
+                            feedback: Some(context.reason()),
+                        });
+                        round_events.emit(AgentRawEvent::RoundCompleted {
+                            outcome: RoundOutcome::Aborted,
+                        });
+                        return Err(error);
+                    }
                     Err(error) => {
                         round_events.emit(AgentRawEvent::CompletionVerificationEnded {
                             outcome: crate::events::CompletionVerificationOutcome::Failed,
@@ -384,10 +475,16 @@ impl TurnExecutor {
             );
             let tool_messages = match self
                 .dispatcher
-                .dispatch_with_events(&tool_calls, &round_events)
+                .dispatch_with_context(&tool_calls, &round_events, context)
                 .await
             {
                 Ok(messages) => messages,
+                Err(error) if error.downcast_ref::<TurnCancelled>().is_some() => {
+                    round_events.emit(AgentRawEvent::RoundCompleted {
+                        outcome: RoundOutcome::Aborted,
+                    });
+                    return Err(error);
+                }
                 Err(error) => {
                     round_events.emit(AgentRawEvent::RoundCompleted {
                         outcome: RoundOutcome::Failed,
@@ -588,8 +685,9 @@ mod tests {
         collections::VecDeque,
         sync::{
             Arc, Mutex,
-            atomic::{AtomicUsize, Ordering},
+            atomic::{AtomicBool, AtomicUsize, Ordering},
         },
+        time::Duration,
     };
 
     use async_trait::async_trait;
@@ -598,10 +696,11 @@ mod tests {
 
     use super::*;
     use crate::{
+        ToolExecutionOutcome,
         context::{ContextWindowConfig, PruningContextCompactor},
         tools::{
-            AllowAllApproval, DispatcherConfig, ExecutableTool, ToolCapability, ToolContext,
-            ToolFailure, ToolRegistry, ToolSuccess,
+            AllowAllApproval, ApprovalHandler, DispatcherConfig, ExecutableTool, ToolCapability,
+            ToolContext, ToolFailure, ToolInvocation, ToolRegistry, ToolSuccess,
         },
         types::FunctionDefinition,
     };
@@ -609,6 +708,31 @@ mod tests {
     struct MockProvider {
         responses: Mutex<VecDeque<ChatCompletionResponse>>,
         requests: Mutex<Vec<ChatCompletionRequest>>,
+    }
+
+    struct PendingProvider {
+        started: Arc<tokio::sync::Notify>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    struct DropMarker(Arc<AtomicBool>);
+
+    impl Drop for DropMarker {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[async_trait]
+    impl ChatCompletionProvider for PendingProvider {
+        async fn complete(
+            &self,
+            _request: ChatCompletionRequest,
+        ) -> Result<ChatCompletionResponse> {
+            let _marker = DropMarker(Arc::clone(&self.dropped));
+            self.started.notify_one();
+            std::future::pending().await
+        }
     }
 
     impl MockProvider {
@@ -633,6 +757,25 @@ mod tests {
     }
 
     struct EchoTool;
+
+    struct CommandEchoTool;
+
+    struct PendingCommandTool {
+        started: Arc<tokio::sync::Notify>,
+        dropped: Arc<AtomicBool>,
+    }
+
+    struct PendingApproval {
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait]
+    impl ApprovalHandler for PendingApproval {
+        async fn approve(&self, _invocation: &ToolInvocation) -> Result<bool> {
+            self.started.notify_one();
+            std::future::pending().await
+        }
+    }
 
     struct RejectOnceVerifier {
         calls: AtomicUsize,
@@ -681,6 +824,57 @@ mod tests {
                 output: arguments,
                 truncated: false,
             })
+        }
+    }
+
+    #[async_trait]
+    impl ExecutableTool for CommandEchoTool {
+        fn definition(&self) -> FunctionDefinition {
+            FunctionDefinition {
+                name: "command_echo".to_string(),
+                description: Some("Echo after approval".to_string()),
+                parameters: Some(json!({"type":"object"})),
+            }
+        }
+
+        fn capability(&self) -> ToolCapability {
+            ToolCapability::Command
+        }
+
+        async fn execute(
+            &self,
+            _context: &ToolContext,
+            arguments: Value,
+        ) -> std::result::Result<ToolSuccess, ToolFailure> {
+            Ok(ToolSuccess {
+                output: arguments,
+                truncated: false,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl ExecutableTool for PendingCommandTool {
+        fn definition(&self) -> FunctionDefinition {
+            FunctionDefinition {
+                name: "pending_command".to_string(),
+                description: Some("Wait forever for cancellation testing".to_string()),
+                parameters: Some(json!({"type":"object"})),
+            }
+        }
+
+        fn capability(&self) -> ToolCapability {
+            ToolCapability::Command
+        }
+
+        async fn execute(
+            &self,
+            _context: &ToolContext,
+            _arguments: Value,
+        ) -> std::result::Result<ToolSuccess, ToolFailure> {
+            let _marker = DropMarker(Arc::clone(&self.dropped));
+            self.started.notify_one();
+            std::future::pending().await
         }
     }
 
@@ -1022,5 +1216,172 @@ mod tests {
                 AgentRunState::Completed { rounds: 1 },
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn cancellation_aborts_state_and_drops_inflight_model_request() {
+        let started = Arc::new(tokio::sync::Notify::new());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let directory = tempdir().unwrap();
+        let handler = Arc::new(RecordingHandler::default());
+        let executor = TurnExecutor::builder(PendingProvider {
+            started: Arc::clone(&started),
+            dropped: Arc::clone(&dropped),
+        })
+        .workspace(directory.path())
+        .registry(ToolRegistry::default())
+        .build()
+        .unwrap();
+        let context = TurnExecutionContext::new();
+        let cancellation = context.clone();
+
+        let run = tokio::spawn(async move {
+            executor
+                .run_with_context(request(), handler.clone(), context)
+                .await
+                .map_err(|error| (error, handler))
+        });
+        started.notified().await;
+        cancellation.cancel("user pressed escape");
+        let (error, handler) = run.await.unwrap().unwrap_err();
+
+        assert_eq!(
+            error.downcast_ref::<TurnCancelled>().unwrap().reason(),
+            "user pressed escape"
+        );
+        assert!(dropped.load(Ordering::SeqCst));
+        let events = handler.0.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentRawEvent::RoundCompleted {
+                outcome: RoundOutcome::Aborted
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentRawEvent::StateChanged {
+                transition: crate::state::AgentStateTransition {
+                    current: AgentRunState::Aborted { round: Some(1) },
+                    ..
+                }
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentRawEvent::AgentAborted { reason } if reason.as_ref() == "user pressed escape"
+        )));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AgentRawEvent::AgentFailed { .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_interrupts_pending_tool_approval_and_closes_events() {
+        let provider = Arc::new(MockProvider::new(vec![response(json!({
+            "id":"approval","object":"chat.completion","created":1,"model":"deepseek-chat",
+            "choices":[{"index":0,"message":{"role":"assistant","content":null,
+                "tool_calls":[{"id":"call-approval","type":"function","function":{"name":"command_echo","arguments":"{}"}}]},
+                "finish_reason":"tool_calls"}]
+        }))]));
+        let approval_started = Arc::new(tokio::sync::Notify::new());
+        let directory = tempdir().unwrap();
+        let handler = Arc::new(RecordingHandler::default());
+        let mut registry = ToolRegistry::default();
+        registry.register(CommandEchoTool).unwrap();
+        let executor = TurnExecutor::builder_from_shared(provider)
+            .workspace(directory.path())
+            .registry(registry)
+            .approval(PendingApproval {
+                started: Arc::clone(&approval_started),
+            })
+            .build()
+            .unwrap();
+        let context = TurnExecutionContext::new();
+        let cancellation = context.clone();
+
+        let run = tokio::spawn(async move {
+            executor
+                .run_with_context(request(), handler.clone(), context)
+                .await
+                .map_err(|error| (error, handler))
+        });
+        tokio::time::timeout(Duration::from_secs(2), approval_started.notified())
+            .await
+            .expect("approval was not requested");
+        cancellation.cancel("cancel approval");
+        let (error, handler) = run.await.unwrap().unwrap_err();
+
+        assert!(error.downcast_ref::<TurnCancelled>().is_some());
+        let events = handler.0.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentRawEvent::ToolApprovalResolved { call_id, approved: false }
+                if call_id.as_ref() == "call-approval"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentRawEvent::ToolExecutionEnded { call_id, outcome, .. }
+                if call_id.as_ref() == "call-approval"
+                    && matches!(outcome.as_ref(), ToolExecutionOutcome::Cancelled)
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentRawEvent::RoundCompleted {
+                outcome: RoundOutcome::Aborted
+            }
+        )));
+    }
+
+    #[tokio::test]
+    async fn cancellation_drops_inflight_tool_execution() {
+        let provider = Arc::new(MockProvider::new(vec![response(json!({
+            "id":"tool","object":"chat.completion","created":1,"model":"deepseek-chat",
+            "choices":[{"index":0,"message":{"role":"assistant","content":null,
+                "tool_calls":[{"id":"call-tool","type":"function","function":{"name":"pending_command","arguments":"{}"}}]},
+                "finish_reason":"tool_calls"}]
+        }))]));
+        let tool_started = Arc::new(tokio::sync::Notify::new());
+        let dropped = Arc::new(AtomicBool::new(false));
+        let directory = tempdir().unwrap();
+        let handler = Arc::new(RecordingHandler::default());
+        let mut registry = ToolRegistry::default();
+        registry
+            .register(PendingCommandTool {
+                started: Arc::clone(&tool_started),
+                dropped: Arc::clone(&dropped),
+            })
+            .unwrap();
+        let executor = TurnExecutor::builder_from_shared(provider)
+            .workspace(directory.path())
+            .registry(registry)
+            .approval(AllowAllApproval)
+            .build()
+            .unwrap();
+        let context = TurnExecutionContext::new();
+        let cancellation = context.clone();
+
+        let run = tokio::spawn(async move {
+            executor
+                .run_with_context(request(), handler.clone(), context)
+                .await
+                .map_err(|error| (error, handler))
+        });
+        tokio::time::timeout(Duration::from_secs(2), tool_started.notified())
+            .await
+            .expect("tool execution did not start");
+        cancellation.cancel("stop tool");
+        let (error, handler) = run.await.unwrap().unwrap_err();
+
+        assert!(error.downcast_ref::<TurnCancelled>().is_some());
+        assert!(dropped.load(Ordering::SeqCst));
+        let events = handler.0.lock().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event,
+            AgentRawEvent::ToolExecutionEnded { call_id, outcome, .. }
+                if call_id.as_ref() == "call-tool"
+                    && matches!(outcome.as_ref(), ToolExecutionOutcome::Cancelled)
+        )));
     }
 }
