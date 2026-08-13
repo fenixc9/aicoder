@@ -1,0 +1,23 @@
+[package]
+name = "aicoder-tui"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "aicoder-tui"
+path = "src/main.rs"
+
+[dependencies]
+aicoder-core = { path = "../.." }
+anyhow = "1"
+async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }
+crossterm = { version = "0.28", features = ["event-stream"] }
+dotenvy = "0.15"
+futures = "0.3"
+ratatui = "0.29"
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["tracing-log"] }
+unicode-width = "0.2"

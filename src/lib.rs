@@ -16,7 +16,9 @@ pub mod tools;
 pub mod turn_executor;
 pub mod types;
 
-pub use agent::{Agent, AgentConfig, AgentTurnResult, SessionSelection};
+pub use agent::{
+    Agent, AgentConfig, AgentTurnOutcome, AgentTurnResult, InterruptedAgentTurn, SessionSelection,
+};
 pub use cancellation::{TurnCancelled, TurnExecutionContext};
 pub use client::{ChatClient, ClientConfig};
 pub use completion::{

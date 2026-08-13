@@ -4,6 +4,7 @@ mod emitter;
 mod handler;
 mod types;
 pub use emitter::AgentEventEmitter;
+pub(crate) use handler::dispatch_event;
 #[allow(unused_imports)]
 pub use handler::{
     AgentAbortedEvent, AgentCompletedEvent, AgentEventHandler, AgentEventMeta, AgentFailedEvent,

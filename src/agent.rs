@@ -1,13 +1,15 @@
 //! High-level agent API for stateless or session-backed user turns.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, ensure};
 
 use crate::{
-    AgentEventHandler, TurnExecutionContext, TurnExecutionResult, TurnExecutor,
+    AgentEventHandler, AgentRawEvent, AgentRawEventEnvelope, TurnCancelled, TurnExecutionContext,
+    TurnExecutionResult, TurnExecutor,
+    events::dispatch_event,
     session::{Session, SessionMetadata, SessionRepository},
-    types::{ChatCompletionRequest, ChatMessage, ResponseType, Role},
+    types::{ChatCompletionRequest, ChatMessage, ResponseType, Role, Usage},
 };
 
 #[derive(Debug, Clone)]
@@ -55,6 +57,60 @@ pub struct AgentTurnResult {
     pub session: Option<SessionMetadata>,
 }
 
+#[derive(Debug)]
+pub struct InterruptedAgentTurn {
+    pub session: Option<SessionMetadata>,
+    pub usage: Usage,
+    pub rounds: usize,
+    pub error: anyhow::Error,
+}
+
+#[derive(Debug)]
+pub enum AgentTurnOutcome {
+    Completed(AgentTurnResult),
+    Aborted(InterruptedAgentTurn),
+    Failed(InterruptedAgentTurn),
+}
+
+impl AgentTurnOutcome {
+    pub fn session(&self) -> Option<&SessionMetadata> {
+        match self {
+            Self::Completed(result) => result.session.as_ref(),
+            Self::Aborted(turn) | Self::Failed(turn) => turn.session.as_ref(),
+        }
+    }
+
+    pub fn into_result(self) -> Result<AgentTurnResult> {
+        match self {
+            Self::Completed(result) => Ok(result),
+            Self::Aborted(turn) | Self::Failed(turn) => Err(turn.error),
+        }
+    }
+}
+
+#[derive(Default, Clone)]
+struct TurnProgress {
+    usage: Usage,
+    rounds: usize,
+}
+
+struct ProgressTrackingHandler {
+    inner: Arc<dyn AgentEventHandler>,
+    progress: Arc<Mutex<TurnProgress>>,
+}
+
+impl AgentEventHandler for ProgressTrackingHandler {
+    fn on_raw_event(&self, envelope: &AgentRawEventEnvelope) {
+        let mut progress = self.progress.lock().expect("turn progress lock poisoned");
+        progress.rounds = progress.rounds.max(envelope.round.unwrap_or(0));
+        if let AgentRawEvent::UsageUpdated { usage } = &envelope.event {
+            progress.usage.accumulate(usage);
+        }
+        drop(progress);
+        dispatch_event(self.inner.as_ref(), envelope);
+    }
+}
+
 /// Owns request construction and optional conversation persistence around a `TurnExecutor`.
 pub struct Agent {
     turn_executor: TurnExecutor,
@@ -98,6 +154,21 @@ impl Agent {
             execution_result,
             session: None,
         })
+    }
+
+    pub async fn run_outcome(
+        &self,
+        prompt: impl Into<String>,
+        handler: Arc<dyn AgentEventHandler>,
+        context: TurnExecutionContext,
+    ) -> AgentTurnOutcome {
+        let progress = Arc::new(Mutex::new(TurnProgress::default()));
+        let tracking = Arc::new(ProgressTrackingHandler {
+            inner: handler,
+            progress: Arc::clone(&progress),
+        });
+        let result = self.run_with_context(prompt, tracking, context).await;
+        classify_turn_result(result, None, progress)
     }
 
     pub async fn run_with_session<R>(
@@ -163,6 +234,96 @@ impl Agent {
         })
     }
 
+    pub async fn run_with_session_outcome<R>(
+        &self,
+        repository: &R,
+        selection: SessionSelection,
+        prompt: impl Into<String>,
+        handler: Arc<dyn AgentEventHandler>,
+        context: TurnExecutionContext,
+    ) -> AgentTurnOutcome
+    where
+        R: SessionRepository,
+    {
+        if context.is_cancelled() {
+            return interrupted_outcome(context.error().into(), None, TurnProgress::default());
+        }
+        let workspace = self.turn_executor.workspace_root();
+        let mut session = match select_session(repository, workspace, selection) {
+            Ok(session) => session,
+            Err(error) => {
+                return AgentTurnOutcome::Failed(InterruptedAgentTurn {
+                    session: None,
+                    usage: Usage::default(),
+                    rounds: 0,
+                    error,
+                });
+            }
+        };
+        if let Err(error) = ensure_session_workspace(&session, workspace) {
+            return interrupted_outcome(
+                error,
+                Some(session.metadata().clone()),
+                TurnProgress::default(),
+            );
+        }
+        if let Err(error) = repository.append(&mut session, user_message(prompt.into())) {
+            return interrupted_outcome(
+                error,
+                Some(session.metadata().clone()),
+                TurnProgress::default(),
+            );
+        }
+        let metadata = session.metadata().clone();
+
+        let mut messages = self.system_messages();
+        messages.extend(session.chat_messages());
+        let input_message_count = messages.len();
+        let progress = Arc::new(Mutex::new(TurnProgress::default()));
+        let tracking = Arc::new(ProgressTrackingHandler {
+            inner: handler,
+            progress: Arc::clone(&progress),
+        });
+        let execution = self
+            .turn_executor
+            .run_with_context(self.completion_request(messages), tracking, context)
+            .await;
+        let execution_result = match execution {
+            Ok(result) => result,
+            Err(error) => return classify_turn_result(Err(error), Some(metadata), progress),
+        };
+        let generated_messages = match execution_result.messages.get(input_message_count..) {
+            Some(messages) => messages,
+            None => {
+                return interrupted_outcome(
+                    anyhow::anyhow!(
+                        "TurnExecutor returned fewer messages than supplied conversation context"
+                    ),
+                    Some(metadata),
+                    progress
+                        .lock()
+                        .expect("turn progress lock poisoned")
+                        .clone(),
+                );
+            }
+        };
+        if let Err(error) = repository.append_all(&mut session, generated_messages.iter().cloned())
+        {
+            return interrupted_outcome(
+                error,
+                Some(session.metadata().clone()),
+                progress
+                    .lock()
+                    .expect("turn progress lock poisoned")
+                    .clone(),
+            );
+        }
+        AgentTurnOutcome::Completed(AgentTurnResult {
+            execution_result,
+            session: Some(session.metadata().clone()),
+        })
+    }
+
     fn system_messages(&self) -> Vec<ChatMessage> {
         self.config
             .system_prompt
@@ -195,6 +356,52 @@ impl Agent {
             stop: self.config.stop.clone(),
             response_format: self.config.response_format.clone(),
         }
+    }
+}
+
+fn ensure_session_workspace(session: &Session, workspace: &std::path::Path) -> Result<()> {
+    ensure!(
+        session.metadata().cwd == workspace,
+        "Session {} belongs to workspace {}, not {}",
+        session.metadata().id,
+        session.metadata().cwd.display(),
+        workspace.display()
+    );
+    Ok(())
+}
+
+fn classify_turn_result(
+    result: Result<AgentTurnResult>,
+    session: Option<SessionMetadata>,
+    progress: Arc<Mutex<TurnProgress>>,
+) -> AgentTurnOutcome {
+    match result {
+        Ok(result) => AgentTurnOutcome::Completed(result),
+        Err(error) => {
+            let progress = progress
+                .lock()
+                .expect("turn progress lock poisoned")
+                .clone();
+            interrupted_outcome(error, session, progress)
+        }
+    }
+}
+
+fn interrupted_outcome(
+    error: anyhow::Error,
+    session: Option<SessionMetadata>,
+    progress: TurnProgress,
+) -> AgentTurnOutcome {
+    let turn = InterruptedAgentTurn {
+        session,
+        usage: progress.usage,
+        rounds: progress.rounds,
+        error,
+    };
+    if turn.error.downcast_ref::<TurnCancelled>().is_some() {
+        AgentTurnOutcome::Aborted(turn)
+    } else {
+        AgentTurnOutcome::Failed(turn)
     }
 }
 
@@ -426,5 +633,47 @@ mod tests {
         let stored = repository.open(&sessions[0].id).unwrap();
         assert_eq!(stored.messages().len(), 1);
         assert_eq!(stored.messages()[0].message.role, Role::User);
+    }
+
+    #[tokio::test]
+    async fn structured_outcome_keeps_cancelled_session_identity_and_progress() {
+        let workspace = tempdir().unwrap();
+        let repository = Arc::new(MemorySessionRepository::new());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let executor = TurnExecutor::builder(PendingProvider {
+            started: Arc::clone(&started),
+        })
+        .workspace(workspace.path())
+        .registry(ToolRegistry::default())
+        .build()
+        .unwrap();
+        let agent = Agent::new(executor, AgentConfig::new("test-model"));
+        let context = TurnExecutionContext::new();
+        let cancellation = context.clone();
+        let repository_for_run = Arc::clone(&repository);
+
+        let run = tokio::spawn(async move {
+            agent
+                .run_with_session_outcome(
+                    repository_for_run.as_ref(),
+                    SessionSelection::New,
+                    "question",
+                    Arc::new(()),
+                    context,
+                )
+                .await
+        });
+        started.notified().await;
+        cancellation.cancel("stop from tui");
+
+        let outcome = run.await.unwrap();
+        let AgentTurnOutcome::Aborted(interrupted) = outcome else {
+            panic!("expected aborted outcome");
+        };
+        let session = interrupted.session.expect("cancelled session metadata");
+        assert_eq!(session.title.as_deref(), Some("question"));
+        assert_eq!(interrupted.rounds, 1);
+        assert!(interrupted.error.downcast_ref::<TurnCancelled>().is_some());
+        assert_eq!(repository.open(&session.id).unwrap().messages().len(), 1);
     }
 }

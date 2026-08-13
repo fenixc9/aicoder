@@ -9,6 +9,8 @@ are separate crates.
 - aicoder-core: the low-level TurnExecutor plus the session-aware Agent API,
   model client, events, tools, and session repositories.
 - aicoder-cli: current command-line application.
+- aicoder-tui: interactive Ratatui frontend with sessions, streaming output,
+  tool approvals, execution status, and cooperative cancellation.
 - aicoder-eval: isolated evaluation runner, deterministic evaluators,
   SWE-bench adapter, batch runner, and official harness integration.
 
@@ -32,6 +34,24 @@ returns a downcastable `TurnCancelled` error.
 
 Runtime prerequisites are Git, Bash, and ripgrep (`rg`). The SWE-bench grading
 subcommand additionally requires the official Python package and Docker.
+
+## TUI
+
+Set an OpenAI-compatible API key and optional endpoint, then start the TUI from
+the workspace you want the agent to edit:
+
+~~~bash
+export OPENAI_API_KEY=...
+export OPENAI_API_BASE=https://api.openai.com/v1
+cargo run -p aicoder-tui -- --workspace . --model gpt-4o
+~~~
+
+Use `Tab` to switch between the session list and input, `Enter` to send or open
+a session, and `j`/`k` to navigate sessions. `n` creates a new conversation and
+`d` deletes the selected session after confirmation. During a run, `Esc`
+cancels the active model request, approval, or tool execution. Approval dialogs
+accept `y` or `n`; `Ctrl-C` cancels an active turn or exits while idle. TUI logs
+are written to `$AICODER_HOME/tui.log` or `~/.aicoder/tui.log`.
 
 ## Verification
 

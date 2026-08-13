@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex};
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentRawEvent, AgentRunState, ChatCompletionProvider, ContextWindowConfig,
-    PruningContextCompactor, SessionSelection, TurnCancelled, TurnExecutionContext, TurnExecutor,
+    Agent, AgentConfig, AgentRawEvent, AgentRunState, AgentTurnOutcome, ChatCompletionProvider,
+    ContextWindowConfig, PruningContextCompactor, SessionSelection, TurnCancelled,
+    TurnExecutionContext, TurnExecutor,
     session::{MemorySessionRepository, SessionRepository},
     tools::ToolRegistry,
     types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role},
@@ -194,4 +195,32 @@ async fn external_application_can_cancel_a_turn() {
         error.downcast_ref::<TurnCancelled>().unwrap().reason(),
         "application shutdown"
     );
+}
+
+#[tokio::test]
+async fn external_application_can_observe_a_structured_cancelled_outcome() {
+    let workspace = tempdir().unwrap();
+    let turn_executor = TurnExecutor::builder(StaticProvider)
+        .workspace(workspace.path())
+        .registry(ToolRegistry::default())
+        .build()
+        .unwrap();
+    let agent = Agent::new(turn_executor, AgentConfig::new("test-model"));
+    let context = TurnExecutionContext::new();
+    context.cancel("frontend cancelled");
+
+    let outcome = agent.run_outcome("question", Arc::new(()), context).await;
+
+    let AgentTurnOutcome::Aborted(interrupted) = outcome else {
+        panic!("expected aborted outcome");
+    };
+    assert_eq!(
+        interrupted
+            .error
+            .downcast_ref::<TurnCancelled>()
+            .unwrap()
+            .reason(),
+        "frontend cancelled"
+    );
+    assert_eq!(interrupted.rounds, 0);
 }

@@ -57,6 +57,18 @@
 - [ ] CLI 将 Ctrl-C 接入协作式取消
 - [ ] 展示模型轮次、工具调用、耗时和结果摘要
 
+## P1：TUI
+
+- [x] 独立 `aicoder-tui` crate，采用单向 AppEvent/reducer 架构
+- [x] 支持 Session 列表、新建、打开和确认删除
+- [x] 支持流式 content/reasoning、工具参数/结果、状态、Usage 和耗时展示
+- [x] 支持工具审批弹窗、单 active turn 和协作式取消
+- [x] 异常退出恢复终端，日志写入文件而不污染界面
+- [ ] 增加多行输入、输入历史和更完整的滚动选择状态
+- [ ] 增加 Session 重命名、搜索和工作区切换
+- [ ] 增加 git status/diff 专用视图及文件编辑审批 diff
+- [ ] 增加设置页并统一 CLI/TUI 配置加载
+
 ## P2：项目配置与提示词
 
 - [ ] 支持 `.aicoder.toml` 项目级配置

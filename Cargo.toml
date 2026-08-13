@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["crates/aicoder-cli", "crates/aicoder-eval"]
+members = ["crates/aicoder-cli", "crates/aicoder-eval", "crates/aicoder-tui"]
 resolver = "3"
 
 [dependencies]
