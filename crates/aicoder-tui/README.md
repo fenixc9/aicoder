@@ -13,6 +13,8 @@ cargo run -p aicoder-tui -- --workspace . --model "$OPENAI_MODEL"
 
 Environment variables follow `ChatClient::from_env`: set an API key such as
 `OPENAI_API_KEY` or `DEEPSEEK_API_KEY`, and optionally `OPENAI_API_BASE`.
+The TUI loads `.env` from the current directory search path, then falls back to
+`crates/aicoder-tui/.env` and the existing `crates/aicoder-cli/.env`.
 Sessions and logs live under `AICODER_HOME` when set, otherwise `~/.aicoder`.
 
 The first release intentionally permits one active turn. This keeps session

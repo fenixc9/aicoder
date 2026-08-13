@@ -244,9 +244,29 @@ fn handle_input_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) {
 fn load_dotenv() -> Result<()> {
     match dotenvy::dotenv() {
         Ok(_) => Ok(()),
-        Err(error) if error.not_found() => Ok(()),
+        Err(error) if error.not_found() => {
+            // `cargo run` is commonly invoked from the workspace root, where dotenvy's
+            // directory search cannot see crate-local files. Prefer the TUI file and keep the
+            // existing CLI file as a compatibility fallback for current installations.
+            for path in crate_env_paths() {
+                if path.is_file() {
+                    dotenvy::from_path(&path)
+                        .with_context(|| format!("Failed to load {}", path.display()))?;
+                    break;
+                }
+            }
+            Ok(())
+        }
         Err(error) => Err(error).context("Failed to load .env"),
     }
+}
+
+fn crate_env_paths() -> [PathBuf; 2] {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    [
+        manifest.join(".env"),
+        manifest.join("..").join("aicoder-cli").join(".env"),
+    ]
 }
 
 fn session_root() -> Result<PathBuf> {
@@ -283,4 +303,32 @@ fn init_logging() -> Result<()> {
 #[allow(dead_code)]
 fn _is_inside(path: &Path, root: &Path) -> bool {
     path.starts_with(root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dotenv_fallback_prefers_tui_then_existing_cli_file() {
+        let paths = crate_env_paths();
+        assert_eq!(
+            paths[0].file_name().and_then(|name| name.to_str()),
+            Some(".env")
+        );
+        assert_eq!(
+            paths[0]
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
+            Some("aicoder-tui")
+        );
+        assert_eq!(
+            paths[1]
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str()),
+            Some("aicoder-cli")
+        );
+    }
 }
