@@ -34,6 +34,10 @@ struct Cli {
 
     #[arg(long, value_name = "TOKENS")]
     context_window: Option<usize>,
+
+    /// Open an existing session by its full ID.
+    #[arg(long, value_name = "ID")]
+    session: Option<String>,
 }
 
 struct TerminalGuard;
@@ -77,7 +81,16 @@ async fn main() -> Result<()> {
         cli.context_window,
         sender,
     )?;
-    let app = App::new(runtime.sessions()?);
+    let mut app = App::new(runtime.sessions()?);
+    if let Some(session_id) = cli.session {
+        let session = runtime.open_session(&session_id)?;
+        app.selected_session = app
+            .sessions
+            .iter()
+            .position(|candidate| candidate.id == session_id)
+            .context("Selected session is missing from the workspace session list")?;
+        app.load_session(&session);
+    }
 
     let _guard = TerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
@@ -329,6 +342,23 @@ mod tests {
                 .and_then(Path::file_name)
                 .and_then(|name| name.to_str()),
             Some("aicoder-cli")
+        );
+    }
+
+    #[test]
+    fn cli_accepts_an_existing_session_id() {
+        let cli = Cli::try_parse_from([
+            "aicoder-tui",
+            "--workspace",
+            ".",
+            "--session",
+            "58ed33e6-26fc-4688-81ad-909d63af5ad7",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.session.as_deref(),
+            Some("58ed33e6-26fc-4688-81ad-909d63af5ad7")
         );
     }
 }

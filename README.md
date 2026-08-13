@@ -46,6 +46,8 @@ export OPENAI_API_BASE=https://api.openai.com/v1
 cargo run -p aicoder-tui -- --workspace . --model gpt-4o
 ~~~
 
+Pass `--session <ID>` to open an existing session for the selected workspace.
+
 Use `Tab` to switch between the session list and input, `Enter` to send or open
 a session, and `j`/`k` to navigate sessions. `n` creates a new conversation and
 `d` deletes the selected session after confirmation. During a run, `Esc`

@@ -11,6 +11,12 @@ Run from the repository root:
 cargo run -p aicoder-tui -- --workspace . --model "$OPENAI_MODEL"
 ~~~
 
+Open a known session directly with its full ID:
+
+~~~bash
+cargo run -p aicoder-tui -- --workspace . --session <SESSION_ID>
+~~~
+
 Environment variables follow `ChatClient::from_env`: set an API key such as
 `OPENAI_API_KEY` or `DEEPSEEK_API_KEY`, and optionally `OPENAI_API_BASE`.
 The TUI loads `.env` from the current directory search path, then falls back to

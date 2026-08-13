@@ -7,7 +7,7 @@ use aicoder_core::{
     session::{JsonlSessionRepository, Session, SessionInfo, SessionRepository},
     tools::{ApprovalHandler, ToolInvocation},
 };
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 
@@ -111,7 +111,15 @@ impl AgentRuntime {
     }
 
     pub fn open_session(&self, id: &str) -> Result<Session> {
-        self.repository.open(id)
+        let session = self.repository.open(id)?;
+        ensure!(
+            session.metadata().cwd == self.workspace,
+            "Session {} belongs to workspace {}, not {}",
+            session.metadata().id,
+            session.metadata().cwd.display(),
+            self.workspace.display()
+        );
+        Ok(session)
     }
 
     pub fn delete_session(&self, id: &str) -> Result<()> {
