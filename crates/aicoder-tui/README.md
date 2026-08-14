@@ -23,7 +23,10 @@ The TUI loads `.env` from the current directory search path, then falls back to
 `crates/aicoder-tui/.env` and the existing `crates/aicoder-cli/.env`.
 Sessions and logs live under `AICODER_HOME` when set, otherwise `~/.aicoder`.
 
-Submit `/exit` in the input to close the TUI without starting an agent turn.
+Type `/` to open the command list and keep typing to filter it. Use Up/Down to
+select, Tab to complete, Enter to run, and Esc to dismiss the list. The command
+registry currently provides `/exit`, which closes the TUI without starting an
+agent turn.
 
 The first release intentionally permits one active turn. This keeps session
 writes ordered and makes cancellation deterministic. The UI disables prompt

@@ -188,6 +188,9 @@ fn handle_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) -> Result<()
         return Ok(());
     }
     match key.code {
+        KeyCode::Tab if app.focus == Focus::Input && app.selected_slash_command().is_some() => {
+            app.complete_selected_slash_command();
+        }
         KeyCode::Tab => {
             app.focus = match app.focus {
                 Focus::Sessions => Focus::Input,
@@ -230,7 +233,11 @@ fn handle_session_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) -> R
 fn handle_input_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) {
     match key.code {
         KeyCode::Enter => {
+            if app.selected_slash_command().is_some() {
+                app.complete_selected_slash_command();
+            }
             let prompt = app.input.take();
+            app.slash_input_changed();
             if prompt.trim().is_empty() {
                 return;
             }
@@ -246,10 +253,20 @@ fn handle_input_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) {
             if !key.modifiers.contains(KeyModifiers::CONTROL)
                 && !key.modifiers.contains(KeyModifiers::ALT) =>
         {
-            app.input.insert(character)
+            app.input.insert(character);
+            app.slash_input_changed();
         }
-        KeyCode::Backspace => app.input.backspace(),
-        KeyCode::Delete => app.input.delete(),
+        KeyCode::Backspace => {
+            app.input.backspace();
+            app.slash_input_changed();
+        }
+        KeyCode::Delete => {
+            app.input.delete();
+            app.slash_input_changed();
+        }
+        KeyCode::Up if !app.slash_suggestions().is_empty() => app.select_previous_slash_command(),
+        KeyCode::Down if !app.slash_suggestions().is_empty() => app.select_next_slash_command(),
+        KeyCode::Esc if !app.slash_suggestions().is_empty() => app.dismiss_slash_menu(),
         KeyCode::Left => app.input.move_left(),
         KeyCode::Right => app.input.move_right(),
         KeyCode::Home => app.input.move_home(),
@@ -401,5 +418,22 @@ mod tests {
             app.timeline.as_slice(),
             [TimelineItem::Error(message)] if message == "Unknown command: /missing"
         ));
+    }
+
+    #[test]
+    fn tab_completion_replaces_the_query_and_closes_the_menu() {
+        let mut app = App::new(Vec::new());
+        for character in "/ex".chars() {
+            app.input.insert(character);
+        }
+
+        assert!(app.complete_selected_slash_command());
+
+        assert_eq!(app.input.value(), "/exit");
+        assert!(app.slash_suggestions().is_empty());
+        assert_eq!(
+            commands::parse(app.input.value()),
+            Some(Ok(commands::SlashCommand::Exit))
+        );
     }
 }

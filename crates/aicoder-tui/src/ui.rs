@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 use crate::app::{App, Focus, TimelineItem};
@@ -48,11 +48,59 @@ pub fn draw(frame: &mut Frame<'_>, app: &App, model: &str) {
     draw_timeline(frame, app, body[1]);
     draw_input(frame, app, vertical[1]);
     draw_status(frame, app, model, vertical[2]);
+    draw_slash_menu(frame, app, vertical[1]);
     if app.approval.is_some() {
         draw_approval(frame, app, area);
     } else if app.confirm_delete {
         draw_delete_confirmation(frame, app, area);
     }
+}
+
+fn draw_slash_menu(frame: &mut Frame<'_>, app: &App, input_area: Rect) {
+    let suggestions = app.slash_suggestions();
+    if suggestions.is_empty() {
+        return;
+    }
+
+    let height = u16::try_from(suggestions.len()).unwrap_or(u16::MAX).min(6) + 2;
+    let area = Rect {
+        x: input_area.x,
+        y: input_area.y.saturating_sub(height),
+        width: input_area.width.min(72),
+        height,
+    };
+    let items = suggestions.iter().enumerate().map(|(index, spec)| {
+        let selected = index == app.slash_selection();
+        let style = if selected {
+            Style::default().fg(Color::Black).bg(ACCENT)
+        } else {
+            Style::default()
+        };
+        ListItem::new(Line::from(vec![
+            Span::styled(
+                format!(" {:<14}", spec.usage),
+                style.add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(spec.description, style),
+        ]))
+        .style(style)
+    });
+    frame.render_widget(Clear, area);
+    let mut state = ListState::default().with_selected(Some(app.slash_selection()));
+    frame.render_stateful_widget(
+        List::new(items).block(
+            Block::default()
+                .title(" Commands ")
+                .title_bottom(
+                    Line::from(" Up/Down select  Enter run  Tab complete  Esc close ")
+                        .right_aligned(),
+                )
+                .borders(Borders::ALL)
+                .border_style(border(true)),
+        ),
+        area,
+        &mut state,
+    );
 }
 
 fn draw_sessions(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -372,5 +420,28 @@ mod tests {
         assert!(rendered.contains("Conversation"));
         assert!(rendered.contains("Input"));
         assert!(rendered.contains("test-model"));
+    }
+
+    #[test]
+    fn renders_filtered_slash_command_menu() {
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(Vec::new());
+        app.input.insert('/');
+
+        terminal
+            .draw(|frame| draw(frame, &app, "test-model"))
+            .unwrap();
+
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("Commands"));
+        assert!(rendered.contains("/exit"));
+        assert!(rendered.contains("Exit the TUI"));
     }
 }

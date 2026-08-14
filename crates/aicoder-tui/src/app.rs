@@ -13,6 +13,8 @@ use aicoder_core::{
 use tokio::sync::oneshot;
 use unicode_width::UnicodeWidthStr;
 
+use crate::commands::{self, CommandSpec};
+
 pub enum AppEvent {
     Agent(AgentRawEventEnvelope),
     Approval {
@@ -72,6 +74,11 @@ impl InputBuffer {
     pub fn insert(&mut self, character: char) {
         self.value.insert(self.cursor, character);
         self.cursor += character.len_utf8();
+    }
+
+    pub fn replace(&mut self, value: String) {
+        self.cursor = value.len();
+        self.value = value;
     }
 
     pub fn backspace(&mut self) {
@@ -146,6 +153,8 @@ pub struct App {
     pub confirm_delete: bool,
     pub should_quit: bool,
     pub scroll_back: u16,
+    slash_selection: usize,
+    slash_menu_dismissed: bool,
     tool_indexes: HashMap<String, usize>,
 }
 
@@ -168,12 +177,68 @@ impl App {
             confirm_delete: false,
             should_quit: false,
             scroll_back: 0,
+            slash_selection: 0,
+            slash_menu_dismissed: false,
             tool_indexes: HashMap::new(),
         }
     }
 
     pub fn is_running(&self) -> bool {
         self.active_context.is_some()
+    }
+
+    pub fn slash_suggestions(&self) -> Vec<&'static CommandSpec> {
+        if self.slash_menu_dismissed || self.focus != Focus::Input || self.is_running() {
+            return Vec::new();
+        }
+        commands::suggestions(self.input.value())
+    }
+
+    pub fn selected_slash_command(&self) -> Option<&'static CommandSpec> {
+        let suggestions = self.slash_suggestions();
+        suggestions
+            .get(
+                self.slash_selection
+                    .min(suggestions.len().saturating_sub(1)),
+            )
+            .copied()
+    }
+
+    pub fn slash_selection(&self) -> usize {
+        self.slash_selection
+    }
+
+    pub fn complete_selected_slash_command(&mut self) -> bool {
+        let Some(spec) = self.selected_slash_command() else {
+            return false;
+        };
+        self.input.replace(commands::completion(spec));
+        self.slash_selection = 0;
+        self.slash_menu_dismissed = true;
+        true
+    }
+
+    pub fn select_next_slash_command(&mut self) {
+        let count = self.slash_suggestions().len();
+        if count > 0 {
+            self.slash_selection = (self.slash_selection + 1) % count;
+        }
+    }
+
+    pub fn select_previous_slash_command(&mut self) {
+        let count = self.slash_suggestions().len();
+        if count > 0 {
+            self.slash_selection = (self.slash_selection + count - 1) % count;
+        }
+    }
+
+    pub fn slash_input_changed(&mut self) {
+        self.slash_selection = 0;
+        self.slash_menu_dismissed = false;
+    }
+
+    pub fn dismiss_slash_menu(&mut self) {
+        self.slash_menu_dismissed = true;
     }
 
     pub fn begin_turn(&mut self, prompt: String, context: TurnExecutionContext) {
@@ -484,6 +549,21 @@ mod tests {
         assert_eq!(input.value(), "你a");
         input.delete();
         assert_eq!(input.value(), "你");
+    }
+
+    #[test]
+    fn slash_menu_tracks_filtering_selection_and_dismissal() {
+        let mut app = App::new(Vec::new());
+        app.input.insert('/');
+        assert_eq!(app.slash_suggestions().len(), 1);
+        assert_eq!(app.selected_slash_command().unwrap().name, "exit");
+
+        app.dismiss_slash_menu();
+        assert!(app.slash_suggestions().is_empty());
+
+        app.input.insert('e');
+        app.slash_input_changed();
+        assert_eq!(app.selected_slash_command().unwrap().name, "exit");
     }
 
     #[test]
