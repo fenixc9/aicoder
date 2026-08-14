@@ -1,4 +1,5 @@
 mod app;
+mod commands;
 mod runtime;
 mod ui;
 
@@ -11,7 +12,7 @@ use std::{
 
 use aicoder_core::TurnExecutionContext;
 use anyhow::{Context, Result, ensure};
-use app::{App, AppEvent, Focus};
+use app::{App, AppEvent, Focus, TimelineItem};
 use clap::Parser;
 use crossterm::{
     event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -233,6 +234,9 @@ fn handle_input_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) {
             if prompt.trim().is_empty() {
                 return;
             }
+            if handle_slash_command(app, &prompt) {
+                return;
+            }
             let selection = app.session_selection.clone();
             let context = TurnExecutionContext::new();
             runtime.start_turn(selection, prompt.clone(), context.clone());
@@ -252,6 +256,20 @@ fn handle_input_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) {
         KeyCode::End => app.input.move_end(),
         _ => {}
     }
+}
+
+fn handle_slash_command(app: &mut App, input: &str) -> bool {
+    let Some(command) = commands::parse(input) else {
+        return false;
+    };
+    match command {
+        Ok(commands::SlashCommand::Exit) => app.should_quit = true,
+        Err(error) => {
+            app.timeline.push(TimelineItem::Error(error.to_string()));
+            app.scroll_back = 0;
+        }
+    }
+    true
 }
 
 fn load_dotenv() -> Result<()> {
@@ -360,5 +378,28 @@ mod tests {
             cli.session.as_deref(),
             Some("58ed33e6-26fc-4688-81ad-909d63af5ad7")
         );
+    }
+
+    #[test]
+    fn exit_command_quits_without_creating_a_timeline_message() {
+        let mut app = App::new(Vec::new());
+
+        assert!(handle_slash_command(&mut app, "/exit"));
+
+        assert!(app.should_quit);
+        assert!(app.timeline.is_empty());
+    }
+
+    #[test]
+    fn unknown_slash_command_is_not_sent_to_the_agent() {
+        let mut app = App::new(Vec::new());
+
+        assert!(handle_slash_command(&mut app, "/missing"));
+
+        assert!(!app.should_quit);
+        assert!(matches!(
+            app.timeline.as_slice(),
+            [TimelineItem::Error(message)] if message == "Unknown command: /missing"
+        ));
     }
 }
