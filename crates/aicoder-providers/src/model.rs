@@ -18,8 +18,9 @@ impl ChatClient {
     /// Overrides model metadata or registers an additional model on this endpoint.
     /// Metadata is declarative, not an assertion that an arbitrary compatible server implements it.
     pub fn register_model(&mut self, spec: ModelSpec) -> Result<(), ProviderError> {
-        if spec.provider != PROVIDER {
-            return Err(error(
+        if spec.provider != self.config.provider_id {
+            return Err(ProviderError::new(
+                &self.config.provider_id,
                 ProviderErrorKind::InvalidRequest,
                 "model belongs to another provider",
             ));
@@ -31,16 +32,17 @@ impl ChatClient {
 #[async_trait]
 impl ModelProvider for ChatClient {
     fn model_spec(&self, model: &str) -> Result<ModelSpec, ProviderError> {
-        if let Some(spec) = self.models.get(PROVIDER, model) {
+        if let Some(spec) = self.models.get(&self.config.provider_id, model) {
             return Ok(spec.clone());
         }
         if model != self.config.model {
-            return Err(error(
+            return Err(ProviderError::new(
+                &self.config.provider_id,
                 ProviderErrorKind::ModelNotFound,
                 format!("Model {model} is not registered"),
             ));
         }
-        let mut spec = ModelSpec::new(PROVIDER, model);
+        let mut spec = ModelSpec::new(&self.config.provider_id, model);
         // Common chat-completions protocol profile. Hosts can register a more restrictive spec.
         spec.capabilities = ModelCapabilities {
             tools: true,
@@ -51,6 +53,19 @@ impl ModelProvider for ChatClient {
             structured_output: true,
             ..Default::default()
         };
+        match self.config.compatibility {
+            crate::CompatibilityProfile::Generic => {}
+            crate::CompatibilityProfile::DeepseekThinking => {
+                spec.capabilities.reasoning_history = true;
+                spec.capabilities.temperature = false;
+                spec.capabilities.top_p = false;
+                spec.capabilities.seed = false;
+            }
+            crate::CompatibilityProfile::DeepseekChat => {
+                spec.capabilities.top_p = false;
+                spec.capabilities.seed = false;
+            }
+        }
         Ok(spec)
     }
 
@@ -60,14 +75,26 @@ impl ModelProvider for ChatClient {
         events: Arc<dyn ModelEventSink>,
         context: TurnExecutionContext,
     ) -> Result<ModelResponse, ProviderError> {
-        let result = async {
+        let mut result = async {
             if context.is_cancelled() {
                 return Err(error(ProviderErrorKind::Cancelled, context.reason()));
             }
             let spec = self.model_spec(&request.model)?;
             request.validate(&spec)?;
             let stream = request.stream;
-            let body = encode_request(request)?;
+            if self.config.compatibility==crate::CompatibilityProfile::DeepseekThinking && matches!(request.tool_choice,ModelToolChoice::Required|ModelToolChoice::Named(_)) {
+                return Err(error(ProviderErrorKind::Unsupported,"DeepSeek thinking mode does not support required or named tool choice"));
+            }
+            if self.config.compatibility!=crate::CompatibilityProfile::Generic && matches!(request.options.response_format,Some(ResponseFormat::JsonSchema {..})) {return Err(error(ProviderErrorKind::Unsupported,"DeepSeek compatibility profiles support JSON object output, not JSON Schema output"));}
+            let mut body = encode_request(request)?;
+            match self.config.compatibility {
+                crate::CompatibilityProfile::Generic=>{},
+                crate::CompatibilityProfile::DeepseekThinking=>{
+                    body["thinking"]=json!({"type":"enabled"});body["reasoning_effort"]=json!("high");
+                    for message in body["messages"].as_array_mut().unwrap() {if message["role"]=="assistant"&&message.get("reasoning_content").is_none() {message["reasoning_content"]=json!("");}}
+                }
+                crate::CompatibilityProfile::DeepseekChat=>body["thinking"]=json!({"type":"disabled"}),
+            }
             events.emit(ModelEvent::Started);
             let sink = NormalizedSink {
                 events: events.clone(),
@@ -104,6 +131,9 @@ impl ModelProvider for ChatClient {
             Ok(response)
         }
         .await;
+        if let Err(error) = &mut result {
+            error.provider = self.config.provider_id.clone();
+        }
         if let Err(error) = &result {
             events.emit(ModelEvent::Aborted {
                 message: error.to_string(),
@@ -499,7 +529,7 @@ pub(crate) fn transport_error(message: impl AsRef<str>) -> ProviderError {
 
 pub(crate) fn http_error(status: reqwest::StatusCode, message: impl AsRef<str>) -> ProviderError {
     let kind = match status.as_u16() {
-        401 | 403 => ProviderErrorKind::Authentication,
+        401 | 403 | 407 => ProviderErrorKind::Authentication,
         429 => ProviderErrorKind::RateLimited,
         408 | 500..=599 => ProviderErrorKind::Transport,
         _ => ProviderErrorKind::InvalidRequest,

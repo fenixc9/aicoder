@@ -248,8 +248,8 @@ async fn main() -> Result<()> {
     } else {
         Some(JsonlSessionRepository::new(session_root()?)?)
     };
-    let model = std::env::var("OPENAI_MODEL").unwrap_or_else(|_| "deepseek-v4-flash".to_string());
-    let client = ChatClient::from_env(&model)?;
+    let client = ChatClient::from_env_model(None)?;
+    let model = client.model().to_string();
     let builder = TurnExecutor::builder(client)
         .workspace(&cli.workspace)
         .config(TurnExecutionConfig {
@@ -284,8 +284,6 @@ async fn main() -> Result<()> {
                 .to_string(),
         ),
         options: aicoder_core::model::ModelOptions {
-            temperature: Some(0.7),
-            top_p: Some(1.0),
             max_output_tokens: Some(2048),
             ..Default::default()
         },

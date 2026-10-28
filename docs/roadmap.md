@@ -1,9 +1,9 @@
 # aicoder 路线图
 
-状态：S0 已完成；S1 进行中。本文替代旧 TODO 的排期。
+状态：S0、S1 已完成；当前阶段 S2。本文替代旧 TODO 的排期。
 基线和验证依据见 [S0 开发基线](development-baseline.md)。
 S1 的统一模型契约已贯穿执行器、工具、会话、CLI/TUI 和 bench，wire types 已移至
-providers；部分结果与任务预算也已接通，剩余重点是 provider 传输配置。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
+providers；部分结果、任务预算和 provider 配置均已接通。S1 验收见 [验收记录](s1-acceptance.md)。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
 
 ## 1. 产品目标
 
@@ -88,6 +88,7 @@ core 保留接口与数据类型。MCP、Web adapter 和扩展运行时在功能
 | --- | --- | --- |
 | SDK、流式事件、可取消执行 | S1 | CLI/TUI/bench 复用同一契约 |
 | 自定义模型/provider、会话内切换 | S1、S4 | adapter 注入与能力校验；先支持一个协议 |
+| 模型思考级别控制 | S5 | 声明支持级别，界面可设置，不支持时明确诊断 |
 | 文件读写编辑、搜索、shell | S3 | 有界输出、错误可恢复、变更可检查 |
 | 项目指令、系统提示、skills、模板 | S3 | 发现规则、来源和优先级可见，可禁用 |
 | 自动与手动压缩 | S4 | 摘要可持久化、可追溯、失败可恢复 |
@@ -125,11 +126,11 @@ Web 目标是可接入且有可运行示例，不在此路线图中建设完整�
 已交付统一模型主路径：core 无 OpenAI wire types，所有入口使用同一 `ModelProvider`
 循环。新会话存储内容块，旧 v1 会话兼容读写，usage 未知值贯穿 UI 和评测。
 结构化运行结果与轮次/工具/token/时长/输出预算已接通所有入口，验证说明见
-[运行结果与预算](run-outcomes.md)。S1 尚未完成，provider 传输配置仍待验收。
+[运行结果与预算](run-outcomes.md)。S1 已通过 [验收检查](s1-acceptance.md)，下一阶段是 S2。
 
 - [x] 确定内部 Message、ContentBlock、ModelSpec、ProviderError、Usage 类型。
 - [x] 将 OpenAI wire types、HTTP、重试和认证装配从执行循环移出。
-- [ ] 新增 providers crate，先完善 OpenAI-compatible adapter；配置 endpoint、
+- [x] 新增 providers crate，先完善 OpenAI-compatible adapter；配置 endpoint、
   代理、超时及 API key，明确服务兼容差异。
 - [x] 支持模型注册、provider 注入与 capability 查询；预留 Responses/Anthropic 等 adapter。
 - [x] 统一流与非流结果，覆盖碎片工具参数、异常 finish、空回复及连接中断。
@@ -184,7 +185,7 @@ Web 目标是可接入且有可运行示例，不在此路线图中建设完整�
 ### S5：四种入口与 Web 接入示例
 
 - [ ] CLI：stdin/参数输入、单次 print、JSON 事件、REPL、统一配置和 Ctrl-C。
-- [ ] TUI：多行/历史、文件引用、命令面板、模型切换、分支、审批 diff、steer/follow-up，
+- [ ] TUI：多行/历史、文件引用、命令面板、模型切换与思考级别、分支、审批 diff、steer/follow-up，
   展示 usage、上下文占用及可选成本；主题配置保持独立。
 - [ ] 图片内容通过统一消息 API 进入；TUI/CLI 明确文件限制及 provider 能力。
 - [ ] 版本化 stdin/stdout RPC：request ID、控制命令、响应、事件和错误；
@@ -237,4 +238,4 @@ Web 目标是可接入且有可运行示例，不在此路线图中建设完整�
 - 跨 crate 改动通过 fmt、Clippy、workspace tests；公共文档和示例同步更新。
 - 新依赖说明用途与默认构建成本；宿主可选能力不进入 core 的强制依赖。
 - API/会话格式变更写明迁移，旧入口只在迁移期保留；不维护两套独立执行循环。
-- 当前执行 **S1**；按验收结果逐阶段推进，不并行堆叠后续功能。
+- 当前执行 **S2**；按验收结果逐阶段推进，不并行堆叠后续功能。

@@ -163,7 +163,7 @@ pub struct NamedToolFunction {
 
 /// 响应格式
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseType {
     /// 纯文本
     Text,
@@ -174,6 +174,17 @@ pub enum ResponseType {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn response_format_uses_protocol_objects() {
+        assert_eq!(
+            serde_json::to_value(ResponseType::Text).unwrap(),
+            serde_json::json!({"type":"text"})
+        );
+        assert_eq!(
+            serde_json::to_value(ResponseType::JsonObject).unwrap(),
+            serde_json::json!({"type":"json_object"})
+        );
+    }
 
     #[test]
     fn tool_choice_uses_openai_compatible_wire_format() {

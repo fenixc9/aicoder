@@ -580,6 +580,10 @@ pub struct ProviderError {
     pub message: String,
     pub retryable: bool,
     pub http_status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parameter: Option<String>,
 }
 
 impl ProviderError {
@@ -594,6 +598,8 @@ impl ProviderError {
             message: sanitize_text(message.as_ref(), 4096),
             retryable: false,
             http_status: None,
+            code: None,
+            parameter: None,
         }
     }
 }

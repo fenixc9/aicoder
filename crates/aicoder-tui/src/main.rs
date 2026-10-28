@@ -70,15 +70,13 @@ async fn main() -> Result<()> {
         .workspace
         .canonicalize()
         .with_context(|| format!("Failed to resolve workspace {}", cli.workspace.display()))?;
-    let model = cli
-        .model
-        .or_else(|| std::env::var("OPENAI_MODEL").ok())
-        .unwrap_or_else(|| "deepseek-v4-flash".into());
+    let client = aicoder_providers::ChatClient::from_env_model(cli.model.as_deref())?;
+    let model = client.model().to_string();
     let (sender, receiver) = mpsc::unbounded_channel();
     let runtime = AgentRuntime::new(
         workspace,
         session_root()?,
-        model.clone(),
+        client,
         cli.context_window,
         sender,
     )?;

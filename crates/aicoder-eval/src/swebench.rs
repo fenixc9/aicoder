@@ -171,7 +171,7 @@ impl SweBenchAdapter {
                 "and run relevant tests. Do not only describe a patch."
             )
             .to_string(),
-            temperature: Some(0.0),
+            temperature: None,
             max_tokens: Some(4096),
         }
     }
@@ -225,7 +225,6 @@ impl SweBenchAdapter {
             ],
             options: ModelOptions {
                 temperature: self.temperature,
-                top_p: Some(1.0),
                 max_output_tokens: self.max_tokens,
                 ..Default::default()
             },

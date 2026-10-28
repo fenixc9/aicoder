@@ -34,13 +34,14 @@ dependency. See the executable [in-memory example](../crates/aicoder-core/exampl
 
 ## OpenAI-compatible adapter
 
-The configured model has a default chat-completions profile: tools, common
-sampling options and structured output. Image input and reasoning history are
-off by default. Metadata declares compatibility; it does not probe a remote
+The generic profile declares tools, common sampling options and structured
+output. Image input and reasoning history are opt-in there; DeepSeek profiles
+declare the mode-specific history/sampling behavior described in
+[provider configuration](provider-configuration.md). Metadata declares compatibility; it does not probe a remote
 model or guarantee that every server implements the declared protocol.
 
 Use `register_model` to override that fallback or add another model. The spec
-must use provider ID `openai-compatible`; duplicate registrations are rejected.
+must use the client's configured provider ID (`openai-compatible` by SDK default); duplicate registrations are rejected.
 Capabilities should describe the actual endpoint and model. Unknown model IDs
 fail before HTTP. Other adapters can use different provider IDs and profiles.
 
@@ -103,5 +104,5 @@ changes, and [the embedded example](../crates/aicoder-core/examples/embedded_age
 for a full turn with a custom in-memory model, tool and store.
 
 Structured [run outcomes and budgets](run-outcomes.md) are shared across hosts.
-The remaining S1 task is provider proxy/credential configuration. Tree sessions
-and steering remain S2.
+[Provider configuration](provider-configuration.md) completes S1. Tree sessions
+and steering are the next S2 tasks.

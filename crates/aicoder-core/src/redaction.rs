@@ -11,7 +11,7 @@ fn credential_pattern() -> &'static Regex {
     static PATTERN: OnceLock<Regex> = OnceLock::new();
     PATTERN.get_or_init(|| {
         Regex::new(concat!(
-            r"(?i)(?:bearer\s+)[A-Za-z0-9._~+/=-]+",
+            r"(?i)(?:(?:bearer|basic)\s+)[A-Za-z0-9._~+/=-]+",
             r"|\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|AKIA[A-Z0-9]{16})\b",
             r"|\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\b",
             r#"|\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|password)\s*[:=]\s*["']?[^\s,"'&}]+"#,

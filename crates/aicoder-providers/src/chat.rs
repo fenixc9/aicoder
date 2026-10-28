@@ -1,14 +1,10 @@
 //! OpenAI 兼容 API 客户端
-use crate::wire::{
-    ApiError, ChatCompletionRequest, ChatCompletionResponse, StreamChunk, StreamOptions,
-};
+use crate::wire::{ChatCompletionRequest, ChatCompletionResponse, StreamChunk, StreamOptions};
 
 use anyhow::{Context, Result};
 use futures::Stream;
 use reqwest::{Client, StatusCode, header::HeaderMap};
-use serde::{Deserialize, Serialize};
 use std::{
-    fmt,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -20,7 +16,10 @@ use aicoder_core::{
 };
 
 use super::stream::{ChatStreamAccumulator, SseDecoder, SseEvent};
-use crate::ProviderEventSink;
+use crate::{
+    BearerToken, ClientConfig, CredentialProvider, EnvironmentCredential, ProviderEventSink,
+    StaticCredential,
+};
 
 const MAX_ERROR_BODY_BYTES: usize = 8 * 1024;
 const BASE_RETRY_DELAY: Duration = Duration::from_millis(500);
@@ -93,117 +92,102 @@ fn emit_retry(
     }
 }
 
-/// API 客户端配置
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ClientConfig {
-    /// API 基础 URL（如 <https://api.openai.com/v1>）
-    pub base_url: String,
-    /// API 密钥
-    #[serde(skip_serializing)]
-    pub api_key: String,
-    /// 模型名称
-    pub model: String,
-    /// 超时时间（秒）
-    #[serde(default = "default_timeout")]
-    pub timeout: u64,
-    /// 重试次数
-    #[serde(default = "default_max_retries")]
-    pub max_retries: u32,
-}
-
-impl fmt::Debug for ClientConfig {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ClientConfig")
-            .field("base_url", &sanitize_url(&self.base_url))
-            .field("api_key", &"[REDACTED]")
-            .field("model", &sanitize_text(&self.model, 256))
-            .field("timeout", &self.timeout)
-            .field("max_retries", &self.max_retries)
-            .finish()
-    }
-}
-
-fn default_timeout() -> u64 {
-    120
-}
-
-fn default_max_retries() -> u32 {
-    3
-}
-
-impl Default for ClientConfig {
-    fn default() -> Self {
-        Self {
-            base_url: "https://api.openai.com/v1".to_string(),
-            api_key: String::new(),
-            model: "gpt-4o".to_string(),
-            timeout: 120,
-            max_retries: 3,
-        }
-    }
-}
-
 /// OpenAI 兼容 API 客户端
 pub struct ChatClient {
     pub(crate) config: ClientConfig,
     http_client: Client,
+    credentials: Arc<dyn CredentialProvider>,
+    endpoint: reqwest::Url,
+    proxy_secrets: Vec<String>,
     pub(crate) models: aicoder_core::model::ModelRegistry,
 }
 
 impl ChatClient {
     /// 从配置创建客户端
-    pub fn new(config: ClientConfig) -> Result<Self> {
-        if config.api_key.is_empty() {
-            anyhow::bail!("API key is required");
-        }
+    pub fn new(mut config: ClientConfig) -> Result<Self> {
+        let credentials: Arc<dyn CredentialProvider> = if !config.api_key.is_empty() {
+            Arc::new(StaticCredential::new(std::mem::take(&mut config.api_key))?)
+        } else if let Some(variable) = &config.api_key_env {
+            Arc::new(EnvironmentCredential::new(variable.clone())?)
+        } else {
+            return Err(anyhow::anyhow!("API key is required"));
+        };
+        Self::with_credentials(config, credentials)
+    }
 
-        let http_client = Client::builder()
-            .no_proxy()
-            .no_hickory_dns()
+    /// Inject a refreshable credential source; it is invoked for every HTTP attempt.
+    pub fn with_credentials(
+        mut config: ClientConfig,
+        credentials: Arc<dyn CredentialProvider>,
+    ) -> Result<Self> {
+        config.validate()?;
+        let endpoint = config.endpoint()?;
+        config.api_key = String::new();
+        let builder = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(config.timeout))
-            .connect_timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(config.connect_timeout));
+        let proxy_secrets = if matches!(config.proxy, crate::ProxyMode::Auto) {
+            crate::config::system_proxy_secrets(|name| std::env::var(name).ok())
+        } else {
+            Vec::new()
+        };
+        let http_client = config
+            .proxy
+            .apply(builder)?
             .build()
-            .context("Failed to create HTTP client")?;
-
+            .map_err(|_| crate::config::invalid("Failed to create HTTP client"))?;
         Ok(Self {
             config,
             http_client,
+            credentials,
+            endpoint,
+            proxy_secrets,
             models: aicoder_core::model::ModelRegistry::default(),
         })
     }
-
-    /// 创建默认配置（从环境变量读取 API key）
+    pub fn model(&self) -> &str {
+        &self.config.model
+    }
     pub fn from_env(model: &str) -> Result<Self> {
-        let base_url = std::env::var("OPENAI_API_BASE")
-            .or_else(|_| std::env::var("DEEPSEEK_API_BASE"))
-            .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-
-        let api_key = std::env::var("OPENAI_API_KEY")
-            .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
-            .or_else(|_| std::env::var("ANTHROPIC_API_KEY"))
-            .or_else(|_| std::env::var("DASHSCOPE_API_KEY"))
-            .or_else(|_| std::env::var("ZHIPU_API_KEY"))
-            .context(
-                "No API key found. Set OPENAI_API_KEY, DEEPSEEK_API_KEY, or another supported provider key.",
-            )?;
-
-        // 验证 base_url 格式
-        if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
-            anyhow::bail!(
-                "OPENAI_API_BASE must start with http:// or https://, got: {}",
-                sanitize_url(&base_url)
-            );
+        Self::new(ClientConfig::from_env(Some(model))?)
+    }
+    pub fn from_env_model(model: Option<&str>) -> Result<Self> {
+        Self::new(ClientConfig::from_env(model)?)
+    }
+    fn transport_error(&self, message: impl AsRef<str>) -> aicoder_core::model::ProviderError {
+        let mut error = crate::model::transport_error(message);
+        error.provider = self.config.provider_id.clone();
+        error
+    }
+    fn request_error(
+        &self,
+        token: &BearerToken,
+        error: &reqwest::Error,
+        phase: &str,
+        attempt: u32,
+    ) -> aicoder_core::model::ProviderError {
+        let mut result = self.transport_error(format!(
+            "{phase} failed after {attempt} attempt(s): {}{}",
+            if error.is_timeout() {
+                "request timed out: "
+            } else {
+                ""
+            },
+            self.diagnostic(token, &error.to_string(), false)
+        ));
+        result.retryable = is_retryable_transport_error(error);
+        if error.is_timeout() {
+            result.code = Some("timeout".into());
         }
-
-        let config = ClientConfig {
-            base_url,
-            api_key,
-            model: model.to_string(),
-            ..Default::default()
-        };
-
-        Self::new(config)
+        result
+    }
+    fn diagnostic(&self, token: &BearerToken, text: &str, truncated: bool) -> String {
+        let mut text = self.config.proxy.redact(&token.redact(text, truncated));
+        for secret in &self.proxy_secrets {
+            text = crate::credentials::redact_value(&text, secret, truncated);
+        }
+        sanitize_text(&text, 8192)
     }
 
     /// 发起聊天完成请求（非流式）
@@ -228,7 +212,7 @@ impl ChatClient {
         request: serde_json::Value,
         events: Option<&dyn ProviderEventSink>,
     ) -> Result<ChatCompletionResponse> {
-        let url = format!("{}/chat/completions", self.config.base_url);
+        let url = self.endpoint.to_string();
         let request_body = serde_json::to_string(&request)?;
 
         tracing::debug!(
@@ -244,11 +228,15 @@ impl ChatClient {
         let total_attempts = self.config.max_retries.saturating_add(1);
         for attempt in 1..=total_attempts {
             tracing::debug!(attempt, total_attempts, "Starting HTTP attempt");
+            let token = self.credentials.bearer_token().await.map_err(|mut error| {
+                error.provider = self.config.provider_id.clone();
+                error
+            })?;
             let response = match self
                 .http_client
                 .post(&url)
                 .header("Content-Type", "application/json")
-                .header("Authorization", format!("Bearer {}", self.config.api_key))
+                .header("Authorization", token.header())
                 .body(request_body.clone())
                 .send()
                 .await
@@ -256,7 +244,7 @@ impl ChatClient {
                 Ok(response) => response,
                 Err(error) if attempt < total_attempts && is_retryable_transport_error(&error) => {
                     let delay = retry_delay(None, attempt);
-                    let reason = sanitize_text(&error.to_string(), 2048);
+                    let reason = self.diagnostic(&token, &error.to_string(), false);
                     emit_retry(events, attempt + 1, delay, reason.clone());
                     tracing::warn!(
                         attempt,
@@ -269,12 +257,9 @@ impl ChatClient {
                     continue;
                 }
                 Err(error) => {
-                    return Err(crate::model::transport_error(format!(
-                        "HTTP request failed after {} attempt(s): {}",
-                        attempt,
-                        sanitize_text(&error.to_string(), 2048)
-                    ))
-                    .into());
+                    return Err(self
+                        .request_error(&token, &error, "HTTP request", attempt)
+                        .into());
                 }
             };
 
@@ -285,12 +270,21 @@ impl ChatClient {
                 .get("x-request-id")
                 .or_else(|| response.headers().get("openai-request-id"))
                 .and_then(|value| value.to_str().ok())
-                .map(|value| sanitize_text(value, 256));
-            let body = match response.text().await {
+                .map(|value| self.diagnostic(&token, value, false));
+            let body = match read_body(
+                response,
+                if status.is_success() {
+                    self.config.max_response_bytes
+                } else {
+                    MAX_ERROR_BODY_BYTES
+                },
+            )
+            .await
+            {
                 Ok(body) => body,
                 Err(error) if attempt < total_attempts && is_retryable_body_error(&error) => {
                     let delay = delay_from_header.unwrap_or_else(|| retry_delay(None, attempt));
-                    let reason = sanitize_text(&error.to_string(), 2048);
+                    let reason = self.diagnostic(&token, &error.to_string(), false);
                     emit_retry(events, attempt + 1, delay, reason.clone());
                     tracing::warn!(
                         attempt,
@@ -303,15 +297,14 @@ impl ChatClient {
                     continue;
                 }
                 Err(error) => {
-                    return Err(crate::model::transport_error(format!(
-                        "Failed to read response body after {} attempt(s): {}",
-                        attempt,
-                        sanitize_text(&error.to_string(), 2048)
-                    ))
-                    .into());
+                    return Err(self
+                        .request_error(&token, &error, "HTTP response body", attempt)
+                        .into());
                 }
             };
 
+            let (body, truncated) = body;
+            let body_text = String::from_utf8_lossy(&body);
             tracing::debug!(
                 attempt,
                 %status,
@@ -321,10 +314,27 @@ impl ChatClient {
             );
 
             if status.is_success() {
+                if truncated {
+                    return Err(aicoder_core::model::ProviderError::new(
+                        "openai-compatible",
+                        aicoder_core::model::ProviderErrorKind::InvalidResponse,
+                        "HTTP response exceeded max_response_bytes",
+                    )
+                    .into());
+                }
                 let resp: ChatCompletionResponse =
-                    serde_json::from_str(&body).context("Failed to parse response body")?;
+                    serde_json::from_slice(&body).map_err(|error| {
+                        aicoder_core::model::ProviderError::new(
+                            "openai-compatible",
+                            aicoder_core::model::ProviderErrorKind::InvalidResponse,
+                            format!(
+                                "Failed to parse response body: {}",
+                                self.diagnostic(&token, &error.to_string(), false)
+                            ),
+                        )
+                    })?;
                 tracing::debug!(
-                    model = %sanitize_text(&resp.model, 256),
+                    model = %self.diagnostic(&token,&resp.model,false),
                     prompt_tokens = resp.usage.as_ref().map(|u| u.prompt_tokens).unwrap_or(0),
                     completion_tokens = resp
                         .usage
@@ -351,32 +361,13 @@ impl ChatClient {
                 continue;
             }
 
-            if status.is_server_error() {
-                let body = sanitize_text(&body, MAX_ERROR_BODY_BYTES);
-                return Err(crate::model::http_error(
-                    status,
-                    format!(
-                        "Server error (status {}) after {} attempt(s)\nBody: {}",
-                        status, attempt, body
-                    ),
-                )
-                .into());
-            }
-
-            if let Ok(api_err) = serde_json::from_str::<ApiError>(&body) {
-                let error_type = sanitize_text(&api_err.error_type, 256);
-                let message = sanitize_text(&api_err.message, MAX_ERROR_BODY_BYTES);
-                return Err(crate::model::http_error(
-                    status,
-                    format!("API error: {} - {}", error_type, message),
-                )
-                .into());
-            }
-
-            let body = sanitize_text(&body, MAX_ERROR_BODY_BYTES);
-            return Err(crate::model::http_error(
+            return Err(crate::error::response_error(
+                &self.config.provider_id,
                 status,
-                format!("API error (status {}): {}", status, body),
+                &body_text,
+                attempt,
+                truncated,
+                |text| self.diagnostic(&token, text, truncated),
             )
             .into());
         }
@@ -407,11 +398,17 @@ impl ChatClient {
 
     async fn chat_completion_stream_body(
         &self,
-        request: serde_json::Value,
+        mut request: serde_json::Value,
         events: Option<&dyn ProviderEventSink>,
     ) -> Result<impl Stream<Item = Result<StreamChunk>>> {
         use futures::stream::StreamExt;
-        let url = format!("{}/chat/completions", self.config.base_url);
+        if !self.config.stream_usage {
+            request
+                .as_object_mut()
+                .context("invalid request body")?
+                .remove("stream_options");
+        }
+        let url = self.endpoint.to_string();
         let request_body = serde_json::to_string(&request)?;
 
         tracing::debug!(
@@ -424,27 +421,29 @@ impl ChatClient {
         );
 
         let total_attempts = self.config.max_retries.saturating_add(1);
-        let response = self
+        let (response, token) = self
             .send_streaming_request(&url, &request_body, total_attempts, events)
             .await?;
 
         let mut response_stream = response.bytes_stream();
+        let max_response_bytes = self.config.max_response_bytes;
         let parsed_stream = async_stream::try_stream! {
+            let mut response_bytes=0usize;
             let mut decoder = SseDecoder::default();
             let mut done = false;
 
             'streaming: while let Some(result) = response_stream.next().await {
                 let bytes = result.map_err(|error| {
-                    anyhow::Error::from(crate::model::transport_error(format!(
-                        "Stream transport error: {}",
-                        sanitize_text(&error.to_string(), 2048)
-                    )))
+                    anyhow::Error::from(self.request_error(&token,&error,"HTTP stream",1))
                 })?;
-                for event in decoder.push(&bytes)? {
+                let remaining=max_response_bytes.saturating_sub(response_bytes);
+                let allowed=bytes.len().min(remaining);let exceeded=bytes.len()>remaining;
+                response_bytes=response_bytes.saturating_add(allowed);
+                for event in decoder.push(&bytes[..allowed])? {
                     match event {
                         SseEvent::Data(data) => {
                             let chunk = serde_json::from_str::<StreamChunk>(&data)
-                                .context("Failed to parse streaming response event")?;
+                                .map_err(|error|aicoder_core::model::ProviderError::new("openai-compatible",aicoder_core::model::ProviderErrorKind::InvalidResponse,self.diagnostic(&token,&error.to_string(),false)))?;
                             yield chunk;
                         }
                         SseEvent::Done => {
@@ -453,6 +452,7 @@ impl ChatClient {
                         }
                     }
                 }
+                if exceeded {Err(aicoder_core::model::ProviderError::new("openai-compatible",aicoder_core::model::ProviderErrorKind::InvalidResponse,"SSE response exceeded max_response_bytes"))?;}
             }
 
             if !done {
@@ -460,7 +460,7 @@ impl ChatClient {
                     match event {
                         SseEvent::Data(data) => {
                             let chunk = serde_json::from_str::<StreamChunk>(&data)
-                                .context("Failed to parse final streaming response event")?;
+                                .map_err(|error|aicoder_core::model::ProviderError::new("openai-compatible",aicoder_core::model::ProviderErrorKind::InvalidResponse,self.diagnostic(&token,&error.to_string(),false)))?;
                             yield chunk;
                         }
                         SseEvent::Done => break,
@@ -478,13 +478,17 @@ impl ChatClient {
         request_body: &str,
         total_attempts: u32,
         events: Option<&dyn ProviderEventSink>,
-    ) -> Result<reqwest::Response> {
+    ) -> Result<(reqwest::Response, BearerToken)> {
         for attempt in 1..=total_attempts {
             tracing::debug!(attempt, total_attempts, "Starting streaming HTTP attempt");
+            let token = self.credentials.bearer_token().await.map_err(|mut error| {
+                error.provider = self.config.provider_id.clone();
+                error
+            })?;
             let response = match self
                 .http_client
                 .post(url)
-                .header("Authorization", format!("Bearer {}", self.config.api_key))
+                .header("Authorization", token.header())
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
                 .body(request_body.to_string())
@@ -494,13 +498,9 @@ impl ChatClient {
                 Ok(response) => response,
                 Err(error) if attempt < total_attempts && is_retryable_transport_error(&error) => {
                     let delay = retry_delay(None, attempt);
-                    let reason = sanitize_text(&error.to_string(), 2048);
+                    let reason = self.diagnostic(&token, &error.to_string(), false);
                     emit_retry(events, attempt + 1, delay, reason.clone());
-                    tracing::error!(
-                        error = ?error,
-                        attempt,
-                        "Streaming HTTP request failed"
-                    );
+
                     tracing::warn!(
                         attempt,
                         total_attempts,
@@ -512,31 +512,32 @@ impl ChatClient {
                     continue;
                 }
                 Err(error) => {
-                    tracing::error!(
-                        error = ?error,
-                        attempt,
-                        "Streaming HTTP request failed"
-                    );
-                    return Err(crate::model::transport_error(format!(
-                        "Streaming HTTP request failed after {} attempt(s): {}",
-                        attempt,
-                        sanitize_text(&error.to_string(), 2048)
-                    ))
-                    .into());
+                    return Err(self
+                        .request_error(&token, &error, "Streaming HTTP request", attempt)
+                        .into());
                 }
             };
 
             let status = response.status();
             if status.is_success() {
-                return Ok(response);
+                return Ok((response, token));
             }
 
             let delay_from_header = retry_after(response.headers());
-            let body = match response.text().await {
+            let body = match read_body(
+                response,
+                if status.is_success() {
+                    self.config.max_response_bytes
+                } else {
+                    MAX_ERROR_BODY_BYTES
+                },
+            )
+            .await
+            {
                 Ok(body) => body,
                 Err(error) if attempt < total_attempts && is_retryable_body_error(&error) => {
                     let delay = delay_from_header.unwrap_or_else(|| retry_delay(None, attempt));
-                    let reason = sanitize_text(&error.to_string(), 2048);
+                    let reason = self.diagnostic(&token, &error.to_string(), false);
                     emit_retry(events, attempt + 1, delay, reason.clone());
                     tracing::warn!(
                         attempt,
@@ -549,12 +550,9 @@ impl ChatClient {
                     continue;
                 }
                 Err(error) => {
-                    return Err(crate::model::transport_error(format!(
-                        "Failed to read streaming error response after {} attempt(s): {}",
-                        attempt,
-                        sanitize_text(&error.to_string(), 2048)
-                    ))
-                    .into());
+                    return Err(self
+                        .request_error(&token, &error, "Streaming HTTP error body", attempt)
+                        .into());
                 }
             };
 
@@ -572,13 +570,15 @@ impl ChatClient {
                 continue;
             }
 
-            let body = sanitize_text(&body, MAX_ERROR_BODY_BYTES);
-            return Err(crate::model::http_error(
+            let (body, truncated) = body;
+            let body_text = String::from_utf8_lossy(&body);
+            return Err(crate::error::response_error(
+                &self.config.provider_id,
                 status,
-                format!(
-                    "Streaming API error (status {}) after {} attempt(s): {}",
-                    status, attempt, body
-                ),
+                &body_text,
+                attempt,
+                truncated,
+                |text| self.diagnostic(&token, text, truncated),
             )
             .into());
         }
@@ -706,9 +706,29 @@ impl ChatClient {
     }
 }
 
+async fn read_body(
+    response: reqwest::Response,
+    limit: usize,
+) -> std::result::Result<(Vec<u8>, bool), reqwest::Error> {
+    use futures::StreamExt;
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        let remaining = limit.saturating_sub(bytes.len());
+        if chunk.len() > remaining {
+            bytes.extend_from_slice(&chunk[..remaining]);
+            return Ok((bytes, true));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok((bytes, false))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ProxyMode;
     use aicoder_core::events::{AgentEventEmitter, AgentRawEventEnvelope};
     use futures::StreamExt;
     use std::{
@@ -945,6 +965,8 @@ mod tests {
             model: "deepseek-chat".to_string(),
             timeout: 2,
             max_retries,
+            proxy: ProxyMode::Disabled,
+            ..Default::default()
         })
         .unwrap()
     }
@@ -1277,6 +1299,468 @@ mod tests {
         assert_eq!(result.finish_reason, Some(StopReason::Complete));
     }
 
+    #[tokio::test]
+    async fn explicit_proxy_routes_the_request_without_resolving_the_origin() {
+        let (proxy, captured) =
+            spawn_mock_server("200 OK", "application/json", successful_response_body()).await;
+        let config = ClientConfig {
+            base_url: "http://origin.invalid/prefix/v1/".into(),
+            api_key: "proxy-test-token".into(),
+            model: "deepseek-chat".into(),
+            proxy: ProxyMode::Explicit {
+                url: proxy.trim_end_matches("/v1").into(),
+                username: Some("proxy-user".into()),
+                password: Some("proxy-password".into()),
+            },
+            max_retries: 0,
+            ..Default::default()
+        };
+        let response = ChatClient::new(config)
+            .unwrap()
+            .chat_completion(test_request(false))
+            .await
+            .unwrap();
+        assert_eq!(response.model, "deepseek-chat");
+        let request = captured.await.unwrap();
+        assert!(
+            request.starts_with("POST http://origin.invalid/prefix/v1/chat/completions HTTP/1.1")
+        );
+        let lower = request.to_ascii_lowercase();
+        assert!(lower.contains("proxy-authorization: basic "));
+        assert!(lower.contains("authorization: bearer proxy-test-token"));
+    }
+
+    #[tokio::test]
+    async fn credentials_are_refreshed_for_each_retry() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (base_url, captured) = spawn_mock_sequence(vec![
+            MockHttpResponse::new(
+                "429 Too Many Requests",
+                "application/json",
+                r#"{"error":{"message":"retry"}}"#,
+            )
+            .with_header("Retry-After", "0"),
+            MockHttpResponse::new("200 OK", "application/json", successful_response_body()),
+        ])
+        .await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let source = Arc::new(move || {
+            BearerToken::new(if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                "first-token"
+            } else {
+                "second-token"
+            })
+        });
+        let client = ChatClient::with_credentials(
+            ClientConfig {
+                base_url,
+                model: "deepseek-chat".into(),
+                proxy: ProxyMode::Disabled,
+                max_retries: 1,
+                ..Default::default()
+            },
+            source,
+        )
+        .unwrap();
+        client.chat_completion(test_request(false)).await.unwrap();
+        let requests = captured.await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("authorization: bearer first-token")
+        );
+        assert!(
+            requests[1]
+                .to_ascii_lowercase()
+                .contains("authorization: bearer second-token")
+        );
+    }
+
+    #[tokio::test]
+    async fn nested_flat_string_and_plain_errors_keep_typed_details_and_hide_exact_secrets() {
+        use aicoder_core::model::ProviderError;
+        for stream in [false, true] {
+            for (body, code, param) in [
+                (
+                    r#"{"error":{"message":"server echoed plain-private-token","type":"invalid_request_error","code":"bad_key","param":"model"}}"#,
+                    Some("bad_key"),
+                    Some("model"),
+                ),
+                (
+                    r#"{"error_type":"invalid_request_error","message":"plain-private-token","code":400,"param":null}"#,
+                    Some("400"),
+                    None,
+                ),
+                (r#"{"error":"plain-private-token"}"#, None, None),
+                ("plain-private-token", None, None),
+            ] {
+                let (base_url, _) =
+                    spawn_mock_server("400 Bad Request", "application/json", body).await;
+                let client = ChatClient::new(ClientConfig {
+                    base_url,
+                    api_key: "plain-private-token".into(),
+                    proxy: ProxyMode::Disabled,
+                    max_retries: 0,
+                    ..Default::default()
+                })
+                .unwrap();
+                let error = if stream {
+                    client
+                        .chat_completion_stream_collect(test_request(true))
+                        .await
+                        .unwrap_err()
+                } else {
+                    client
+                        .chat_completion(test_request(false))
+                        .await
+                        .unwrap_err()
+                };
+                let error = error.downcast_ref::<ProviderError>().unwrap();
+                assert_eq!(error.http_status, Some(400));
+                assert_eq!(error.code.as_deref(), code);
+                assert_eq!(error.parameter.as_deref(), param);
+                assert!(!error.message.contains("plain-private-token"));
+                assert!(error.message.contains("[REDACTED]"));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn response_limits_apply_to_success_and_error_bodies() {
+        use aicoder_core::model::{ProviderError, ProviderErrorKind};
+        let (base_url, _) =
+            spawn_mock_server("200 OK", "application/json", successful_response_body()).await;
+        let client = ChatClient::new(ClientConfig {
+            base_url,
+            api_key: "test-key".into(),
+            proxy: ProxyMode::Disabled,
+            max_retries: 0,
+            max_response_bytes: 32,
+            ..Default::default()
+        })
+        .unwrap();
+        let error = client
+            .chat_completion(test_request(false))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<ProviderError>().unwrap().kind,
+            ProviderErrorKind::InvalidResponse
+        );
+        let body = "x".repeat(MAX_ERROR_BODY_BYTES + 1024);
+        let (base_url, _) = spawn_mock_server("502 Bad Gateway", "text/plain", &body).await;
+        let error = test_client(base_url)
+            .chat_completion(test_request(false))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("truncated"));
+        assert!(error.to_string().len() <= 4096);
+    }
+
+    #[tokio::test]
+    async fn stream_options_can_be_disabled_and_byte_limits_preserve_complete_prefix_events() {
+        use aicoder_core::model::*;
+        let prefix = "data: {\"id\":\"s\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n";
+        let body = format!(
+            "{prefix}data: {}\n\n",
+            serde_json::json!({"id":"s","object":"chat.completion.chunk","created":1,"model":"deepseek-chat","choices":[{"index":0,"delta":{"content":"x".repeat(1024)},"finish_reason":"stop"}]})
+        );
+        let (base_url, captured) = spawn_mock_server("200 OK", "text/event-stream", &body).await;
+        let client = ChatClient::new(ClientConfig {
+            base_url,
+            api_key: "test-key".into(),
+            model: "deepseek-chat".into(),
+            proxy: ProxyMode::Disabled,
+            max_retries: 0,
+            stream_usage: false,
+            max_response_bytes: prefix.len() + 4,
+            ..Default::default()
+        })
+        .unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let target = events.clone();
+        let error = client
+            .generate(
+                ModelRequest::new(
+                    "deepseek-chat",
+                    vec![Message::text(MessageRole::User, "hello")],
+                ),
+                Arc::new(move |event| target.lock().unwrap().push(event)),
+                TurnExecutionContext::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::InvalidResponse);
+        let request = captured.await.unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert!(body.get("stream_options").is_none());
+        let events = events.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event,ModelEvent::TextDelta {delta} if delta=="partial"))
+        );
+        assert!(matches!(events.last(), Some(ModelEvent::Aborted { .. })));
+    }
+
+    #[tokio::test]
+    async fn deepseek_thinking_preserves_reasoning_and_declares_unsupported_options() {
+        use aicoder_core::model::*;
+        let (base_url, captured) =
+            spawn_mock_server("200 OK", "application/json", successful_response_body()).await;
+        let client = ChatClient::new(ClientConfig {
+            base_url,
+            api_key: "test-key".into(),
+            model: "deepseek-chat".into(),
+            proxy: ProxyMode::Disabled,
+            max_retries: 0,
+            compatibility: crate::CompatibilityProfile::DeepseekThinking,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut request = ModelRequest::new(
+            "deepseek-chat",
+            vec![
+                Message::text(MessageRole::User, "first"),
+                Message {
+                    role: MessageRole::Assistant,
+                    content: vec![
+                        ContentBlock::Reasoning {
+                            text: "full earlier reasoning".into(),
+                        },
+                        ContentBlock::Text {
+                            text: "first answer".into(),
+                        },
+                    ],
+                },
+                Message::text(MessageRole::User, "second"),
+            ],
+        );
+        request.stream = false;
+        client
+            .generate(request.clone(), Arc::new(()), TurnExecutionContext::new())
+            .await
+            .unwrap();
+        let captured = captured.await.unwrap();
+        let body: serde_json::Value =
+            serde_json::from_str(captured.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            body["messages"][1]["reasoning_content"],
+            "full earlier reasoning"
+        );
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert!(body.get("temperature").is_none());
+        request.options.temperature = Some(0.7);
+        let error = client
+            .generate(request.clone(), Arc::new(()), TurnExecutionContext::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::Unsupported);
+        request.options.temperature = None;
+        request.tools.push(ToolDefinition {
+            name: "read".into(),
+            description: None,
+            parameters: serde_json::json!({"type":"object"}),
+        });
+        request.tool_choice = ModelToolChoice::Required;
+        assert_eq!(
+            client
+                .generate(request, Arc::new(()), TurnExecutionContext::new())
+                .await
+                .unwrap_err()
+                .kind,
+            ProviderErrorKind::Unsupported
+        );
+    }
+
+    #[tokio::test]
+    async fn credential_resolution_can_be_cancelled_before_an_http_attempt() {
+        use aicoder_core::model::*;
+        struct Pending(Arc<tokio::sync::Notify>);
+        #[async_trait::async_trait]
+        impl CredentialProvider for Pending {
+            async fn bearer_token(&self) -> std::result::Result<BearerToken, ProviderError> {
+                self.0.notify_one();
+                std::future::pending().await
+            }
+        }
+        for stream in [false, true] {
+            let started = Arc::new(tokio::sync::Notify::new());
+            let client = ChatClient::with_credentials(
+                ClientConfig {
+                    base_url: "http://127.0.0.1:1/v1".into(),
+                    model: "test".into(),
+                    proxy: ProxyMode::Disabled,
+                    ..Default::default()
+                },
+                Arc::new(Pending(started.clone())),
+            )
+            .unwrap();
+            let context = TurnExecutionContext::new();
+            let cancellation = context.clone();
+            let mut request =
+                ModelRequest::new("test", vec![Message::text(MessageRole::User, "hello")]);
+            request.stream = stream;
+            let run =
+                tokio::spawn(async move { client.generate(request, Arc::new(()), context).await });
+            started.notified().await;
+            cancellation.cancel("stop credential refresh");
+            assert_eq!(
+                run.await.unwrap().unwrap_err().kind,
+                ProviderErrorKind::Cancelled
+            );
+        }
+    }
+    #[tokio::test]
+    async fn named_profiles_keep_model_registration_and_errors_scoped() {
+        use aicoder_core::model::*;
+        let (base_url, _) = spawn_mock_server(
+            "401 Unauthorized",
+            "application/json",
+            r#"{"error":{"message":"bad credentials","code":"bad_key"}}"#,
+        )
+        .await;
+        let mut client = ChatClient::new(ClientConfig {
+            base_url,
+            provider_id: "my-gateway".into(),
+            model: "test".into(),
+            api_key: "test-key".into(),
+            proxy: ProxyMode::Disabled,
+            max_retries: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(client.model_spec("test").unwrap().provider, "my-gateway");
+        client
+            .register_model(ModelSpec::new("my-gateway", "other"))
+            .unwrap();
+        assert!(
+            client
+                .register_model(ModelSpec::new("another-gateway", "wrong"))
+                .is_err()
+        );
+        let mut request =
+            ModelRequest::new("test", vec![Message::text(MessageRole::User, "hello")]);
+        request.stream = false;
+        let error = client
+            .generate(request, Arc::new(()), TurnExecutionContext::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.provider, "my-gateway");
+        assert_eq!(error.code.as_deref(), Some("bad_key"));
+    }
+
+    #[tokio::test]
+    async fn deepseek_thinking_tool_loop_replays_reasoning_through_core() {
+        use aicoder_core::{TurnExecutionConfig, TurnExecutor, model::*, tools::*};
+        struct Read;
+        #[async_trait::async_trait]
+        impl ExecutableTool for Read {
+            fn definition(&self) -> ToolDefinition {
+                ToolDefinition {
+                    name: "read".into(),
+                    description: None,
+                    parameters: serde_json::json!({"type":"object"}),
+                }
+            }
+            fn capability(&self) -> ToolCapability {
+                ToolCapability::ReadOnly
+            }
+            async fn execute(
+                &self,
+                _: &ToolContext,
+                _: serde_json::Value,
+            ) -> std::result::Result<ToolSuccess, ToolFailure> {
+                Ok(ToolSuccess {
+                    output: serde_json::json!("data"),
+                    truncated: false,
+                })
+            }
+        }
+        let first=serde_json::json!({"id":"first","object":"chat.completion","created":1,"model":"deepseek-chat","choices":[{"index":0,"message":{"role":"assistant","reasoning_content":"required full reasoning","tool_calls":[{"id":"c","type":"function","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}).to_string();
+        let (base_url, captured) = spawn_mock_sequence(vec![
+            MockHttpResponse::new("200 OK", "application/json", &first),
+            MockHttpResponse::new("200 OK", "application/json", successful_response_body()),
+        ])
+        .await;
+        let client = ChatClient::new(ClientConfig {
+            base_url,
+            model: "deepseek-chat".into(),
+            api_key: "test-key".into(),
+            proxy: ProxyMode::Disabled,
+            max_retries: 0,
+            compatibility: crate::CompatibilityProfile::DeepseekThinking,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut registry = ToolRegistry::default();
+        registry.register(Read).unwrap();
+        let executor = TurnExecutor::builder(client)
+            .workspace(std::env::temp_dir())
+            .registry(registry)
+            .config(TurnExecutionConfig {
+                stream: false,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        let result = executor
+            .run(ModelRequest::new(
+                "deepseek-chat",
+                vec![Message::text(MessageRole::User, "read")],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(result.rounds, 2);
+        assert_eq!(result.final_message.text_content(), "recovered");
+        let requests = captured.await.unwrap();
+        let second: serde_json::Value =
+            serde_json::from_str(requests[1].split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            second["messages"][1]["reasoning_content"],
+            "required full reasoning"
+        );
+        assert_eq!(second["messages"][2]["tool_call_id"], "c");
+    }
+
+    #[tokio::test]
+    async fn http_timeout_is_applied_and_reported_as_a_typed_transport_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let _socket = socket;
+            std::future::pending::<()>().await;
+        });
+        let client = ChatClient::new(ClientConfig {
+            base_url: format!("http://{address}/v1"),
+            api_key: "test-key".into(),
+            proxy: ProxyMode::Disabled,
+            timeout: 1,
+            connect_timeout: 1,
+            max_retries: 0,
+            ..Default::default()
+        })
+        .unwrap();
+        let error = client
+            .chat_completion(test_request(false))
+            .await
+            .unwrap_err();
+        let error = error
+            .downcast_ref::<aicoder_core::model::ProviderError>()
+            .unwrap();
+        assert_eq!(
+            error.kind,
+            aicoder_core::model::ProviderErrorKind::Transport
+        );
+        assert_eq!(error.code.as_deref(), Some("timeout"));
+        assert!(error.message.contains("timed out"));
+        server.abort();
+    }
+
     #[test]
     fn test_client_config_default() {
         let config = ClientConfig::default();
@@ -1294,6 +1778,7 @@ mod tests {
             model: "gpt-3.5-turbo".to_string(),
             timeout: 60,
             max_retries: 1,
+            ..Default::default()
         };
         let json = serde_json::to_string(&config).unwrap();
         assert!(json.contains("api.example.com"));
@@ -1528,6 +2013,8 @@ mod tests {
             model: "deepseek-chat".to_string(),
             timeout: 2,
             max_retries: 0,
+            proxy: ProxyMode::Disabled,
+            ..Default::default()
         })
         .unwrap();
         let mut request = test_request(false);
@@ -1564,7 +2051,18 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(error.to_string(), "Failed to parse response body");
+        assert!(
+            error
+                .to_string()
+                .starts_with("Failed to parse response body")
+        );
+        assert_eq!(
+            error
+                .downcast_ref::<aicoder_core::model::ProviderError>()
+                .unwrap()
+                .kind,
+            aicoder_core::model::ProviderErrorKind::InvalidResponse
+        );
     }
 
     #[tokio::test]

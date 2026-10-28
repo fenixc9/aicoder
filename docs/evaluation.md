@@ -63,3 +63,9 @@ The runner reads the core outcome directly. `report.json` contains full retained
 Round/tool/token/time/output limits are incomplete runs rather than generic
 agent failures. CLI quota flags and accounting boundaries are documented in
 [run outcomes](run-outcomes.md); batch manifests include these settings.
+
+Provider settings are resolved once and public settings are included in the run
+manifest; workers share the provider/HTTP pool. Sampling is unset by default,
+so choose supported settings explicitly when comparing runs. See
+[provider configuration](provider-configuration.md), especially DeepSeek thinking
+mode's history and unsupported-parameter behavior.

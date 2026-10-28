@@ -65,12 +65,12 @@ impl AgentRuntime {
     pub fn new(
         workspace: PathBuf,
         session_root: PathBuf,
-        model: String,
+        client: ChatClient,
         context_window: Option<usize>,
         sender: mpsc::UnboundedSender<AppEvent>,
     ) -> Result<Self> {
         let repository = Arc::new(JsonlSessionRepository::new(session_root)?);
-        let client = ChatClient::from_env(&model)?;
+        let model = client.model().to_string();
         let mut builder = TurnExecutor::builder(client)
             .workspace(&workspace)
             .config(TurnExecutionConfig::default())
@@ -91,7 +91,7 @@ impl AgentRuntime {
                     "You are a coding assistant. Inspect the project before changing it, use tools when needed, verify changes, and report concisely. Reply in the user's language."
                         .into(),
                 ),
-                options: aicoder_core::model::ModelOptions {temperature:Some(0.2),top_p:Some(1.0),max_output_tokens:Some(4096),..Default::default()},
+                options: aicoder_core::model::ModelOptions {max_output_tokens:Some(4096),..Default::default()},
             },
         ));
         Ok(Self {

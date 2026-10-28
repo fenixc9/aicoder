@@ -125,3 +125,28 @@ Evaluation reports now contain progress and a typed stop, with limited/model
 stops classified as incomplete. Token measurements are still nullable;
 estimation lives separately in the budget accounting. See [the full contract](run-outcomes.md)
 for scope, units, retry behavior and session persistence boundaries.
+
+## S1: provider profiles and credentials
+
+`ClientConfig` gains logical profile identity, credential references, connect
+and response limits, proxy mode and compatibility controls. Existing struct
+literals should use `..Default::default()`. Auto/system proxy is the new default;
+set `ProxyMode::Disabled` or `AICODER_PROXY=disabled` for the prior direct mode.
+The old cross-provider credential fallback is removed. See
+[provider configuration](provider-configuration.md) for selection and defaults.
+
+`CredentialProvider` supports request-time asynchronous token refresh. Model
+metadata is scoped by `config.provider_id`, rather than always requiring the
+literal `openai-compatible`. Normal model errors use the configured identity;
+HTTP errors also expose optional vendor code/parameter fields.
+
+CLI, TUI and bench use one provider resolver. Universal forced sampling
+parameters have been removed; provider defaults now apply unless set explicitly.
+DeepSeek thinking keeps required reasoning history and rejects known ignored
+settings. Bench `--temperature` is now optional. Low-level wire response formats
+serialize as protocol objects instead of null unit variants.
+
+Shell commands now use non-login, noninteractive Bash and return captured
+stdout/stderr. Commands inherit PATH but do not automatically source login or
+BASH_ENV files. Provider secret variables are removed as described in the
+configuration guide. Broader tool environment isolation remains S3 work.

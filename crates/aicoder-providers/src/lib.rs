@@ -4,12 +4,17 @@
 //! Protocol-specific request, response and stream types live in `wire`.
 
 mod chat;
+mod config;
+mod credentials;
+mod error;
 mod event_sink;
 mod model;
 mod stream;
 
 pub(crate) use event_sink::ProviderEventSink;
 
-pub use chat::{ChatClient, ClientConfig};
+pub use chat::ChatClient;
+pub use config::{ClientConfig, CompatibilityProfile, ProxyMode};
+pub use credentials::{BearerToken, CredentialProvider, EnvironmentCredential, StaticCredential};
 
 pub mod wire;

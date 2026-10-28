@@ -73,8 +73,8 @@ struct RunArgs {
     output_budget_bytes: Option<usize>,
     #[arg(long, default_value_t = 4096)]
     max_tokens: u32,
-    #[arg(long, default_value_t = 0.0)]
-    temperature: f32,
+    #[arg(long)]
+    temperature: Option<f32>,
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     stream: bool,
     /// Permit a final answer even when the agent produced no workspace changes.
@@ -123,10 +123,8 @@ async fn main() -> Result<()> {
 async fn run(arguments: RunArgs) -> Result<()> {
     ensure!(arguments.workers > 0, "--workers must be positive");
     ensure!(arguments.max_rounds > 0, "--max-rounds must be positive");
-    let model = arguments
-        .model
-        .or_else(|| std::env::var("OPENAI_MODEL").ok())
-        .context("Set --model or OPENAI_MODEL")?;
+    let client_config = aicoder_providers::ClientConfig::from_env(arguments.model.as_deref())?;
+    let model = client_config.model.clone();
     let model_name_or_path = arguments
         .model_name_or_path
         .unwrap_or_else(|| model.clone());
@@ -146,7 +144,7 @@ async fn run(arguments: RunArgs) -> Result<()> {
         .model_name_or_path(&model_name_or_path)
         .repository_source(SweBenchRepositorySource::LocalRoot(cache_root))
         .include_hints(!arguments.no_hints)
-        .temperature(Some(arguments.temperature))
+        .temperature(arguments.temperature)
         .max_tokens(Some(arguments.max_tokens));
     let budget = aicoder_core::RunBudget {
         max_tool_calls: arguments.max_tool_calls,
@@ -168,18 +166,18 @@ async fn run(arguments: RunArgs) -> Result<()> {
             "max_tokens": arguments.max_tokens,
             "max_rounds": arguments.max_rounds,
             "budget": budget,
+            "provider": client_config,
             "stream": arguments.stream,
             "require_workspace_change": !arguments.allow_empty_patch,
         }));
     let cases = adapter.adapt_dataset(&selected)?;
-    let agent_model = model.clone();
+    let provider = std::sync::Arc::new(ChatClient::new(client_config)?);
     let max_rounds = arguments.max_rounds;
     let stream = arguments.stream;
     let allow_empty_patch = arguments.allow_empty_patch;
     let report = SweBenchBatchRunner::new(adapter, options)
         .run(cases, move |workspace| {
-            let client = ChatClient::from_env(&agent_model)?;
-            let builder = TurnExecutor::builder(client)
+            let builder = TurnExecutor::builder_from_shared(provider.clone())
                 .workspace(workspace)
                 .approval(AllowAllApproval)
                 .config(TurnExecutionConfig {
