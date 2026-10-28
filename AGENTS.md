@@ -6,7 +6,11 @@
   events, cancellation, and sessions. Keep frontend concerns out of core.
 - `crates/aicoder-providers` owns model-service clients and HTTP adapters.
   Providers depend on core; core must not depend on providers or HTTP clients.
-- `crates/aicoder-cli` and `crates/aicoder-tui` are frontends over core;
+- `crates/aicoder-runtime` owns layered application settings, credential references
+  and default assembly. Keep terminal/Web types out; core must not depend on it.
+  Project settings may select trusted profiles but must not define credential routing
+  or private storage paths. Keep credential values out of settings snapshots/errors.
+- `crates/aicoder-cli` and `crates/aicoder-tui` are frontends over core/runtime;
   do not duplicate agent execution logic in either frontend.
 - `crates/aicoder-eval` owns evaluation and SWE-bench integration. Do not
   leak evaluation fixtures or grading answers into agent prompts.

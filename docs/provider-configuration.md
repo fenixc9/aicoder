@@ -151,3 +151,12 @@ and run non-login Bash with inherited PATH. Known provider key variables,
 `AICODER_API_KEY_ENV`'s referenced key, app proxy credentials and `BASH_ENV` are
 removed from the child environment. This does not create a shell sandbox or
 replace the broader environment policy planned in S3.
+
+## S3 application runtime
+
+CLI/TUI/SWE-bench now resolve profiles/options through [the shared runtime](runtime-configuration.md).
+The low-level from_env APIs retain their existing validation; descriptor_from_environment
+additionally resolves a non-secret descriptor without requiring a token. Runtime injects
+request-time credentials separately. Automatic dotenv/crate-path loading is removed from
+applications; use explicit --env-file. User profile routing, project selectors, field
+precedence and snapshot source metadata are documented in the runtime contract.

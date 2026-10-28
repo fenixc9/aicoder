@@ -10,6 +10,7 @@ are separate crates.
   model interfaces, events, tools, and session repositories.
 - aicoder-providers: model-service clients, HTTP transport, retries, and
   OpenAI-compatible response streaming.
+- aicoder-runtime: shared settings, credential references and agent/tool/session assembly.
 - aicoder-cli: current command-line application.
 - aicoder-tui: interactive Ratatui frontend with sessions, streaming output,
   tool approvals, execution status, and cooperative cancellation.
@@ -31,7 +32,9 @@ cover branches, durable tool checkpoints, interrupted turns and backed-up v1/v2 
 [RunHandle controls](docs/run-control.md) add bounded steer/follow-up queues and scoped
 asynchronous approvals over the same execution loop. [Versioned events](docs/events.md)
 provide bounded subscriptions, explicit overflow/disconnect reports, and structured
-bench traces. S0–S2 are complete; shared runtime/project context is next in S3.
+bench traces. S0–S2 are complete; S3 shared runtime configuration is available; project-resource loading and tool improvements
+are still in progress. See [runtime settings](docs/runtime-configuration.md), including
+the explicit `--env-file` migration.
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs
 request construction or session persistence. Both layers consume the single

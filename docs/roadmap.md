@@ -1,6 +1,6 @@
 # aicoder 路线图
 
-状态：S0、S1、S2 已完成；下一阶段 S3。本文替代旧 TODO 的排期。
+状态：S0、S1、S2 已完成；当前阶段 S3。本文替代旧 TODO 的排期。
 基线和验证依据见 [S0 开发基线](development-baseline.md)。
 S1 的统一模型契约已贯穿执行器、工具、会话、CLI/TUI 和 bench，wire types 已移至
 providers；部分结果、任务预算和 provider 配置均已接通。S1 验收见 [验收记录](s1-acceptance.md)。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
@@ -48,7 +48,7 @@ S0 起点有四个 crate：core、cli、tui、eval。已有模型与工具循环
 | --- | --- | --- |
 | `aicoder-core` | 协议无关模型类型、执行循环、会话模型、事件、控制与策略接口 | 不依赖其他本仓库 crate、HTTP/UI 框架 |
 | `aicoder-providers`（新增） | OpenAI-compatible wire 转换、HTTP、重试、认证来源接口 | 依赖 core；具体协议不进入 core |
-| `aicoder-runtime`（新增） | 配置加载、项目资源、默认工具与 JSONL 存储装配、会话服务、扩展发现 | 依赖 core/providers；不依赖终端或 Web UI |
+| `aicoder-runtime`（S3 已新增） | 配置加载、项目资源、默认工具与 JSONL 存储装配、会话服务、扩展发现 | 依赖 core/providers；不依赖终端或 Web UI |
 | `aicoder-cli` | 单次输出、REPL、JSON/RPC 入口 | 使用 runtime/core |
 | `aicoder-tui` | 终端输入、渲染、交互适配 | 使用 runtime/core |
 | `aicoder-eval` | case、工作区隔离、评测器、报告、SWE-bench | 使用 core；按需使用 providers/runtime |
@@ -165,7 +165,11 @@ S2 的版本化事件和有界订阅已落地，见 [事件契约](events.md)。
 
 ### S3：共享 runtime、项目上下文与可靠工具
 
-- [ ] 新增 runtime，统一显式参数 > 环境变量 > 项目配置 > 用户配置 > 默认值；
+共享配置/默认装配已接入 CLI、TUI、SWE-bench，见 [配置契约](runtime-configuration.md)。
+S3 尚未整体完成；项目资源加载、具体工具/存储迁移和后续工具措施仍按下列项推进。
+[本次验收](s3-runtime-acceptance.md) 记录了 268 个测试及三次轻量采样。
+
+- [x] 新增 runtime，统一显式参数 > 环境变量 > 项目配置 > 用户配置 > 默认值；
   凭证使用独立来源，不混淆 provider 与默认 endpoint。
 - [ ] 加载 AGENTS.md、SYSTEM.md、skills、提示词模板；确定全局、父目录、
   工作区与嵌套目录规则，去重、大小限制、来源展示、关闭开关和热重载边界。
@@ -246,4 +250,4 @@ S2 的版本化事件和有界订阅已落地，见 [事件契约](events.md)。
 - 跨 crate 改动通过 fmt、Clippy、workspace tests；公共文档和示例同步更新。
 - 新依赖说明用途与默认构建成本；宿主可选能力不进入 core 的强制依赖。
 - API/会话格式变更写明迁移，旧入口只在迁移期保留；不维护两套独立执行循环。
-- 接下来执行 **S3**；按验收结果逐阶段推进，不并行堆叠后续功能。
+- 当前执行 **S3**；按验收结果逐阶段推进，不并行堆叠后续功能。

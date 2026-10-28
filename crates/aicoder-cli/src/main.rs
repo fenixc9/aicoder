@@ -1,4 +1,3 @@
-use aicoder_providers::ChatClient;
 use std::{
     io::{self, Write},
     path::PathBuf,
@@ -6,8 +5,7 @@ use std::{
 };
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentEventHandler, ContextWindowConfig, PruningContextCompactor,
-    SessionSelection, TurnExecutionConfig, TurnExecutor,
+    Agent, AgentEventHandler, SessionSelection,
     events::{
         AgentCompletedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
         ContextCompactionCompletedEvent, ReasoningChunkEvent, ReasoningEndedEvent,
@@ -16,7 +14,11 @@ use aicoder_core::{
     session::{JsonlSessionRepository, SessionEntryData, SessionRepository},
     tools::{AllowAllApproval, ApprovalHandler, ToolInvocation},
 };
-use anyhow::{Context, Result, ensure};
+use aicoder_runtime::{
+    ConfigDiscovery, ContextSettings, ExecutionSettings, ModelSettings, Runtime, RuntimeOverrides,
+    Setting, Settings, environment_file,
+};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
 
@@ -52,8 +54,23 @@ struct Cli {
     context_window: Option<usize>,
 
     /// Maximum model rounds in one turn.
-    #[arg(long, default_value_t = 8)]
-    max_rounds: usize,
+    #[arg(long)]
+    max_rounds: Option<usize>,
+    #[arg(long)]
+    model: Option<String>,
+    #[arg(long)]
+    profile: Option<String>,
+    #[arg(long)]
+    max_output_tokens: Option<u32>,
+    #[arg(long, conflicts_with = "no_config")]
+    config: Option<PathBuf>,
+    #[arg(long, conflicts_with = "no_config")]
+    user_config: Option<PathBuf>,
+    #[arg(long)]
+    no_config: bool,
+    /// Load an explicitly trusted dotenv file without mutating process variables.
+    #[arg(long)]
+    env_file: Option<PathBuf>,
     /// Maximum total tool invocations in one turn.
     #[arg(long)]
     max_tool_calls: Option<usize>,
@@ -73,6 +90,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Print effective settings and their sources without resolving credentials or making requests.
+    Config,
     /// List sessions belonging to the selected workspace.
     Sessions,
     /// Show every branch and entry; --json emits metadata and entries for other hosts.
@@ -187,35 +206,6 @@ fn flush_stdout() {
     let _ = std::io::stdout().flush();
 }
 
-fn load_dotenv() -> Result<()> {
-    match dotenvy::dotenv() {
-        Ok(_) => Ok(()),
-        Err(error) if error.not_found() => {
-            // `cargo run` may be invoked from the workspace root. In that case dotenvy's
-            // current-directory search cannot see the CLI crate's own `.env` file.
-            let cli_env = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".env");
-            if cli_env.is_file() {
-                dotenvy::from_path(&cli_env)
-                    .with_context(|| format!("Failed to load {}", cli_env.display()))?;
-            }
-            Ok(())
-        }
-        Err(error) => Err(error).context("Failed to load .env"),
-    }
-}
-
-fn session_root() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("AICODER_HOME") {
-        ensure!(!path.is_empty(), "AICODER_HOME cannot be empty");
-        return Ok(PathBuf::from(path).join("sessions"));
-    }
-    let home = std::env::var_os("HOME").context(
-        "Cannot determine session directory: set AICODER_HOME or HOME, or use --no-session",
-    )?;
-    ensure!(!home.is_empty(), "HOME cannot be empty");
-    Ok(PathBuf::from(home).join(".aicoder").join("sessions"))
-}
-
 fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Result<bool> {
     match &cli.command {
         Some(Command::Sessions) => {
@@ -307,73 +297,73 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             println!("已删除 session {id}");
             Ok(true)
         }
-        None => Ok(false),
+        Some(Command::Config) | None => Ok(false),
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    load_dotenv()?;
     tracing_subscriber::fmt()
         .with_target(false)
         .with_level(true)
         .init();
     let cli = Cli::parse();
 
+    let runtime = Runtime::load_with_environment(
+        &cli.workspace,
+        RuntimeOverrides {
+            settings: Settings {
+                provider_profile: Setting::from_option(cli.profile.clone()),
+                model: Setting::from_option(cli.model.clone()),
+                options: ModelSettings {
+                    max_output_tokens: Setting::from_option(cli.max_output_tokens),
+                    ..Default::default()
+                },
+                execution: ExecutionSettings {
+                    max_rounds: Setting::from_option(cli.max_rounds),
+                    max_tool_calls: Setting::from_option(cli.max_tool_calls),
+                    max_tokens: Setting::from_option(cli.token_budget),
+                    max_duration_ms: Setting::from_option(cli.time_budget_ms),
+                    max_output_bytes: Setting::from_option(cli.output_budget_bytes),
+                    ..Default::default()
+                },
+                context: ContextSettings {
+                    window_tokens: Setting::from_option(cli.context_window),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ConfigDiscovery {
+            enabled: !cli.no_config,
+            user_file: cli.user_config.clone(),
+            project_file: cli.config.clone(),
+        },
+        environment_file(cli.env_file.as_deref())?,
+    )?;
+    if matches!(cli.command, Some(Command::Config)) {
+        println!("{}", serde_json::to_string_pretty(runtime.config())?);
+        return Ok(());
+    }
     if cli.command.is_some() {
-        let repository = JsonlSessionRepository::new(session_root()?)?;
+        let repository = runtime.sessions()?;
         if handle_session_command(&cli, &repository)? {
             return Ok(());
         }
     }
-
     let repository = if cli.no_session {
         None
     } else {
-        Some(JsonlSessionRepository::new(session_root()?)?)
+        Some(runtime.sessions()?)
     };
-    let client = ChatClient::from_env_model(None)?;
-    let model = client.model().to_string();
-    let builder = TurnExecutor::builder(client)
-        .workspace(&cli.workspace)
-        .config(TurnExecutionConfig {
-            events: Default::default(),
-            max_rounds: cli.max_rounds,
-            stream: true,
-            budget: aicoder_core::RunBudget {
-                max_tool_calls: cli.max_tool_calls,
-                max_tokens: cli.token_budget,
-                max_duration: cli.time_budget_ms.map(std::time::Duration::from_millis),
-                max_output_bytes: cli.output_budget_bytes,
-            },
-        });
-    let builder = match cli.context_window {
-        Some(max_context_tokens) => {
-            builder.context_compactor(PruningContextCompactor::new(ContextWindowConfig {
-                max_context_tokens,
-                reserved_output_tokens: 4_096,
-                preserve_recent_tokens: 8_192.min(max_context_tokens.saturating_sub(4_097)),
-            })?)
-        }
-        None => builder,
-    };
-    let turn_executor = if cli.yes {
+    let builder = runtime.executor_builder(Arc::new(runtime.client()?))?;
+    let executor = if cli.yes {
         builder.approval(AllowAllApproval).build()?
     } else {
         builder.approval(ConsoleApproval).build()?
     };
-    let agent_config = AgentConfig {
-        model,
-        system_prompt: Some(
-            "You are a helpful coding assistant. Reply in Chinese. Use tools when needed."
-                .to_string(),
-        ),
-        options: aicoder_core::model::ModelOptions {
-            max_output_tokens: Some(2048),
-            ..Default::default()
-        },
-    };
-    let agent = Agent::new(turn_executor, agent_config);
+    let agent = Agent::new(executor, runtime.agent_config());
     let handler = Arc::new(ConsoleEvents);
     let outcome = match &repository {
         None => {

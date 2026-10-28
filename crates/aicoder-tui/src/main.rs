@@ -11,7 +11,11 @@ use std::{
 };
 
 use aicoder_core::{RunControlConfig, RunHandle, RunInputKind, TurnExecutionContext};
-use anyhow::{Context, Result, ensure};
+use aicoder_runtime::{
+    ConfigDiscovery, ContextSettings, Runtime, RuntimeOverrides, Setting, Settings,
+    environment_file,
+};
+use anyhow::{Context, Result};
 use app::{App, AppEvent, Focus, TimelineItem};
 use clap::Parser;
 use crossterm::{
@@ -35,6 +39,19 @@ struct Cli {
     #[arg(long, value_name = "TOKENS")]
     context_window: Option<usize>,
 
+    #[arg(long)]
+    profile: Option<String>,
+    #[arg(long, conflicts_with = "no_config")]
+    config: Option<PathBuf>,
+    #[arg(long, conflicts_with = "no_config")]
+    user_config: Option<PathBuf>,
+    #[arg(long)]
+    no_config: bool,
+    #[arg(long)]
+    show_config: bool,
+
+    #[arg(long)]
+    env_file: Option<PathBuf>,
     /// Open an existing session by its full ID.
     #[arg(long, value_name = "ID")]
     session: Option<String>,
@@ -62,16 +79,35 @@ impl Drop for TerminalGuard {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    load_dotenv()?;
     let cli = Cli::parse();
-    init_logging()?;
-    let workspace = cli
-        .workspace
-        .canonicalize()
-        .with_context(|| format!("Failed to resolve workspace {}", cli.workspace.display()))?;
-    let client = aicoder_providers::ChatClient::from_env_model(cli.model.as_deref())?;
-    let model = client.model().to_string();
-    let runtime = AgentRuntime::new(workspace, session_root()?, client, cli.context_window)?;
+    let application = Runtime::load_with_environment(
+        &cli.workspace,
+        RuntimeOverrides {
+            settings: Settings {
+                provider_profile: Setting::from_option(cli.profile.clone()),
+                model: Setting::from_option(cli.model.clone()),
+                context: ContextSettings {
+                    window_tokens: Setting::from_option(cli.context_window),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ConfigDiscovery {
+            enabled: !cli.no_config,
+            user_file: cli.user_config.clone(),
+            project_file: cli.config.clone(),
+        },
+        environment_file(cli.env_file.as_deref())?,
+    )?;
+    if cli.show_config {
+        println!("{}", serde_json::to_string_pretty(application.config())?);
+        return Ok(());
+    }
+    init_logging(application.state_root()?)?;
+    let model = application.config().provider.model.clone();
+    let runtime = AgentRuntime::new(application)?;
     let mut app = App::new(runtime.sessions()?);
     if let Some(session_id) = cli.session {
         let session = runtime.open_session(&session_id)?;
@@ -311,50 +347,8 @@ fn handle_slash_command(app: &mut App, input: &str) -> bool {
     true
 }
 
-fn load_dotenv() -> Result<()> {
-    match dotenvy::dotenv() {
-        Ok(_) => Ok(()),
-        Err(error) if error.not_found() => {
-            // `cargo run` is commonly invoked from the workspace root, where dotenvy's
-            // directory search cannot see crate-local files. Prefer the TUI file and keep the
-            // existing CLI file as a compatibility fallback for current installations.
-            for path in crate_env_paths() {
-                if path.is_file() {
-                    dotenvy::from_path(&path)
-                        .with_context(|| format!("Failed to load {}", path.display()))?;
-                    break;
-                }
-            }
-            Ok(())
-        }
-        Err(error) => Err(error).context("Failed to load .env"),
-    }
-}
-
-fn crate_env_paths() -> [PathBuf; 2] {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    [
-        manifest.join(".env"),
-        manifest.join("..").join("aicoder-cli").join(".env"),
-    ]
-}
-
-fn session_root() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("AICODER_HOME") {
-        ensure!(!path.is_empty(), "AICODER_HOME cannot be empty");
-        return Ok(PathBuf::from(path).join("sessions"));
-    }
-    let home = std::env::var_os("HOME").context("HOME is not set")?;
-    ensure!(!home.is_empty(), "HOME cannot be empty");
-    Ok(PathBuf::from(home).join(".aicoder").join("sessions"))
-}
-
-fn init_logging() -> Result<()> {
-    let root = std::env::var_os("AICODER_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".aicoder")))
-        .context("Cannot determine log directory")?;
-    std::fs::create_dir_all(&root)?;
+fn init_logging(root: &Path) -> Result<()> {
+    std::fs::create_dir_all(root)?;
     let log_path = root.join("tui.log");
     let log = OpenOptions::new()
         .create(true)
@@ -378,29 +372,6 @@ fn _is_inside(path: &Path, root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn dotenv_fallback_prefers_tui_then_existing_cli_file() {
-        let paths = crate_env_paths();
-        assert_eq!(
-            paths[0].file_name().and_then(|name| name.to_str()),
-            Some(".env")
-        );
-        assert_eq!(
-            paths[0]
-                .parent()
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str()),
-            Some("aicoder-tui")
-        );
-        assert_eq!(
-            paths[1]
-                .parent()
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str()),
-            Some("aicoder-cli")
-        );
-    }
 
     #[test]
     fn cli_accepts_an_existing_session_id() {

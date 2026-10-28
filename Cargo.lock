@@ -16,11 +16,10 @@ name = "aicoder-cli"
 version = "0.1.0"
 dependencies = [
  "aicoder-core",
- "aicoder-providers",
+ "aicoder-runtime",
  "anyhow",
  "async-trait",
  "clap",
- "dotenvy",
  "serde_json",
  "tempfile",
  "tokio",
@@ -53,11 +52,10 @@ name = "aicoder-eval"
 version = "0.1.0"
 dependencies = [
  "aicoder-core",
- "aicoder-providers",
+ "aicoder-runtime",
  "anyhow",
  "async-trait",
  "clap",
- "dotenvy",
  "futures",
  "serde",
  "serde_json",
@@ -86,16 +84,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "aicoder-tui"
+name = "aicoder-runtime"
 version = "0.1.0"
 dependencies = [
  "aicoder-core",
  "aicoder-providers",
  "anyhow",
  "async-trait",
+ "dotenvy",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "aicoder-tui"
+version = "0.1.0"
+dependencies = [
+ "aicoder-core",
+ "aicoder-runtime",
+ "anyhow",
+ "async-trait",
  "clap",
  "crossterm",
- "dotenvy",
  "futures",
  "ratatui",
  "serde_json",

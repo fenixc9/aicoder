@@ -1,17 +1,19 @@
-use aicoder_providers::ChatClient;
 use std::path::PathBuf;
 
-use aicoder_core::{
-    TurnExecutionConfig, TurnExecutor, WorkspaceChangeVerifier, tools::AllowAllApproval,
-};
+use aicoder_core::{WorkspaceChangeVerifier, tools::AllowAllApproval};
 use aicoder_eval::{
     SweBenchAdapter, SweBenchBatchOptions, SweBenchBatchRunner, SweBenchDataset, SweBenchFilter,
     SweBenchHarnessConfig, SweBenchHarnessReport, SweBenchRepositoryCache,
     SweBenchRepositorySource, run_swebench_harness,
 };
-use anyhow::{Context, Result, ensure};
+use aicoder_runtime::{
+    ConfigDiscovery, ExecutionSettings, ModelSettings, Runtime, RuntimeOverrides, Setting,
+    Settings, environment_file,
+};
+use anyhow::{Result, ensure};
 use clap::{Args, Parser, Subcommand};
 use serde_json::json;
+use std::sync::Arc;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -26,7 +28,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Generate patches for a local SWE-bench JSON/JSONL dataset.
-    Run(RunArgs),
+    Run(Box<RunArgs>),
     /// Run the official Python/Docker harness for generated predictions.
     Grade(GradeArgs),
     /// Read and normalize an official harness aggregate report.
@@ -61,8 +63,8 @@ struct RunArgs {
     no_resume: bool,
     #[arg(long)]
     no_hints: bool,
-    #[arg(long, default_value_t = 8)]
-    max_rounds: usize,
+    #[arg(long)]
+    max_rounds: Option<usize>,
     #[arg(long)]
     max_tool_calls: Option<usize>,
     #[arg(long)]
@@ -71,12 +73,22 @@ struct RunArgs {
     time_budget_ms: Option<u64>,
     #[arg(long)]
     output_budget_bytes: Option<usize>,
-    #[arg(long, default_value_t = 4096)]
-    max_tokens: u32,
+    #[arg(long)]
+    max_tokens: Option<u32>,
     #[arg(long)]
     temperature: Option<f32>,
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    stream: bool,
+    #[arg(long, action = clap::ArgAction::Set)]
+    stream: Option<bool>,
+    #[arg(long)]
+    profile: Option<String>,
+    #[arg(long, conflicts_with = "no_config")]
+    config: Option<PathBuf>,
+    #[arg(long, conflicts_with = "no_config")]
+    user_config: Option<PathBuf>,
+    #[arg(long)]
+    no_config: bool,
+    #[arg(long)]
+    env_file: Option<PathBuf>,
     /// Permit a final answer even when the agent produced no workspace changes.
     #[arg(long)]
     allow_empty_patch: bool,
@@ -108,13 +120,12 @@ struct GradeArgs {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    load_dotenv()?;
     tracing_subscriber::fmt()
         .with_target(false)
         .with_level(true)
         .init();
     match Cli::parse().command {
-        Command::Run(arguments) => run(arguments).await,
+        Command::Run(arguments) => run(*arguments).await,
         Command::Grade(arguments) => grade(arguments),
         Command::Import { report } => import(report),
     }
@@ -122,9 +133,40 @@ async fn main() -> Result<()> {
 
 async fn run(arguments: RunArgs) -> Result<()> {
     ensure!(arguments.workers > 0, "--workers must be positive");
-    ensure!(arguments.max_rounds > 0, "--max-rounds must be positive");
-    let client_config = aicoder_providers::ClientConfig::from_env(arguments.model.as_deref())?;
-    let model = client_config.model.clone();
+    let runtime = Arc::new(Runtime::load_with_environment(
+        std::env::current_dir()?,
+        RuntimeOverrides {
+            settings: Settings {
+                provider_profile: Setting::from_option(arguments.profile.clone()),
+                model: Setting::from_option(arguments.model.clone()),
+                options: ModelSettings {
+                    max_output_tokens: Setting::from_option(arguments.max_tokens),
+                    temperature: Setting::from_option(arguments.temperature),
+                    ..Default::default()
+                },
+                execution: ExecutionSettings {
+                    max_rounds: Setting::from_option(arguments.max_rounds),
+                    stream: Setting::from_option(arguments.stream),
+                    max_tool_calls: Setting::from_option(arguments.max_tool_calls),
+                    max_tokens: Setting::from_option(arguments.token_budget),
+                    max_duration_ms: Setting::from_option(arguments.time_budget_ms),
+                    max_output_bytes: Setting::from_option(arguments.output_budget_bytes),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ConfigDiscovery {
+            enabled: !arguments.no_config,
+            user_file: arguments.user_config.clone(),
+            project_file: arguments.config.clone(),
+        },
+        environment_file(arguments.env_file.as_deref())?,
+    )?);
+    // Fail before repository downloads when the default credential reference cannot be resolved.
+    runtime.credential_provider().bearer_token().await?;
+    let model = runtime.config().provider.model.clone();
     let model_name_or_path = arguments
         .model_name_or_path
         .unwrap_or_else(|| model.clone());
@@ -144,16 +186,15 @@ async fn run(arguments: RunArgs) -> Result<()> {
         .model_name_or_path(&model_name_or_path)
         .repository_source(SweBenchRepositorySource::LocalRoot(cache_root))
         .include_hints(!arguments.no_hints)
-        .temperature(arguments.temperature)
-        .max_tokens(Some(arguments.max_tokens));
-    let budget = aicoder_core::RunBudget {
-        max_tool_calls: arguments.max_tool_calls,
-        max_tokens: arguments.token_budget,
-        max_duration: arguments
-            .time_budget_ms
-            .map(std::time::Duration::from_millis),
-        max_output_bytes: arguments.output_budget_bytes,
-    };
+        .model_options(runtime.config().options.clone())
+        .prepend_system_prompt(
+            runtime
+                .config()
+                .system_prompt
+                .as_deref()
+                .unwrap_or_default(),
+        );
+    let budget = runtime.config().execution.budget.clone();
     let options = SweBenchBatchOptions::new(&arguments.output, &arguments.run_id)
         .dataset(selected.name.clone())
         .concurrency(arguments.workers)
@@ -162,30 +203,23 @@ async fn run(arguments: RunArgs) -> Result<()> {
             "dataset_path": arguments.dataset,
             "selected_instance_ids": selected.instances.iter().map(|item| &item.instance_id).collect::<Vec<_>>(),
             "include_hints": !arguments.no_hints,
-            "temperature": arguments.temperature,
-            "max_tokens": arguments.max_tokens,
-            "max_rounds": arguments.max_rounds,
+            "temperature": runtime.config().options.temperature,
+            "max_tokens": runtime.config().options.max_output_tokens,
+            "max_rounds": runtime.config().execution.max_rounds,
             "budget": budget,
-            "provider": client_config,
-            "stream": arguments.stream,
+            "runtime": runtime.config(),
+            "stream": runtime.config().execution.stream,
             "require_workspace_change": !arguments.allow_empty_patch,
         }));
     let cases = adapter.adapt_dataset(&selected)?;
-    let provider = std::sync::Arc::new(ChatClient::new(client_config)?);
-    let max_rounds = arguments.max_rounds;
-    let stream = arguments.stream;
+    let provider = Arc::new(runtime.client()?);
     let allow_empty_patch = arguments.allow_empty_patch;
     let report = SweBenchBatchRunner::new(adapter, options)
         .run(cases, move |workspace| {
-            let builder = TurnExecutor::builder_from_shared(provider.clone())
+            let builder = runtime
+                .executor_builder(provider.clone())?
                 .workspace(workspace)
-                .approval(AllowAllApproval)
-                .config(TurnExecutionConfig {
-                    events: Default::default(),
-                    max_rounds,
-                    stream,
-                    budget: budget.clone(),
-                });
+                .approval(AllowAllApproval);
             if allow_empty_patch {
                 builder.build()
             } else {
@@ -238,14 +272,6 @@ fn import(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn load_dotenv() -> Result<()> {
-    match dotenvy::dotenv() {
-        Ok(_) => Ok(()),
-        Err(error) if error.not_found() => Ok(()),
-        Err(error) => Err(error).context("Failed to load .env"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,7 +300,7 @@ mod tests {
             panic!("expected run command");
         };
         assert_eq!(arguments.workers, 2);
-        assert!(!arguments.stream);
+        assert_eq!(arguments.stream, Some(false));
         assert!(!arguments.allow_empty_patch);
         assert_eq!(arguments.instance_ids, ["owner__repo-1"]);
     }

@@ -23,6 +23,7 @@ fn cli_lists_branches_and_checks_out_an_entry_without_provider_configuration() {
     let id = session.metadata().id.clone();
     let invoke = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_aicoder"))
+            .env_clear()
             .current_dir(workspace.path())
             .env("AICODER_HOME", home.path())
             .args(args)

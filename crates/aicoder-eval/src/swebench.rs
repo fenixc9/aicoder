@@ -152,8 +152,7 @@ pub struct SweBenchAdapter {
     repository_source: SweBenchRepositorySource,
     include_hints: bool,
     system_prompt: String,
-    temperature: Option<f32>,
-    max_tokens: Option<u32>,
+    options: ModelOptions,
 }
 
 impl SweBenchAdapter {
@@ -171,8 +170,7 @@ impl SweBenchAdapter {
                 "and run relevant tests. Do not only describe a patch."
             )
             .to_string(),
-            temperature: None,
-            max_tokens: Some(4096),
+            options:ModelOptions {max_output_tokens:Some(4096),..Default::default()},
         }
     }
 
@@ -205,12 +203,23 @@ impl SweBenchAdapter {
     }
 
     pub fn temperature(mut self, temperature: Option<f32>) -> Self {
-        self.temperature = temperature;
+        self.options.temperature = temperature;
         self
     }
 
     pub fn max_tokens(mut self, max_tokens: Option<u32>) -> Self {
-        self.max_tokens = max_tokens;
+        self.options.max_output_tokens = max_tokens;
+        self
+    }
+
+    pub fn model_options(mut self, options: ModelOptions) -> Self {
+        self.options = options;
+        self
+    }
+    pub fn prepend_system_prompt(mut self, prompt: &str) -> Self {
+        if !prompt.is_empty() {
+            self.system_prompt = format!("{prompt}\n\n{}", self.system_prompt);
+        }
         self
     }
 
@@ -223,11 +232,7 @@ impl SweBenchAdapter {
                 chat_message(MessageRole::System, self.system_prompt.clone()),
                 chat_message(MessageRole::User, self.user_prompt(instance)),
             ],
-            options: ModelOptions {
-                temperature: self.temperature,
-                max_output_tokens: self.max_tokens,
-                ..Default::default()
-            },
+            options: self.options.clone(),
             tools: Vec::new(),
             tool_choice: ModelToolChoice::Auto,
             stream: false,

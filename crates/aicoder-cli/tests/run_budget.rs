@@ -40,7 +40,10 @@ fn time_budget_exits_while_stdin_approval_remains_unanswered() {
     });
     let workspace = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_aicoder"))
+        .env_clear()
+        .env("AICODER_HOME", workspace.path().join("state"))
         .args([
+            "--no-config",
             "--no-session",
             "--prompt",
             "test",
@@ -153,7 +156,10 @@ fn system_proxy_environment_is_used_by_cli_auto_mode() {
     });
     let workspace = tempfile::tempdir().unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_aicoder"))
+        .env_clear()
+        .env("AICODER_HOME", workspace.path().join("state"))
         .args([
+            "--no-config",
             "--no-session",
             "--prompt",
             "test",

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/aicoder-core", "crates/aicoder-providers", "crates/aicoder-cli", "crates/aicoder-eval", "crates/aicoder-tui"]
+members = ["crates/aicoder-core", "crates/aicoder-providers", "crates/aicoder-cli", "crates/aicoder-eval", "crates/aicoder-tui", "crates/aicoder-runtime"]
 resolver = "3"
 
 [workspace.package]
@@ -19,6 +19,7 @@ broken_intra_doc_links = "deny"
 [workspace.dependencies]
 aicoder-core = { path = "crates/aicoder-core" }
 aicoder-providers = { path = "crates/aicoder-providers" }
+aicoder-runtime = { path = "crates/aicoder-runtime" }
 anyhow = "1"
 async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }

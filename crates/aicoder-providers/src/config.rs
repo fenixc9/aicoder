@@ -294,6 +294,20 @@ impl ClientConfig {
         model: Option<&str>,
         lookup: impl Fn(&str) -> Result<Option<String>>,
     ) -> Result<Self> {
+        Self::resolve_environment(model, lookup, true)
+    }
+    /// Resolve a non-secret routing descriptor without requiring credentials to exist yet.
+    pub fn descriptor_from_environment(
+        model: Option<&str>,
+        lookup: impl Fn(&str) -> Result<Option<String>>,
+    ) -> Result<Self> {
+        Self::resolve_environment(model, lookup, false)
+    }
+    fn resolve_environment(
+        model: Option<&str>,
+        lookup: impl Fn(&str) -> Result<Option<String>>,
+        require_key: bool,
+    ) -> Result<Self> {
         let get = |name: &str| -> Result<Option<String>> {
             Ok(lookup(name)?.filter(|value| !value.trim().is_empty()))
         };
@@ -301,8 +315,11 @@ impl ClientConfig {
         let explicit_ref = get("AICODER_API_KEY_ENV")?;
         let (key, variable, family) = if let Some(variable) = explicit_ref {
             validate_variable(&variable)?;
-            let key =
-                get(&variable)?.context("configured API key environment variable is missing")?;
+            let key = if require_key {
+                get(&variable)?.context("configured API key environment variable is missing")?
+            } else {
+                String::new()
+            };
             (key, variable, "custom")
         } else if let Some(key) = get("AICODER_API_KEY")? {
             (key, "AICODER_API_KEY".into(), "custom")
@@ -310,12 +327,16 @@ impl ClientConfig {
             (key, "OPENAI_API_KEY".into(), "openai")
         } else if let Some(key) = get("DEEPSEEK_API_KEY")? {
             (key, "DEEPSEEK_API_KEY".into(), "deepseek")
+        } else if !require_key {
+            (String::new(), "OPENAI_API_KEY".into(), "openai")
         } else {
             return Err(invalid(
                 "No API key found. Set OPENAI_API_KEY or DEEPSEEK_API_KEY, or configure AICODER_API_KEY_ENV with AICODER_API_BASE",
             ));
         };
-        BearerToken::new(key.clone())?;
+        if require_key {
+            BearerToken::new(key.clone())?;
+        }
         let base_url = match generic_base {
             Some(base) => base,
             None => match family {
@@ -370,7 +391,7 @@ impl ClientConfig {
             }),
             base_url,
             model,
-            api_key: key,
+            api_key: if require_key { key } else { String::new() },
             api_key_env: Some(variable),
             compatibility,
             ..Self::default()

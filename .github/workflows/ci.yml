@@ -36,6 +36,8 @@ jobs:
         run: cargo run --locked -p aicoder-core --example event_stream
       - name: Explicit subscription overflow example
         run: cargo run --locked -p aicoder-core --example event_stream -- --overflow
+      - name: Shared offline runtime example
+        run: cargo run --locked -p aicoder-runtime --example offline_runtime
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

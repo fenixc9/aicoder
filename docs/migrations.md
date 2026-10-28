@@ -210,3 +210,32 @@ reports move to schema 3 and include event_schema_version; checkpoints missing o
 mismatching that value regenerate cases. v3 session file syntax stays unchanged.
 Session terminal records retain their existing stats rather than claiming final
 observer acknowledgements that can occur only after terminal publication.
+
+## S3: shared runtime configuration
+
+Applications now depend on aicoder-runtime for common settings/factories instead of
+assembling provider/compaction/session defaults individually. Add the workspace crate
+and use Runtime::load/load_with_environment, executor_builder, agent_config and sessions.
+Core's model/execution interfaces are unchanged. EventDeliveryConfig::validate is now
+public so hosts can validate settings before assembly. Builtin implementations/JSONL
+remain in core for this increment; their S3 extraction has not been marked complete.
+
+CLI max-rounds defaults are resolved by runtime instead of an always-present Clap
+value; absence now allows environment/project/user configuration to apply. The shared
+output default is 4096 (previous CLI default: 2048), and the base prompt replies in the
+user's language. TUI defaults align with the same snapshot. ModelOptions now flow in
+full through SweBenchAdapter::model_options; its existing temperature/max_tokens builder
+methods still work. Bench parameters contain the frozen runtime snapshot, so incompatible
+older checkpoints regenerate rather than mixing settings.
+
+Automatic dotenv searches, compile-time crate paths and process mutation have been
+removed. Migrate to --env-file /path/to/trusted.env or export variables explicitly.
+Process values precede the private dotenv fallback. JSON settings require version 1;
+project files cannot define profiles or session paths. Null differs from an omitted
+field. Config/show-config commands work without bearer resolution and redact credentials.
+See [paths, precedence, sources and reload boundaries](runtime-configuration.md).
+
+Core BashTool::excluding_environment lets host assembly add managed credential reference
+names. Runtime's registry uses it for selected/configured profiles; core's default unit
+BashTool behavior remains compatible. Custom registries/credential providers retain their
+own explicit environment policy.

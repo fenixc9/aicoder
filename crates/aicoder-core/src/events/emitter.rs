@@ -24,7 +24,7 @@ impl Default for EventDeliveryConfig {
     }
 }
 impl EventDeliveryConfig {
-    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+    pub fn validate(&self) -> anyhow::Result<()> {
         self.callback_buffer.validate()?;
         anyhow::ensure!(
             !self.callback_drain_timeout.is_zero(),

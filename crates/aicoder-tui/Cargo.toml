@@ -13,12 +13,11 @@ path = "src/main.rs"
 
 [dependencies]
 aicoder-core.workspace = true
-aicoder-providers.workspace = true
+aicoder-runtime.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 clap.workspace = true
 crossterm = { version = "0.28", features = ["event-stream"] }
-dotenvy.workspace = true
 futures.workspace = true
 ratatui = "0.29"
 serde_json.workspace = true

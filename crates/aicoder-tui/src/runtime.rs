@@ -1,9 +1,7 @@
-use aicoder_providers::ChatClient;
 use std::{path::PathBuf, sync::Arc};
 
 use aicoder_core::{
-    Agent, AgentConfig, ContextWindowConfig, PruningContextCompactor, RunControl, SessionSelection,
-    TurnExecutionConfig, TurnExecutor,
+    Agent, RunControl, SessionSelection,
     session::{JsonlSessionRepository, Session, SessionInfo, SessionRepository},
 };
 use aicoder_core::{
@@ -45,40 +43,16 @@ pub struct AgentRuntime {
 }
 
 impl AgentRuntime {
-    pub fn new(
-        workspace: PathBuf,
-        session_root: PathBuf,
-        client: ChatClient,
-        context_window: Option<usize>,
-    ) -> Result<Self> {
-        let repository = Arc::new(JsonlSessionRepository::new(session_root)?);
-        let model = client.model().to_string();
-        let mut builder = TurnExecutor::builder(client)
-            .workspace(&workspace)
-            .config(TurnExecutionConfig::default());
-        if let Some(max_context_tokens) = context_window {
-            builder =
-                builder.context_compactor(PruningContextCompactor::new(ContextWindowConfig {
-                    max_context_tokens,
-                    reserved_output_tokens: 4_096,
-                    preserve_recent_tokens: 8_192.min(max_context_tokens.saturating_sub(4_097)),
-                })?);
-        }
-        let agent = Arc::new(Agent::new(
-            builder.build()?,
-            AgentConfig {
-                model,
-                system_prompt: Some(
-                    "You are a coding assistant. Inspect the project before changing it, use tools when needed, verify changes, and report concisely. Reply in the user's language."
-                        .into(),
-                ),
-                options: aicoder_core::model::ModelOptions {max_output_tokens:Some(4096),..Default::default()},
-            },
-        ));
+    pub fn new(runtime: aicoder_runtime::Runtime) -> Result<Self> {
+        let repository = Arc::new(runtime.sessions()?);
+        let executor = runtime
+            .executor_builder(Arc::new(runtime.client()?))?
+            .build()?;
+        let agent = Arc::new(Agent::new(executor, runtime.agent_config()));
         Ok(Self {
             agent,
             repository,
-            workspace,
+            workspace: runtime.config().workspace.clone(),
         })
     }
 
