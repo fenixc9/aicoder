@@ -226,6 +226,8 @@ impl Deref for TurnExecutionResult {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InterruptedTurn {
+    #[serde(default)]
+    pub persistence_error: Option<Box<RunFailure>>,
     pub stop: RunStop,
     pub progress: RunProgress,
 }
@@ -242,7 +244,11 @@ impl fmt::Display for InterruptedTurn {
 }
 impl InterruptedTurn {
     pub fn into_error(self) -> anyhow::Error {
-        self.stop.error().context(self)
+        let mut error = self.stop.error();
+        if let Some(failure) = &self.persistence_error {
+            error = error.context(failure.clone());
+        }
+        error.context(self)
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]

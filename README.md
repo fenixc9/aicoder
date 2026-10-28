@@ -26,7 +26,8 @@ See [API migrations](docs/migrations.md) when updating an embedded application.
 The [provider-neutral model API](docs/model-api.md) is shared by the agent
 loop, tools, sessions and frontends. Structured [run outcomes and budgets](docs/run-outcomes.md) retain progress on
 limits, failures and cancellation. [Provider profiles](docs/provider-configuration.md) configure proxy, credentials,
-timeouts and compatible-service behavior.
+timeouts and compatible-service behavior. [Tree sessions and recovery](docs/sessions.md)
+cover branches, durable tool checkpoints, interrupted turns and backed-up v1/v2 migration.
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs
 request construction or session persistence. Both layers consume the single

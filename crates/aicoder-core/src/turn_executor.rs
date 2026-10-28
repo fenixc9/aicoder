@@ -127,6 +127,21 @@ impl TurnExecutor {
         handler: Arc<dyn AgentEventHandler>,
         context: TurnExecutionContext,
     ) -> RunOutcome {
+        self.run_with_journal(request, handler, context, &()).await
+    }
+    pub fn model_spec(
+        &self,
+        model: &str,
+    ) -> std::result::Result<crate::model::ModelSpec, crate::model::ProviderError> {
+        self.provider.model_spec(model)
+    }
+    pub async fn run_with_journal(
+        &self,
+        request: ModelRequest,
+        handler: Arc<dyn AgentEventHandler>,
+        context: TurnExecutionContext,
+        journal: &dyn crate::RunJournal,
+    ) -> RunOutcome {
         let context = context.child();
         let limits = Arc::new(RunLimiter::new(self.config.budget.clone(), context.clone()));
         let mut progress = RunProgress::new(request.messages.clone());
@@ -152,7 +167,7 @@ impl TurnExecutor {
                     &mut state,
                     &context,
                     &mut progress,
-                    &limits,
+                    (&limits, journal),
                 );
                 tokio::pin!(inner);
                 match limits.budget.max_duration {
@@ -178,12 +193,41 @@ impl TurnExecutor {
             execution = Err(error);
         }
         limits.snapshot(&mut progress);
-        let mut stop = execution
-            .as_ref()
-            .err()
-            .map(|error| classify_stop(error, &limits, progress.stage));
+        let mut outcome = match execution {
+            Ok((final_message, finish_reason)) => RunOutcome::Completed(TurnExecutionResult {
+                final_message,
+                finish_reason,
+                progress,
+            }),
+            Err(error) => {
+                let stop = classify_stop(&error, &limits, progress.stage);
+                RunOutcome::Interrupted(InterruptedTurn {
+                    stop,
+                    progress,
+                    persistence_error: None,
+                })
+            }
+        };
+        if let Err(error) = journal.finish(&outcome).await {
+            let failure = error
+                .downcast_ref::<RunFailure>()
+                .cloned()
+                .unwrap_or_else(|| RunFailure::from_error(RunStage::Persistence, &error));
+            outcome = match outcome {
+                RunOutcome::Completed(result) => RunOutcome::Interrupted(InterruptedTurn {
+                    stop: RunStop::Failed(failure.clone()),
+                    progress: result.progress,
+                    persistence_error: Some(Box::new(failure)),
+                }),
+                RunOutcome::Interrupted(mut turn) => {
+                    turn.persistence_error = Some(Box::new(failure));
+                    RunOutcome::Interrupted(turn)
+                }
+            };
+        }
+        let progress = outcome.progress();
         let round = (progress.rounds > 0).then_some(progress.rounds);
-        let terminal = match &stop {
+        let terminal = match outcome.stop() {
             None => AgentRunState::Completed {
                 rounds: progress.rounds,
             },
@@ -192,44 +236,36 @@ impl TurnExecutor {
             Some(RunStop::Failed(_)) => AgentRunState::Failed { round },
         };
         if let Err(error) = transition_state(&mut state, &events, terminal) {
-            stop = Some(RunStop::Failed(RunFailure::from_error(
-                progress.stage,
-                &error,
-            )));
+            let progress = match outcome {
+                RunOutcome::Completed(result) => result.progress,
+                RunOutcome::Interrupted(turn) => turn.progress,
+            };
+            outcome = RunOutcome::Interrupted(InterruptedTurn {
+                stop: RunStop::Failed(RunFailure::from_error(progress.stage, &error)),
+                progress,
+                persistence_error: None,
+            });
         }
-        let outcome = match (execution, stop) {
-            (Ok((final_message, finish_reason)), None) => {
-                events.emit(AgentRawEvent::AgentCompleted {
-                    rounds: progress.rounds,
-                    usage: progress.usage.clone().into(),
-                });
-                RunOutcome::Completed(TurnExecutionResult {
-                    final_message,
-                    finish_reason,
-                    progress,
-                })
-            }
-            (result, stop) => {
-                let stop = stop.unwrap_or_else(|| {
-                    RunStop::Failed(RunFailure::from_error(progress.stage, &result.unwrap_err()))
-                });
-                match &stop {
-                    RunStop::Cancelled { reason } => events.emit(AgentRawEvent::AgentAborted {
-                        reason: reason.clone().into(),
-                    }),
-                    RunStop::Budget(_) | RunStop::Model(_) => {
-                        events.emit(AgentRawEvent::AgentStopped {
-                            stop: Arc::new(stop.clone()),
-                        })
-                    }
-                    RunStop::Failed(_) => events.emit(AgentRawEvent::AgentFailed {
-                        stage: AgentStage::Turn,
-                        message: stop.to_string().into(),
-                    }),
+        match &outcome {
+            RunOutcome::Completed(result) => events.emit(AgentRawEvent::AgentCompleted {
+                rounds: result.rounds,
+                usage: result.usage.clone().into(),
+            }),
+            RunOutcome::Interrupted(turn) => match &turn.stop {
+                RunStop::Cancelled { reason } => events.emit(AgentRawEvent::AgentAborted {
+                    reason: reason.clone().into(),
+                }),
+                RunStop::Budget(_) | RunStop::Model(_) => {
+                    events.emit(AgentRawEvent::AgentStopped {
+                        stop: Arc::new(turn.stop.clone()),
+                    })
                 }
-                RunOutcome::Interrupted(InterruptedTurn { stop, progress })
-            }
-        };
+                RunStop::Failed(_) => events.emit(AgentRawEvent::AgentFailed {
+                    stage: AgentStage::Turn,
+                    message: turn.stop.to_string().into(),
+                }),
+            },
+        }
         context.cancel("run finished");
         events.shutdown().await;
         outcome
@@ -242,8 +278,9 @@ impl TurnExecutor {
         state: &mut AgentRunStateMachine,
         context: &TurnExecutionContext,
         progress: &mut RunProgress,
-        limits: &Arc<RunLimiter>,
+        control: (&Arc<RunLimiter>, &dyn crate::RunJournal),
     ) -> Result<(Message, Option<StopReason>)> {
+        let (limits, journal) = control;
         if context.is_cancelled() {
             return Err(context.error().into());
         }
@@ -571,7 +608,16 @@ impl TurnExecutor {
                             feedback: Some(feedback.clone().into()),
                         });
                         let feedback = completion_feedback_message(feedback);
+                        checkpoint(
+                            journal,
+                            progress.messages.len() - 1,
+                            &assistant_message,
+                            context,
+                        )
+                        .await?;
                         progress.messages.push(feedback.clone());
+                        checkpoint(journal, progress.messages.len() - 1, &feedback, context)
+                            .await?;
                         context_messages.push(feedback);
                         round_events.emit(AgentRawEvent::RoundCompleted {
                             outcome: RoundOutcome::CompletionRejected,
@@ -602,6 +648,8 @@ impl TurnExecutor {
             }
 
             progress.stage = RunStage::Tools;
+            let model_index = progress.messages.len() - 1;
+            checkpoint(journal, model_index, &assistant_message, context).await?;
             limits.reserve_tools(tool_calls.len(), self.dispatcher.max_calls_per_round())?;
             transition_state(
                 state,
@@ -619,7 +667,17 @@ impl TurnExecutor {
             let capture = crate::tools::DispatchCapture::new(tool_calls.len());
             let dispatched = self
                 .dispatcher
-                .dispatch_captured(&tool_calls, &round_events, context, limits, &capture)
+                .dispatch_captured(
+                    &tool_calls,
+                    &round_events,
+                    context,
+                    limits,
+                    &capture,
+                    crate::tools::DispatchJournal {
+                        journal,
+                        base_index: model_index + 1,
+                    },
+                )
                 .await;
             progress.messages.extend(capture.messages());
             let tool_messages = match dispatched {
@@ -668,8 +726,22 @@ fn classify_stop(error: &anyhow::Error, limits: &RunLimiter, stage: RunStage) ->
     } else if let Some(stopped) = error.downcast_ref::<ModelStopped>() {
         RunStop::Model(stopped.0.clone())
     } else {
-        RunStop::Failed(RunFailure::from_error(stage, error))
+        RunStop::Failed(
+            error
+                .downcast_ref::<RunFailure>()
+                .cloned()
+                .unwrap_or_else(|| RunFailure::from_error(stage, error)),
+        )
     }
+}
+
+pub(crate) async fn checkpoint(
+    journal: &dyn crate::RunJournal,
+    index: usize,
+    message: &Message,
+    context: &TurnExecutionContext,
+) -> Result<()> {
+    tokio::select! {biased;cancelled=context.cancelled()=>Err(cancelled.into()),result=journal.checkpoint(index,message)=>result.map_err(|error|anyhow::Error::from(RunFailure::from_error(RunStage::Persistence,&error)))}
 }
 
 fn ensure_token_capacity(limits: &RunLimiter, input: u64) -> Result<()> {

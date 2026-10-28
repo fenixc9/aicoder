@@ -13,7 +13,7 @@ use aicoder_core::{
         ContextCompactionCompletedEvent, ReasoningChunkEvent, ReasoningEndedEvent,
         ReasoningStartedEvent, ToolCallEndedEvent, ToolExecutionEndedEvent,
     },
-    session::{JsonlSessionRepository, SessionRepository},
+    session::{JsonlSessionRepository, SessionEntryData, SessionRepository},
     tools::{AllowAllApproval, ApprovalHandler, ToolInvocation},
 };
 use anyhow::{Context, Result, ensure};
@@ -75,6 +75,22 @@ struct Cli {
 enum Command {
     /// List sessions belonging to the selected workspace.
     Sessions,
+    /// Show every branch and entry; --json emits metadata and entries for other hosts.
+    SessionTree {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Select an entry as the parent of the next turn; other branches remain available.
+    CheckoutSession {
+        id: String,
+        #[arg(required_unless_present = "root", conflicts_with = "root")]
+        entry: Option<String>,
+        #[arg(long)]
+        root: bool,
+    },
+    /// Upgrade a legacy session, preserving an exact backup before changing its format.
+    MigrateSession { id: String },
     /// Permanently delete a session by its full ID.
     DeleteSession {
         /// Session ID shown by `aicoder sessions`.
@@ -215,6 +231,74 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
                         session.title.as_deref().unwrap_or("(无标题)")
                     );
                 }
+            }
+            Ok(true)
+        }
+        Some(Command::SessionTree { id, json }) => {
+            let session = repository.open(id)?;
+            if *json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &serde_json::json!({"metadata":session.metadata(),"entries":session.entries()})
+                    )?
+                );
+            } else {
+                for entry in session.entries() {
+                    let kind = match &entry.data {
+                        SessionEntryData::Message { message } => format!("{:?}", message.role),
+                        SessionEntryData::ModelChanged { provider, model } => {
+                            format!("model {provider}/{model}")
+                        }
+                        SessionEntryData::Compaction { strategy, .. } => {
+                            format!("compaction {strategy}")
+                        }
+                        SessionEntryData::Extension { namespace, .. } => {
+                            format!("extension {namespace}")
+                        }
+                        SessionEntryData::TurnStart { .. } => "turn_start".into(),
+                        SessionEntryData::TurnEnd { record, .. } => {
+                            if record.stop.is_some() {
+                                "turn_interrupted".into()
+                            } else {
+                                "turn_completed".into()
+                            }
+                        }
+                    };
+                    let selected =
+                        if session.metadata().leaf_id.as_deref() == Some(entry.id.as_str()) {
+                            "*"
+                        } else {
+                            " "
+                        };
+                    println!(
+                        "{selected} {} <- {}\t{kind}",
+                        entry.id,
+                        entry.parent_id.as_deref().unwrap_or("root")
+                    );
+                }
+            }
+            Ok(true)
+        }
+        Some(Command::CheckoutSession { id, entry, .. }) => {
+            let mut session = repository.open(id)?;
+            repository.checkout(&mut session, entry.as_deref())?;
+            println!(
+                "Session {id}: selected {}",
+                entry.as_deref().unwrap_or("root")
+            );
+            Ok(true)
+        }
+        Some(Command::MigrateSession { id }) => {
+            let mut session = repository.open(id)?;
+            if let Some(backup) = repository.migrate(&mut session)? {
+                println!(
+                    "Session {id}: v{}, backup {}",
+                    session.metadata().version,
+                    backup.display()
+                );
+            } else {
+                println!("Session {id}: already v{}", session.metadata().version);
             }
             Ok(true)
         }

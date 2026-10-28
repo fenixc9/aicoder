@@ -8,6 +8,7 @@ pub mod cancellation;
 pub mod completion;
 pub mod context;
 pub mod events;
+pub mod journal;
 pub mod model;
 pub mod redaction;
 pub mod run;
@@ -42,3 +43,5 @@ pub use run::{
     BudgetExceeded, BudgetResource, InterruptedTurn, RunBudget, RunFailure, RunOutcome,
     RunProgress, RunStage, RunStop, TurnExecutionResult,
 };
+
+pub use journal::RunJournal;

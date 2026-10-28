@@ -7,7 +7,7 @@ use aicoder_core::{
     AgentRawEvent, AgentRawEventEnvelope, AgentRunState, AgentTurnOutcome, SessionSelection,
     ToolExecutionOutcome, TurnExecutionContext,
     model::{Message, MessageRole, ModelUsage},
-    session::{Session, SessionInfo},
+    session::{Session, SessionEntryData, SessionInfo},
     tools::ToolInvocation,
 };
 use tokio::sync::oneshot;
@@ -379,6 +379,11 @@ impl App {
                     _ => AgentRunState::Stopped { round },
                 };
                 let message = turn.stop.to_string();
+                if let Some(failure) = turn.persistence_error {
+                    self.timeline.push(TimelineItem::Error(format!(
+                        "Session could not be saved: {failure}"
+                    )));
+                }
                 self.usage = turn.progress.usage;
                 if let Some(session) = turn.session {
                     self.session_selection = SessionSelection::Existing(session.id);
@@ -400,8 +405,44 @@ impl App {
     pub fn load_session(&mut self, session: &Session) {
         self.timeline.clear();
         self.tool_indexes.clear();
-        for entry in session.messages() {
-            push_message(&mut self.timeline, &entry.message);
+        self.usage = ModelUsage::zero();
+        for entry in session.active_entries() {
+            match &entry.data {
+                SessionEntryData::Message { message } => push_message(&mut self.timeline, message),
+                SessionEntryData::TurnEnd { record, .. } => {
+                    if let Some(statistics) = &record.statistics {
+                        self.usage.accumulate(&statistics.usage);
+                    }
+                    if let Some(stop) = &record.stop {
+                        self.timeline
+                            .push(TimelineItem::Notice(format!("Interrupted: {stop}")));
+                    }
+                    if let Some(partial) = &record.partial_response {
+                        if !partial.reasoning.is_empty() {
+                            self.timeline.push(TimelineItem::Reasoning {
+                                text: partial.reasoning.clone(),
+                                open: false,
+                            });
+                        }
+                        if !partial.text.is_empty() {
+                            self.timeline.push(TimelineItem::Assistant {
+                                text: format!("[Partial response] {}", partial.text),
+                                open: false,
+                            });
+                        }
+                        if !partial.tool_calls.is_empty() {
+                            self.timeline.push(TimelineItem::Notice(format!(
+                                "{} incomplete tool call fragments; execution was not resumed",
+                                partial.tool_calls.len()
+                            )));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if session.unfinished_turn().is_some() {
+            self.timeline.push(TimelineItem::Notice("Previous process ended without a terminal record. Inspect the workspace before retrying operations.".into()));
         }
         self.session_selection = SessionSelection::Existing(session.metadata().id.clone());
         self.focus = Focus::Input;
@@ -537,6 +578,60 @@ mod tests {
             round: Some(1),
             event,
         })
+    }
+
+    #[test]
+    fn session_reload_shows_only_the_selected_branch_and_labels_partial_output() {
+        use aicoder_core::{
+            run::PartialModelResponse,
+            session::{MemorySessionRepository, SessionRepository, TurnRecord},
+        };
+        let workspace = tempfile::tempdir().unwrap();
+        let repository = MemorySessionRepository::new();
+        let mut session = repository.create(workspace.path()).unwrap();
+        repository
+            .append(&mut session, Message::text(MessageRole::User, "root"))
+            .unwrap();
+        let root = session.metadata().leaf_id.clone().unwrap();
+        repository
+            .append(
+                &mut session,
+                Message::text(MessageRole::Assistant, "hidden branch"),
+            )
+            .unwrap();
+        repository.checkout(&mut session, Some(&root)).unwrap();
+        let mut record = TurnRecord::recovered();
+        record.partial_response = Some(PartialModelResponse {
+            text: "unfinished output".into(),
+            ..Default::default()
+        });
+        repository
+            .append_entries(
+                &mut session,
+                vec![
+                    SessionEntryData::TurnStart {
+                        turn_id: "t".into(),
+                    },
+                    SessionEntryData::TurnEnd {
+                        turn_id: "t".into(),
+                        record: Box::new(record),
+                    },
+                ],
+            )
+            .unwrap();
+        let mut app = App::new(vec![]);
+        app.load_session(&session);
+        assert!(app.timeline.iter().any(|item|matches!(item,TimelineItem::Assistant {text,..} if text=="[Partial response] unfinished output")));
+        assert!(
+            !app.timeline.iter().any(
+                |item| matches!(item,TimelineItem::Assistant {text,..} if text=="hidden branch")
+            )
+        );
+        assert!(
+            app.timeline.iter().any(
+                |item| matches!(item,TimelineItem::Notice(text) if text.contains("Interrupted"))
+            )
+        );
     }
 
     #[test]

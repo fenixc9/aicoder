@@ -3,7 +3,9 @@ use crate::{
     AgentEventHandler, TurnExecutionContext, TurnExecutionResult, TurnExecutor,
     model::{Message, MessageRole, ModelOptions, ModelRequest},
     run::{InterruptedTurn, RunFailure, RunOutcome, RunProgress, RunStage, RunStop},
-    session::{Session, SessionMetadata, SessionRepository},
+    session::{
+        Session, SessionEntryData, SessionJournal, SessionMetadata, SessionRepository, TurnRecord,
+    },
 };
 use anyhow::{Result, ensure};
 use std::{ops::Deref, sync::Arc};
@@ -39,6 +41,7 @@ pub struct AgentTurnResult {
 }
 #[derive(Debug)]
 pub struct InterruptedAgentTurn {
+    pub persistence_error: Option<Box<RunFailure>>,
     pub session: Option<SessionMetadata>,
     pub progress: RunProgress,
     pub stop: RunStop,
@@ -83,10 +86,12 @@ impl AgentTurnOutcome {
             Self::Aborted(turn)
             | Self::Limited(turn)
             | Self::Stopped(turn)
-            | Self::Failed(turn) => Err(turn.error.context(InterruptedTurn {
+            | Self::Failed(turn) => Err(InterruptedTurn {
                 stop: turn.stop,
                 progress: turn.progress,
-            })),
+                persistence_error: turn.persistence_error,
+            }
+            .into_error()),
         }
     }
 }
@@ -137,9 +142,9 @@ impl Agent {
             None,
         )
     }
-    pub async fn run_with_session<R: SessionRepository>(
+    pub async fn run_with_session(
         &self,
-        repository: &R,
+        repository: &dyn SessionRepository,
         selection: SessionSelection,
         prompt: impl Into<String>,
         handler: Arc<dyn AgentEventHandler>,
@@ -153,9 +158,9 @@ impl Agent {
         )
         .await
     }
-    pub async fn run_with_session_context<R: SessionRepository>(
+    pub async fn run_with_session_context(
         &self,
-        repository: &R,
+        repository: &dyn SessionRepository,
         selection: SessionSelection,
         prompt: impl Into<String>,
         handler: Arc<dyn AgentEventHandler>,
@@ -165,9 +170,9 @@ impl Agent {
             .await
             .into_result()
     }
-    pub async fn run_with_session_outcome<R: SessionRepository>(
+    pub async fn run_with_session_outcome(
         &self,
-        repository: &R,
+        repository: &dyn SessionRepository,
         selection: SessionSelection,
         prompt: impl Into<String>,
         handler: Arc<dyn AgentEventHandler>,
@@ -197,32 +202,68 @@ impl Agent {
                 Some(session.metadata().clone()),
             );
         }
-        if let Err(error) = repository.append(&mut session, user) {
-            return failed(
-                error,
-                RunProgress::new(initial),
-                Some(session.metadata().clone()),
-            );
-        }
-        let mut messages = self.system_messages();
-        messages.extend(session.chat_messages());
+        let lease = match repository.acquire_run(&mut session) {
+            Ok(lease) => lease,
+            Err(error) => {
+                return failed(
+                    error,
+                    RunProgress::new(initial),
+                    Some(session.metadata().clone()),
+                );
+            }
+        };
+        let turn_id = uuid::Uuid::new_v4().to_string();
+        let prepared = (|| -> Result<Vec<Message>> {
+            let mut entries = Vec::new();
+            if let Some(previous) = session.unfinished_turn() {
+                entries.push(SessionEntryData::TurnEnd {
+                    turn_id: previous.into(),
+                    record: Box::new(TurnRecord::recovered()),
+                });
+            }
+            let spec = self.turn_executor.model_spec(&self.config.model)?;
+            if session.selected_model() != Some((spec.provider.as_str(), spec.id.as_str())) {
+                entries.push(SessionEntryData::ModelChanged {
+                    provider: spec.provider,
+                    model: spec.id,
+                });
+            }
+            entries.push(SessionEntryData::TurnStart {
+                turn_id: turn_id.clone(),
+            });
+            let prior = session.model_messages()?;
+            entries.push(SessionEntryData::Message {
+                message: user.clone(),
+            });
+            repository.append_entries(&mut session, entries)?;
+            let mut messages = self.system_messages();
+            messages.extend(prior);
+            messages.push(user);
+            Ok(messages)
+        })();
+        let messages = match prepared {
+            Ok(messages) => messages,
+            Err(error) => {
+                return failed(
+                    error,
+                    RunProgress::new(initial),
+                    Some(session.metadata().clone()),
+                );
+            }
+        };
+        let journal = SessionJournal::new(repository, session, turn_id);
         let execution = self
             .turn_executor
-            .run_outcome(self.completion_request(messages), handler, context)
+            .run_with_journal(
+                self.completion_request(messages),
+                handler,
+                context,
+                &journal,
+            )
             .await;
-        match execution {
-            RunOutcome::Completed(result) => {
-                let generated = &result.messages[result.input_messages..];
-                if let Err(error) = repository.append_all(&mut session, generated.iter().cloned()) {
-                    return failed(error, result.progress, Some(session.metadata().clone()));
-                }
-                AgentTurnOutcome::Completed(AgentTurnResult {
-                    execution_result: result,
-                    session: Some(session.metadata().clone()),
-                })
-            }
-            stopped => from_execution(stopped, Some(session.metadata().clone())),
-        }
+        let metadata = journal.metadata();
+        drop(lease);
+        from_execution(execution, Some(metadata))
     }
     fn system_messages(&self) -> Vec<Message> {
         self.config
@@ -245,7 +286,17 @@ fn from_execution(outcome: RunOutcome, session: Option<SessionMetadata>) -> Agen
             execution_result,
             session,
         }),
-        RunOutcome::Interrupted(turn) => interrupted(turn.stop, turn.progress, session),
+        RunOutcome::Interrupted(turn) => {
+            let mut outcome = interrupted(turn.stop, turn.progress, session);
+            if let AgentTurnOutcome::Aborted(stopped)
+            | AgentTurnOutcome::Limited(stopped)
+            | AgentTurnOutcome::Stopped(stopped)
+            | AgentTurnOutcome::Failed(stopped) = &mut outcome
+            {
+                stopped.persistence_error = turn.persistence_error;
+            }
+            outcome
+        }
     }
 }
 fn interrupted(
@@ -254,6 +305,7 @@ fn interrupted(
     session: Option<SessionMetadata>,
 ) -> AgentTurnOutcome {
     let turn = InterruptedAgentTurn {
+        persistence_error: None,
         session,
         progress,
         error: stop.error(),
@@ -288,8 +340,8 @@ fn ensure_session_workspace(session: &Session, workspace: &std::path::Path) -> R
     );
     Ok(())
 }
-fn select_session<R: SessionRepository>(
-    repository: &R,
+fn select_session(
+    repository: &dyn SessionRepository,
     workspace: &std::path::Path,
     selection: SessionSelection,
 ) -> Result<Session> {

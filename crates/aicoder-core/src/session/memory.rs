@@ -1,189 +1,152 @@
+use super::*;
+use anyhow::{Context, Result, ensure};
 use std::{
     collections::HashMap,
-    path::Path,
-    sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
-
-use anyhow::{Context, Result, bail};
-use uuid::Uuid;
-
-use crate::model::{Message, MessageRole};
-
-use super::{Session, SessionInfo, SessionMessage, SessionMetadata, SessionRepository};
-
-use super::SESSION_VERSION;
-
-/// In-process repository intended for tests and ephemeral frontends.
 #[derive(Debug, Default)]
-pub struct MemorySessionRepository {
-    sessions: Mutex<HashMap<String, Session>>,
+struct State {
+    sessions: HashMap<String, Session>,
+    runs: HashMap<String, String>,
 }
-
+#[derive(Debug, Default, Clone)]
+pub struct MemorySessionRepository {
+    state: Arc<Mutex<State>>,
+}
 impl MemorySessionRepository {
     pub fn new() -> Self {
         Self::default()
     }
 }
-
-fn now_millis() -> Result<u64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("System clock is before the Unix epoch")?
-        .as_millis()
-        .try_into()
-        .context("Current timestamp does not fit in u64")
+struct Lease {
+    state: Arc<Mutex<State>>,
+    id: String,
+    token: String,
 }
-
-fn title_from_message(message: &Message) -> Option<String> {
-    if message.role != MessageRole::User {
-        return None;
+impl Drop for Lease {
+    fn drop(&mut self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if state.runs.get(&self.id) == Some(&self.token) {
+            state.runs.remove(&self.id);
+        }
     }
-    let title = message
-        .text_content()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if title.is_empty() {
-        return None;
-    }
-    Some(title.chars().take(80).collect())
 }
-
-fn canonical_cwd(cwd: &Path) -> Result<std::path::PathBuf> {
-    cwd.canonicalize()
-        .with_context(|| format!("Failed to resolve workspace {}", cwd.display()))
-}
-
 impl SessionRepository for MemorySessionRepository {
     fn create(&self, cwd: &Path) -> Result<Session> {
         let timestamp = now_millis()?;
-        let id = Uuid::new_v4().to_string();
-        let session = Session {
-            metadata: SessionMetadata {
-                version: SESSION_VERSION,
-                id: id.clone(),
-                cwd: canonical_cwd(cwd)?,
-                created_at: timestamp,
-                updated_at: timestamp,
-                title: None,
-            },
-            messages: Vec::new(),
-            path: None,
-            expected_file_len: 0,
-            valid_file_len: 0,
-            needs_separator: false,
-        };
-        self.sessions
+        let id = uuid::Uuid::new_v4().to_string();
+        let session = Session::empty(SessionMetadata {
+            version: SESSION_VERSION,
+            id: id.clone(),
+            cwd: cwd.canonicalize()?,
+            created_at: timestamp,
+            updated_at: timestamp,
+            title: None,
+            leaf_id: None,
+            revision: 0,
+        });
+        self.state
             .lock()
-            .expect("memory session repository lock poisoned")
+            .expect("memory repository poisoned")
+            .sessions
             .insert(id, session.clone());
         Ok(session)
     }
-
     fn open(&self, id: &str) -> Result<Session> {
-        self.sessions
+        let mut session = self
+            .state
             .lock()
-            .expect("memory session repository lock poisoned")
+            .expect("memory repository poisoned")
+            .sessions
             .get(id)
             .cloned()
-            .with_context(|| format!("Session {id} not found"))
+            .context("session not found")?;
+        session.run_token = None;
+        Ok(session)
     }
-
     fn list(&self, cwd: &Path) -> Result<Vec<SessionInfo>> {
-        let cwd = canonical_cwd(cwd)?;
+        let cwd = cwd.canonicalize()?;
         let mut sessions = self
-            .sessions
+            .state
             .lock()
-            .expect("memory session repository lock poisoned")
+            .expect("memory repository poisoned")
+            .sessions
             .values()
             .filter(|session| session.metadata.cwd == cwd)
             .map(SessionInfo::from)
             .collect::<Vec<_>>();
-        sessions.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| right.id.cmp(&left.id))
-        });
+        sort_sessions(&mut sessions);
         Ok(sessions)
     }
-
-    fn append(&self, session: &mut Session, message: Message) -> Result<()> {
-        if message.role == MessageRole::System {
-            bail!("System messages are runtime context and cannot be stored in a session");
-        }
-        let timestamp = now_millis()?;
-        session.messages.push(SessionMessage {
-            id: Uuid::new_v4().to_string(),
-            created_at: timestamp,
-            message,
-        });
-        session.metadata.updated_at = timestamp;
-        if session.metadata.title.is_none() {
-            session.metadata.title = title_from_message(&session.messages.last().unwrap().message);
-        }
-        self.sessions
-            .lock()
-            .expect("memory session repository lock poisoned")
-            .insert(session.metadata.id.clone(), session.clone());
-        Ok(())
-    }
-
-    fn delete(&self, id: &str) -> Result<()> {
-        if self
+    fn commit(&self, session: &mut Session, transaction: SessionTransaction) -> Result<()> {
+        session.validate(&transaction)?;
+        let mut state = self.state.lock().expect("memory repository poisoned");
+        let stored = state
             .sessions
-            .lock()
-            .expect("memory session repository lock poisoned")
-            .remove(id)
-            .is_none()
-        {
-            bail!("Session {id} not found");
+            .get(&session.metadata.id)
+            .context("session not found")?;
+        if stored.metadata.revision != session.metadata.revision {
+            return Err(SessionConflict {
+                id: session.metadata.id.clone(),
+            }
+            .into());
         }
+        ensure!(
+            state
+                .runs
+                .get(&session.metadata.id)
+                .is_none_or(|token| session.run_token.as_ref() == Some(token)),
+            "session already has an active run"
+        );
+        let revision = session
+            .metadata
+            .revision
+            .checked_add(1)
+            .context("session revision overflow")?;
+        let timestamp = now_millis()?;
+        state.sessions.get_mut(&session.metadata.id).unwrap().apply(
+            transaction.clone(),
+            revision,
+            timestamp,
+        );
+        session.apply(transaction, revision, timestamp);
         Ok(())
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use tempfile::tempdir;
-
-    use super::*;
-
-    fn user_message(content: &str) -> Message {
-        Message::text(MessageRole::User, content.to_string())
-    }
-
-    #[test]
-    fn memory_repository_round_trips_and_lists_sessions() {
-        let cwd = tempdir().unwrap();
-        let repository = MemorySessionRepository::new();
-        let mut session = repository.create(cwd.path()).unwrap();
-        repository
-            .append(&mut session, user_message("  inspect   this project  "))
-            .unwrap();
-
-        let reopened = repository.open(&session.metadata().id).unwrap();
-        assert_eq!(reopened.messages().len(), 1);
-        assert_eq!(
-            reopened.metadata().title.as_deref(),
-            Some("inspect this project")
+    fn acquire_run(&self, session: &mut Session) -> Result<SessionRunLease> {
+        let mut state = self.state.lock().expect("memory repository poisoned");
+        ensure!(
+            state.sessions.contains_key(&session.metadata.id),
+            "session not found"
         );
-        assert_eq!(repository.list(cwd.path()).unwrap().len(), 1);
-
-        repository.delete(&session.metadata().id).unwrap();
-        assert!(repository.list(cwd.path()).unwrap().is_empty());
+        ensure!(
+            !state.runs.contains_key(&session.metadata.id),
+            "session already has an active run"
+        );
+        let token = uuid::Uuid::new_v4().to_string();
+        state
+            .runs
+            .insert(session.metadata.id.clone(), token.clone());
+        session.run_token = Some(token.clone());
+        Ok(Box::new(Lease {
+            state: self.state.clone(),
+            id: session.metadata.id.clone(),
+            token,
+        }))
     }
-
-    #[test]
-    fn memory_repository_rejects_system_messages() {
-        let cwd = tempdir().unwrap();
-        let repository = MemorySessionRepository::new();
-        let mut session = repository.create(cwd.path()).unwrap();
-        let mut message = user_message("system");
-        message.role = MessageRole::System;
-
-        let error = repository.append(&mut session, message).unwrap_err();
-        assert!(error.to_string().contains("System messages"));
+    fn delete(&self, id: &str) -> Result<()> {
+        let mut state = self.state.lock().expect("memory repository poisoned");
+        ensure!(
+            !state.runs.contains_key(id),
+            "session already has an active run"
+        );
+        state.sessions.remove(id).context("session not found")?;
+        Ok(())
+    }
+    fn migrate(&self, _: &mut Session) -> Result<Option<PathBuf>> {
+        Ok(None)
     }
 }

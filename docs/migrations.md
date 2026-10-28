@@ -60,23 +60,9 @@ converted to text. Direct model API calls still reject unsupported input.
 
 ### Sessions
 
-New memory/JSONL sessions use version 2 and canonical content blocks. Existing
-version 1 JSONL files remain readable and can continue with representable
-legacy text/tool messages; appending preserves their original file format.
-Images, opaque state and block structures v1 cannot preserve fail before writes.
-
-To adopt v2 for an old conversation, create a new session and copy its canonical
-messages through the repository API. Keep the original as a backup:
-
-```rust,ignore
-let old = repository.open(old_id)?;
-let mut new = repository.create(&old.metadata().cwd)?;
-repository.append_all(&mut new, old.chat_messages())?;
-// Continue with new.metadata().id. The old session file remains untouched.
-```
-
-Tree history and richer migration control remain S2 work. This change does
-not yet persist interrupted turns' complete progress; structured partial progress is returned to callers via the run outcome API.
+S1 introduced version 2 canonical content blocks. S2 supersedes its storage behavior:
+new sessions use v3, and the first mutation of v1/v2 creates an exact backup and
+migrates automatically. See [tree sessions and legacy migration](sessions.md).
 
 SWE-bench batch reports use schema version 2 for nullable token totals. Old
 checkpoints without the canonical model contract version are not resumed into
@@ -150,3 +136,34 @@ Shell commands now use non-login, noninteractive Bash and return captured
 stdout/stderr. Commands inherit PATH but do not automatically source login or
 BASH_ENV files. Provider secret variables are removed as described in the
 configuration guide. Broader tool environment isolation remains S3 work.
+
+## S2: session trees, ownership and durable execution
+
+`SessionRepository` is object-safe. Implement `commit`, `acquire_run`, and `migrate`
+in custom stores alongside create/open/list/delete. Default append methods commit
+one atomic `SessionTransaction`; `append_all` batches messages rather than looping
+through independent writes. Enforce ancestry validation, revision conflicts and
+single-run ownership consistently. `Session::from_entries`, `validate_transaction`
+and `apply_transaction` support external domain reconstruction and folding;
+`run_token`/`attach_run_token` carry ephemeral ownership. See the bundled stores
+and shared contract tests.
+
+`Session::messages()` now returns borrowed `SessionMessage` views over the selected
+branch; use `entries()` for the entire immutable tree. Each entry has a parent and
+`SessionEntryData`; metadata adds selected leaf and revision. Struct-literal users
+must update for these fields and the revised `SessionInfo`. Use `chat_messages()`
+only for raw display/export, and `model_messages()` for continuation.
+
+Agent session methods accept `&dyn SessionRepository`; ordinary calls remain the
+same, but explicit generic/turbofish calls should remove their type parameter.
+Agent runs acquire an owned lease, checkpoint tool calls/results, and save terminal
+metadata before final events. `InterruptedTurn` and `InterruptedAgentTurn` add an
+optional boxed `persistence_error`; custom literals must supply it (`None` normally).
+Partial fragments are saved as turn metadata and displayed separately from messages.
+The lower-level executor offers optional `RunJournal` injection via `run_with_journal`.
+
+v3 JSONL uses checksummed transactions, not individual message records. Read-only
+v1/v2 open stays unchanged; explicit `migrate` or first mutation preserves exact
+`.v1.bak` / `.v2.bak` originals before atomic replacement. Stop older clients first.
+The [session guide](sessions.md) documents rollback, corruption and uncertain tool
+outcomes, along with new CLI branch/inspection/migration commands.

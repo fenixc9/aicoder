@@ -1,4 +1,4 @@
-use crate::run::RunLimiter;
+use crate::run::{RunFailure, RunLimiter, RunStage};
 use std::{
     path::Path,
     sync::{Arc, Mutex},
@@ -22,10 +22,15 @@ use super::{
     ToolSuccess, util::truncate_utf8,
 };
 
-pub(crate) struct DispatchCapture(Mutex<Vec<Option<Message>>>);
+#[derive(Clone, Copy)]
+pub(crate) struct DispatchJournal<'a> {
+    pub journal: &'a dyn crate::RunJournal,
+    pub base_index: usize,
+}
+pub(crate) struct DispatchCapture(Mutex<Vec<Option<Message>>>, Mutex<Option<RunFailure>>);
 impl DispatchCapture {
     pub fn new(count: usize) -> Self {
-        Self(Mutex::new(vec![None; count]))
+        Self(Mutex::new(vec![None; count]), Mutex::new(None))
     }
     pub fn messages(&self) -> Vec<Message> {
         self.0
@@ -119,14 +124,21 @@ impl ToolDispatcher {
         context: &TurnExecutionContext,
         limits: &Arc<RunLimiter>,
         capture: &DispatchCapture,
+        journal: DispatchJournal<'_>,
     ) -> Result<Vec<Message>> {
-        self.dispatch_inner_with_context(
-            calls,
-            Some(events),
-            Some(context),
-            Some((limits, capture)),
-        )
-        .await
+        let child = context.child();
+        let result = self
+            .dispatch_inner_with_context(
+                calls,
+                Some(events),
+                Some(&child),
+                Some((limits, capture, Some(journal))),
+            )
+            .await;
+        if let Some(failure) = capture.1.lock().expect("tool progress poisoned").clone() {
+            return Err(failure.into());
+        }
+        result
     }
     async fn execute_recorded(
         &self,
@@ -134,18 +146,35 @@ impl ToolDispatcher {
         call: &ModelToolCall,
         events: Option<&AgentEventEmitter>,
         context: Option<&TurnExecutionContext>,
-        control: Option<(&Arc<RunLimiter>, &DispatchCapture)>,
+        control: Option<(
+            &Arc<RunLimiter>,
+            &DispatchCapture,
+            Option<DispatchJournal<'_>>,
+        )>,
     ) -> Result<Message> {
         let result = self
             .execute_call(
                 call,
                 events,
                 context,
-                control.map(|(limits, _)| limits.as_ref()),
+                control.map(|(limits, _, _)| limits.as_ref()),
             )
             .await;
-        if let (Some((_, capture)), Ok(message)) = (control, &result) {
+        if let (Some((_, capture, journal)), Ok(message)) = (control, &result) {
             capture.0.lock().expect("tool progress poisoned")[index] = Some(message.clone());
+            if let Some(journal) = journal
+                && let Err(error) = journal
+                    .journal
+                    .checkpoint(journal.base_index + index, message)
+                    .await
+            {
+                let failure = RunFailure::from_error(RunStage::Persistence, &error);
+                *capture.1.lock().expect("tool progress poisoned") = Some(failure.clone());
+                if let Some(context) = context {
+                    context.cancel("session persistence failed");
+                }
+                return Err(failure.into());
+            }
         }
         result
     }
@@ -154,7 +183,11 @@ impl ToolDispatcher {
         calls: &[ModelToolCall],
         events: Option<&AgentEventEmitter>,
         context: Option<&TurnExecutionContext>,
-        control: Option<(&Arc<RunLimiter>, &DispatchCapture)>,
+        control: Option<(
+            &Arc<RunLimiter>,
+            &DispatchCapture,
+            Option<DispatchJournal<'_>>,
+        )>,
     ) -> Result<Vec<Message>> {
         if calls.len() > self.config.max_calls_per_round {
             anyhow::bail!(

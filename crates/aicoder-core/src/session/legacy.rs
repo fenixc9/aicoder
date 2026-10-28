@@ -1,7 +1,7 @@
 //! Private v1 storage codec. Legacy transport types are deliberately not a core dependency.
 use crate::model::{ContentBlock, Message, MessageRole, ModelToolCall};
-use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
+use anyhow::{Context, Result};
+use serde_json::Value;
 
 pub(super) fn decode(value: Value) -> Result<Message> {
     let role: MessageRole =
@@ -47,38 +47,4 @@ pub(super) fn decode(value: Value) -> Result<Message> {
         }
     }
     Ok(Message { role, content })
-}
-
-/// Preserve the original file format when continuing a v1 conversation. New sessions use v2.
-pub(super) fn encode(message: &Message) -> Result<Value> {
-    let mut value = json!({"role":message.role,"content":null});
-    let mut text = String::new();
-    let mut reasoning = String::new();
-    let mut calls = Vec::new();
-    for block in &message.content {
-        match block {
-            ContentBlock::Text {text:part} => text.push_str(part),
-            ContentBlock::Reasoning {text} => reasoning.push_str(text),
-            ContentBlock::ToolCall {call} => calls.push(json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}})),
-            ContentBlock::ToolResult {call_id,content,is_error} if message.content.len()==1 => {
-                anyhow::ensure!(*is_error==(content["ok"]==false), "v1 cannot preserve this tool error flag; create a v2 session");
-                value["tool_call_id"]=json!(call_id);value["content"]=json!(content.to_string());return Ok(value);
-            }
-            _ => bail!("v1 sessions cannot store images, opaque state or mixed tool results; create a v2 session"),
-        }
-    }
-    if !text.is_empty() || calls.is_empty() {
-        value["content"] = json!(text);
-    }
-    if !reasoning.is_empty() {
-        value["reasoning"] = json!(reasoning);
-    }
-    if !calls.is_empty() {
-        value["tool_calls"] = json!(calls);
-    }
-    anyhow::ensure!(
-        decode(value.clone())? == *message,
-        "v1 cannot preserve this content block order; create a v2 session"
-    );
-    Ok(value)
 }

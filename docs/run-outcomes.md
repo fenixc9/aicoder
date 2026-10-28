@@ -31,11 +31,12 @@ retain only a bounded prefix. A completed tool operation whose large output
 was truncated still has a recorded result marked `truncated`.
 
 Progress can end with an assistant tool-call message and only some matching
-results. Do not feed that unfinished unit back to a provider or automatically
-repeat the missing operation. Session repair/continuation handling belongs to
-S2. S1 still persists user input and successful turns only; complete interrupted
-progress is available to the caller and bench report, not automatically appended
-to a session.
+results. Do not feed that raw unfinished unit back to a provider or automatically
+repeat the missing operation. The session-aware `Agent` now saves validated tool
+calls before dispatch and checkpoints completed results, including on interrupted
+runs. `Session::model_messages()` supplies ephemeral error results for missing
+operations and a fixed interruption marker; partial fragments remain metadata.
+See [tree sessions and recovery](sessions.md) for durability and crash boundaries.
 
 The `run`, `run_with_handler` and `run_with_context` convenience methods still
 return `Result`. On interruption, their error contains an `InterruptedTurn`
@@ -47,7 +48,8 @@ error chain. Move result data from `result.progress`; borrowing fields such as
 `Agent` adds session identity. Its structured outcomes distinguish `Completed`,
 `Aborted`, `Limited`, `Stopped` and `Failed`; `progress()` returns the same core
 progress for all variants. A session persistence failure retains completed
-execution progress and reports stage `Persistence`.
+execution progress and reports stage `Persistence`. If final persistence fails after
+an interruption, the primary stop remains available alongside `persistence_error`.
 
 ## Configuration
 

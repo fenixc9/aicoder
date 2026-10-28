@@ -6,9 +6,8 @@ terminal UI, and any provider's request format. `ChatClient` implements its
 
 `TurnExecutor`, tools, sessions, CLI, TUI and evaluation use this contract.
 OpenAI protocol types live only in `aicoder-providers::wire`; core retains a
-private v1 session storage codec for compatibility. S1 still needs unified
-provider transport configuration; [run outcomes and budgets](run-outcomes.md)
-are available across core and frontends.
+private v1 session storage codec for compatibility. [Provider configuration](provider-configuration.md)
+and [run outcomes and budgets](run-outcomes.md) are shared across hosts.
 
 ## Types and ownership
 
@@ -99,10 +98,10 @@ validation protect custom providers as well as the built-in HTTP adapter.
 Full transcripts preserve reasoning. For assistant history that the selected
 model cannot replay, the executor projects display-only reasoning out of the
 model-facing context. It retains opaque state and rejects incompatible state.
-See [API migrations](migrations.md) for session v1/v2 compatibility and result
+See [API migrations](migrations.md) for session v1/v2-to-v3 migration and result
 changes, and [the embedded example](../crates/aicoder-core/examples/embedded_agent.rs)
 for a full turn with a custom in-memory model, tool and store.
 
 Structured [run outcomes and budgets](run-outcomes.md) are shared across hosts.
-[Provider configuration](provider-configuration.md) completes S1. Tree sessions
-and steering are the next S2 tasks.
+[Tree sessions and durable recovery](sessions.md) are available in S2; steering
+and versioned event subscriptions remain the next tasks.

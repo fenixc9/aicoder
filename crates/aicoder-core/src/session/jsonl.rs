@@ -1,24 +1,18 @@
-use std::{
-    collections::HashSet,
-    fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
-};
-
+use super::*;
+#[cfg(test)]
+use crate::model::{Message, MessageRole};
 use anyhow::{Context, Result, bail, ensure};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::{
+    fs::{self, File, OpenOptions},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+};
 use uuid::Uuid;
-
-use crate::model::{Message, MessageRole};
-
-use super::{Session, SessionInfo, SessionMessage, SessionMetadata, SessionRepository};
-
-use super::SESSION_VERSION;
 const MAX_HEADER_BYTES: u64 = 1024 * 1024;
-
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum StoredRecord {
     Session {
@@ -30,515 +24,581 @@ enum StoredRecord {
     Message {
         id: String,
         created_at: u64,
-        message: serde_json::Value,
+        message: Value,
+    },
+    Transaction {
+        revision: u64,
+        updated_at: u64,
+        entries: Vec<SessionEntry>,
+        leaf_id: Option<String>,
+        checksum: String,
     },
 }
-
-/// Append-only JSONL storage with one file per session.
+#[derive(Serialize)]
+struct TransactionRef<'a> {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    revision: u64,
+    updated_at: u64,
+    entries: &'a [SessionEntry],
+    leaf_id: &'a Option<String>,
+}
 #[derive(Debug, Clone)]
 pub struct JsonlSessionRepository {
     root: PathBuf,
 }
-
+struct Lock(File);
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.0);
+    }
+}
 impl JsonlSessionRepository {
     pub fn new(root: impl AsRef<Path>) -> Result<Self> {
-        fs::create_dir_all(root.as_ref()).with_context(|| {
-            format!(
-                "Failed to create session directory {}",
-                root.as_ref().display()
-            )
-        })?;
-        set_private_directory_permissions(root.as_ref())?;
-        let root = root.as_ref().canonicalize().with_context(|| {
-            format!(
-                "Failed to resolve session directory {}",
-                root.as_ref().display()
-            )
-        })?;
+        fs::create_dir_all(root.as_ref())?;
+        let root = root.as_ref().canonicalize()?;
+        private_directory(&root)?;
+        for name in [".locks", ".runs"] {
+            let path = root.join(name);
+            fs::create_dir_all(&path)?;
+            ensure!(
+                !fs::symlink_metadata(&path)?.file_type().is_symlink(),
+                "session lock directory must not be a symlink"
+            );
+            private_directory(&path)?;
+        }
         Ok(Self { root })
     }
-
     pub fn root(&self) -> &Path {
         &self.root
     }
-
-    fn session_files(&self) -> Result<Vec<PathBuf>> {
+    fn paths(&self) -> Result<Vec<PathBuf>> {
         let mut paths = Vec::new();
-        for entry in fs::read_dir(&self.root)
-            .with_context(|| format!("Failed to read session directory {}", self.root.display()))?
-        {
-            let entry = entry.context("Failed to read session directory entry")?;
-            let path = entry.path();
-            if entry
-                .file_type()
-                .context("Failed to inspect session directory entry")?
-                .is_file()
-                && path
-                    .extension()
-                    .is_some_and(|extension| extension == "jsonl")
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file()
+                && entry.path().extension().is_some_and(|ext| ext == "jsonl")
             {
-                paths.push(path);
+                paths.push(entry.path());
             }
         }
         Ok(paths)
     }
-
-    fn find_session_path(&self, id: &str) -> Result<PathBuf> {
-        validate_session_id(id)?;
+    fn find(&self, id: &str) -> Result<PathBuf> {
+        validate_id(id)?;
         let mut found = None;
-        for path in self.session_files()? {
-            let Ok((header_id, _, _, _)) = read_header(&path) else {
-                continue;
-            };
-            if header_id == id {
-                ensure!(found.is_none(), "Multiple session files use id {id}");
+        for path in self.paths()? {
+            if let Ok((header_id, _, _, _)) = read_header(&path)
+                && header_id == id
+            {
+                ensure!(found.is_none(), "multiple session files use this ID");
                 found = Some(path);
             }
         }
-        found.with_context(|| format!("Session {id} not found"))
+        found.context("session not found")
     }
-}
-
-impl SessionRepository for JsonlSessionRepository {
-    fn create(&self, cwd: &Path) -> Result<Session> {
-        let cwd = canonical_cwd(cwd)?;
-        let timestamp = now_millis()?;
-        let id = Uuid::new_v4().to_string();
-        let path = self.root.join(format!("{timestamp}_{id}.jsonl"));
-        ensure_path_is_in_root(&path, &self.root)?;
-
-        let record = StoredRecord::Session {
-            version: SESSION_VERSION,
-            id: id.clone(),
-            created_at: timestamp,
-            cwd: cwd.clone(),
-        };
-        let encoded = encode_record(&record)?;
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        set_private_file_options(&mut options);
-        let mut file = options
-            .open(&path)
-            .with_context(|| format!("Failed to create session file {}", path.display()))?;
-        file.write_all(&encoded)
-            .with_context(|| format!("Failed to write session header {}", path.display()))?;
-        file.sync_data()
-            .with_context(|| format!("Failed to sync session header {}", path.display()))?;
-        let file_len = encoded.len() as u64;
-
-        Ok(Session {
-            metadata: SessionMetadata {
-                version: SESSION_VERSION,
-                id,
-                cwd,
-                created_at: timestamp,
-                updated_at: timestamp,
-                title: None,
-            },
-            messages: Vec::new(),
-            path: Some(path),
-            expected_file_len: file_len,
-            valid_file_len: file_len,
-            needs_separator: false,
-        })
+    fn metadata_lock(&self, id: &str, exclusive: bool) -> Result<Lock> {
+        validate_id(id)?;
+        let file = open_lock(&self.root.join(".locks").join(format!("{id}.lock")))?;
+        if exclusive {
+            FileExt::lock_exclusive(&file)?;
+        } else {
+            FileExt::lock_shared(&file)?;
+        }
+        Ok(Lock(file))
     }
-
-    fn open(&self, id: &str) -> Result<Session> {
-        load_session(&self.find_session_path(id)?)
+    fn run_file(&self, id: &str) -> Result<File> {
+        validate_id(id)?;
+        open_lock(&self.root.join(".runs").join(format!("{id}.lock")))
     }
-
-    fn list(&self, cwd: &Path) -> Result<Vec<SessionInfo>> {
-        let cwd = canonical_cwd(cwd)?;
-        let mut sessions = Vec::new();
-        for path in self.session_files()? {
-            match load_session(&path) {
-                Ok(session) if session.metadata.cwd == cwd => {
-                    sessions.push(SessionInfo::from(&session));
+    // Called under the metadata lock: owner changes and owner-token reads cannot race.
+    fn write_lease(&self, id: &str, token: Option<&str>) -> Result<Option<Lock>> {
+        let mut file = self.run_file(id)?;
+        match FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Ok(Some(Lock(file))),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                let mut owner = String::new();
+                Read::take(&mut file, 128).read_to_string(&mut owner)?;
+                ensure!(
+                    token.is_some_and(|token| token == owner),
+                    "session already has an active run"
+                );
+                Ok(None)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+    fn read(&self, path: &Path) -> Result<Vec<u8>> {
+        ensure!(
+            path.parent() == Some(self.root.as_path()),
+            "session path is outside repository"
+        );
+        let mut file = open_data(path, true, false)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(bytes)
+    }
+    fn commit_inner(
+        &self,
+        session: &mut Session,
+        transaction: SessionTransaction,
+    ) -> Result<Option<PathBuf>> {
+        session.validate(&transaction)?;
+        let path = session
+            .path()
+            .context("session has no storage path")?
+            .to_path_buf();
+        ensure!(
+            path.parent() == Some(self.root.as_path()),
+            "session belongs to a different repository"
+        );
+        let _metadata = self.metadata_lock(&session.metadata.id, true)?;
+        let _run = self.write_lease(&session.metadata.id, session.run_token.as_deref())?;
+        let mut file = open_data(&path, true, true)?;
+        FileExt::lock_exclusive(&file)?;
+        let mut actual = Vec::new();
+        file.read_to_end(&mut actual)?;
+        let cursor = session.storage.as_ref().unwrap();
+        if actual.len() as u64 != cursor.expected_len || fingerprint(&actual) != cursor.fingerprint
+        {
+            return Err(SessionConflict {
+                id: session.metadata.id.clone(),
+            }
+            .into());
+        }
+        let timestamp =
+            if transaction.entries.is_empty() && transaction.leaf_id == session.metadata.leaf_id {
+                session.metadata.updated_at
+            } else {
+                now_millis()?
+            };
+        if session.metadata.version < SESSION_VERSION {
+            let mut backup_name = path.as_os_str().to_os_string();
+            backup_name.push(format!(".v{}.bak", session.metadata.version));
+            let backup = PathBuf::from(backup_name);
+            match create_private(&backup) {
+                Ok(mut backup_file) => {
+                    backup_file.write_all(&actual)?;
+                    backup_file.sync_all()?;
+                    sync_directory(&self.root)?;
                 }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %format!("{error:#}"),
-                        "Skipping invalid session file"
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    ensure!(
+                        self.read_backup(&backup)? == actual,
+                        "migration backup already exists with different contents"
                     );
                 }
+                Err(error) => return Err(error.into()),
             }
-        }
-        sessions.sort_by(|left, right| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| right.id.cmp(&left.id))
-        });
-        Ok(sessions)
-    }
-
-    fn append(&self, session: &mut Session, message: Message) -> Result<()> {
-        if message.role == MessageRole::System {
-            bail!("System messages are runtime context and cannot be stored in a session");
-        }
-        let path = session
-            .path
-            .as_deref()
-            .context("Cannot persist a session without a file path")?;
-        ensure_path_is_in_root(path, &self.root)?;
-        let timestamp = now_millis()?;
-        let entry = SessionMessage {
-            id: Uuid::new_v4().to_string(),
-            created_at: timestamp,
-            message,
-        };
-        let encoded = encode_record(&StoredRecord::Message {
-            id: entry.id.clone(),
-            created_at: entry.created_at,
-            message: if session.metadata.version == 1 {
-                super::legacy::encode(&entry.message)?
+            let mut upgraded = session.clone();
+            upgraded.metadata.version = SESSION_VERSION;
+            upgraded.apply(transaction, 1, timestamp);
+            let mut bytes = header(&upgraded.metadata)?;
+            if !upgraded.entries.is_empty() {
+                bytes.extend(transaction_line(
+                    1,
+                    timestamp,
+                    &upgraded.entries,
+                    &upgraded.metadata.leaf_id,
+                )?);
             } else {
-                serde_json::to_value(&entry.message)?
-            },
-        })?;
-
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .with_context(|| format!("Failed to open session file {}", path.display()))?;
-        FileExt::lock_exclusive(&file)
-            .with_context(|| format!("Failed to lock session file {}", path.display()))?;
-        let write_result = (|| -> Result<u64> {
-            let actual_len = file
-                .metadata()
-                .with_context(|| format!("Failed to inspect session file {}", path.display()))?
-                .len();
-            ensure!(
-                actual_len == session.expected_file_len,
-                "Session {} was modified by another process; reopen it before appending",
-                session.metadata.id
-            );
-            if session.valid_file_len < actual_len {
-                file.set_len(session.valid_file_len)
-                    .with_context(|| format!("Failed to repair session file {}", path.display()))?;
+                upgraded.metadata.revision = 0;
             }
-            file.seek(SeekFrom::End(0))
-                .with_context(|| format!("Failed to seek session file {}", path.display()))?;
-            if session.needs_separator {
-                file.write_all(b"\n").with_context(|| {
-                    format!("Failed to append to session file {}", path.display())
-                })?;
-            }
-            file.write_all(&encoded)
-                .with_context(|| format!("Failed to append to session file {}", path.display()))?;
-            file.sync_data()
-                .with_context(|| format!("Failed to sync session file {}", path.display()))?;
-            file.metadata()
-                .with_context(|| format!("Failed to inspect session file {}", path.display()))
-                .map(|metadata| metadata.len())
-        })();
-        let unlock_result = FileExt::unlock(&file)
-            .with_context(|| format!("Failed to unlock session file {}", path.display()));
-        let new_len = write_result?;
-        unlock_result?;
-
-        if session.metadata.title.is_none() {
-            session.metadata.title = title_from_message(&entry.message);
+            atomic_replace(&self.root, &path, &bytes)?;
+            upgraded.storage = Some(cursor_for(
+                path,
+                bytes.len() as u64,
+                bytes.len() as u64,
+                false,
+                fingerprint(&bytes),
+            ));
+            *session = upgraded;
+            return Ok(Some(backup));
         }
-        session.metadata.updated_at = timestamp;
-        session.messages.push(entry);
-        session.expected_file_len = new_len;
-        session.valid_file_len = new_len;
-        session.needs_separator = false;
-        Ok(())
+        let revision = session
+            .metadata
+            .revision
+            .checked_add(1)
+            .context("session revision overflow")?;
+        let encoded = transaction_line(
+            revision,
+            timestamp,
+            &transaction.entries,
+            &transaction.leaf_id,
+        )?;
+        file.set_len(cursor.valid_len)?;
+        file.seek(SeekFrom::End(0))?;
+        if cursor.needs_separator {
+            file.write_all(b"\n")?;
+        }
+        file.write_all(&encoded)?;
+        file.sync_data()?;
+        let mut hash = fingerprint(&actual[..cursor.valid_len as usize]);
+        if cursor.needs_separator {
+            hash = hash_more(hash, b"\n");
+        }
+        hash = hash_more(hash, &encoded);
+        let length = cursor.valid_len + u64::from(cursor.needs_separator) + encoded.len() as u64;
+        session.apply(transaction, revision, timestamp);
+        session.storage = Some(cursor_for(path, length, length, false, hash));
+        Ok(None)
     }
-
-    fn delete(&self, id: &str) -> Result<()> {
-        let path = self.find_session_path(id)?;
-        ensure_path_is_in_root(&path, &self.root)?;
-        fs::remove_file(&path)
-            .with_context(|| format!("Failed to delete session file {}", path.display()))
+    fn read_backup(&self, path: &Path) -> Result<Vec<u8>> {
+        let mut file = open_data(path, true, false)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(bytes)
     }
 }
-
-fn load_session(path: &Path) -> Result<Session> {
-    let file = File::open(path)
-        .with_context(|| format!("Failed to open session file {}", path.display()))?;
-    FileExt::lock_shared(&file)
-        .with_context(|| format!("Failed to lock session file {}", path.display()))?;
-    let read_result =
-        fs::read(path).with_context(|| format!("Failed to read session file {}", path.display()));
-    let unlock_result = FileExt::unlock(&file)
-        .with_context(|| format!("Failed to unlock session file {}", path.display()));
-    let bytes = read_result?;
-    unlock_result?;
-    ensure!(
-        !bytes.is_empty(),
-        "Session file {} is empty",
-        path.display()
-    );
-
-    let mut records = Vec::new();
-    let mut valid_file_len = 0_u64;
-    let mut offset = 0_u64;
-    let chunks = bytes.split_inclusive(|byte| *byte == b'\n');
-    for (index, chunk) in chunks.enumerate() {
-        offset += chunk.len() as u64;
-        let complete_line = chunk.ends_with(b"\n");
-        let payload = if complete_line {
-            &chunk[..chunk.len() - 1]
-        } else {
-            chunk
+impl SessionRepository for JsonlSessionRepository {
+    fn create(&self, cwd: &Path) -> Result<Session> {
+        let timestamp = now_millis()?;
+        let id = Uuid::new_v4().to_string();
+        let _metadata = self.metadata_lock(&id, true)?;
+        let metadata = SessionMetadata {
+            version: SESSION_VERSION,
+            id: id.clone(),
+            cwd: cwd.canonicalize()?,
+            created_at: timestamp,
+            updated_at: timestamp,
+            title: None,
+            leaf_id: None,
+            revision: 0,
         };
-        if payload.iter().all(u8::is_ascii_whitespace) {
-            valid_file_len = offset;
-            continue;
-        }
-        let parsed = std::str::from_utf8(payload)
-            .context("Session record is not valid UTF-8")
-            .and_then(|line| {
-                serde_json::from_str::<StoredRecord>(line)
-                    .context("Session record is not valid JSON")
-            });
-        match parsed {
-            Ok(record) => {
-                records.push(record);
-                valid_file_len = offset;
-            }
-            Err(error) if !complete_line && offset == bytes.len() as u64 => {
-                tracing::warn!(
-                    path = %path.display(),
-                    line = index + 1,
-                    error = %error,
-                    "Ignoring incomplete final session record"
-                );
-            }
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!("Invalid session record at {}:{}", path.display(), index + 1)
-                });
-            }
-        }
+        let path = self.root.join(format!("{id}.jsonl"));
+        let bytes = header(&metadata)?;
+        let mut file = create_private(&path)?;
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        sync_directory(&self.root)?;
+        let mut session = Session::empty(metadata);
+        session.storage = Some(cursor_for(
+            path,
+            bytes.len() as u64,
+            bytes.len() as u64,
+            false,
+            fingerprint(&bytes),
+        ));
+        Ok(session)
     }
-
-    let mut records = records.into_iter();
-    let (version, id, created_at, cwd) = match records.next() {
-        Some(StoredRecord::Session {
-            version,
-            id,
-            created_at,
-            cwd,
-        }) => (version, id, created_at, cwd),
-        _ => bail!(
-            "First record in session file {} is not a session header",
-            path.display()
-        ),
-    };
-    ensure!(
-        version == 1 || version == SESSION_VERSION,
-        "Unsupported session version {version} in {}",
-        path.display()
-    );
-    validate_session_id(&id)?;
-    ensure!(
-        cwd.is_absolute(),
-        "Session workspace in {} is not an absolute path",
-        path.display()
-    );
-    let mut messages = Vec::new();
-    let mut ids = HashSet::new();
-    let mut updated_at = created_at;
-    let mut title = None;
-    for record in records {
+    fn open(&self, id: &str) -> Result<Session> {
+        let _metadata = self.metadata_lock(id, false)?;
+        let path = self.find(id)?;
+        let session = load_bytes(&path, &self.read(&path)?)?;
+        ensure!(session.metadata.id == id, "session identity changed");
+        Ok(session)
+    }
+    fn list(&self, cwd: &Path) -> Result<Vec<SessionInfo>> {
+        let cwd = cwd.canonicalize()?;
+        let mut sessions = Vec::new();
+        for path in self.paths()? {
+            let Ok((id, _, _, _)) = read_header(&path) else {
+                continue;
+            };
+            match self.open(&id) {
+                Ok(session) if session.metadata.cwd == cwd => {
+                    sessions.push(SessionInfo::from(&session))
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(error=%error,"skipping invalid session"),
+            }
+        }
+        sort_sessions(&mut sessions);
+        Ok(sessions)
+    }
+    fn commit(&self, session: &mut Session, transaction: SessionTransaction) -> Result<()> {
+        self.commit_inner(session, transaction).map(|_| ())
+    }
+    fn acquire_run(&self, session: &mut Session) -> Result<SessionRunLease> {
+        let _metadata = self.metadata_lock(&session.metadata.id, true)?;
+        let path = self.find(&session.metadata.id)?;
+        ensure!(
+            Some(path.as_path()) == session.path(),
+            "session path changed"
+        );
+        let mut file = self.run_file(&session.metadata.id)?;
+        FileExt::try_lock_exclusive(&file).context("session already has an active run")?;
+        let token = Uuid::new_v4().to_string();
+        file.set_len(0)?;
+        file.write_all(token.as_bytes())?;
+        file.flush()?;
+        session.run_token = Some(token);
+        Ok(Box::new(Lock(file)))
+    }
+    fn delete(&self, id: &str) -> Result<()> {
+        let _metadata = self.metadata_lock(id, true)?;
+        let _run = self.write_lease(id, None)?;
+        let path = self.find(id)?;
+        fs::remove_file(path)?;
+        sync_directory(&self.root)
+    }
+    fn migrate(&self, session: &mut Session) -> Result<Option<PathBuf>> {
+        if session.metadata.version == SESSION_VERSION {
+            return Ok(None);
+        }
+        self.commit_inner(
+            session,
+            SessionTransaction {
+                entries: Vec::new(),
+                leaf_id: session.metadata.leaf_id.clone(),
+            },
+        )
+    }
+}
+fn header(metadata: &SessionMetadata) -> Result<Vec<u8>> {
+    line(
+        &serde_json::json!({"type":"session","version":SESSION_VERSION,"id":metadata.id,"created_at":metadata.created_at,"cwd":metadata.cwd}),
+    )
+}
+fn line(record: &impl Serialize) -> Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec(record)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+fn transaction_line(
+    revision: u64,
+    updated_at: u64,
+    entries: &[SessionEntry],
+    leaf_id: &Option<String>,
+) -> Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec(&TransactionRef {
+        kind: "transaction",
+        revision,
+        updated_at,
+        entries,
+        leaf_id,
+    })?;
+    bytes.pop();
+    let checksum = fingerprint(&bytes);
+    writeln!(&mut bytes, ",\"checksum\":\"{checksum:016x}\"}}")?;
+    Ok(bytes)
+}
+fn load_bytes(path: &Path, bytes: &[u8]) -> Result<Session> {
+    let mut offset = 0;
+    let mut valid_len = 0;
+    let mut session: Option<Session> = None;
+    for raw in bytes.split_inclusive(|byte| *byte == b'\n') {
+        let last = offset + raw.len() == bytes.len();
+        let parsed = serde_json::from_slice::<Value>(raw);
+        let value = match parsed {
+            Ok(value) => value,
+            Err(_) if last && !raw.ends_with(b"\n") && session.is_some() => break,
+            Err(error) => return Err(error).context("Invalid session record"),
+        };
+        let record: StoredRecord =
+            serde_json::from_value(value).context("Invalid session record schema")?;
         match record {
-            StoredRecord::Session { .. } => {
-                bail!("Session file {} contains multiple headers", path.display())
+            StoredRecord::Session {
+                version,
+                id,
+                created_at,
+                cwd,
+            } => {
+                ensure!(session.is_none(), "multiple session headers");
+                ensure!(
+                    (1..=SESSION_VERSION).contains(&version),
+                    "unsupported session version {version}"
+                );
+                validate_id(&id)?;
+                ensure!(cwd.is_absolute(), "session workspace must be absolute");
+                session = Some(Session::empty(SessionMetadata {
+                    version,
+                    id,
+                    cwd,
+                    created_at,
+                    updated_at: created_at,
+                    title: None,
+                    leaf_id: None,
+                    revision: 0,
+                }));
             }
             StoredRecord::Message {
                 id,
                 created_at,
                 message,
             } => {
-                ensure!(ids.insert(id.clone()), "Duplicate message id {id}");
-                let message: Message = if version == 1 {
+                let session = session
+                    .as_mut()
+                    .context("first record is not a session header")?;
+                ensure!(
+                    session.metadata.version < SESSION_VERSION,
+                    "legacy record in v3 log"
+                );
+                let message = if session.metadata.version == 1 {
                     super::legacy::decode(message)?
                 } else {
-                    serde_json::from_value(message).context("invalid v2 message")?
+                    serde_json::from_value(message)?
                 };
+                let transaction = SessionTransaction {
+                    entries: vec![SessionEntry {
+                        id: id.clone(),
+                        parent_id: session.metadata.leaf_id.clone(),
+                        created_at,
+                        data: SessionEntryData::Message { message },
+                    }],
+                    leaf_id: Some(id),
+                };
+                session.validate(&transaction)?;
+                session.apply(transaction, 0, session.metadata.updated_at.max(created_at));
+            }
+            StoredRecord::Transaction {
+                revision,
+                updated_at,
+                entries,
+                leaf_id,
+                checksum,
+            } => {
+                let session = session
+                    .as_mut()
+                    .context("first record is not a session header")?;
                 ensure!(
-                    message.role != MessageRole::System,
-                    "Session {} contains a persisted system message",
-                    path.display()
+                    session.metadata.version == SESSION_VERSION,
+                    "transaction in legacy log"
                 );
-                if title.is_none() {
-                    title = title_from_message(&message);
-                }
-                updated_at = updated_at.max(created_at);
-                messages.push(SessionMessage {
-                    id,
-                    created_at,
-                    message,
-                });
+                let marker = b",\"checksum\":\"";
+                let position = raw
+                    .windows(marker.len())
+                    .rposition(|part| part == marker)
+                    .context("invalid transaction checksum envelope")?;
+                let envelope = format!(",\"checksum\":\"{checksum}\"}}");
+                ensure!(
+                    checksum.len() == 16 && raw[position..].trim_ascii_end() == envelope.as_bytes(),
+                    "invalid transaction checksum envelope"
+                );
+                ensure!(
+                    u64::from_str_radix(&checksum, 16).ok() == Some(fingerprint(&raw[..position])),
+                    "session transaction checksum mismatch"
+                );
+                ensure!(
+                    session.metadata.revision.checked_add(1) == Some(revision),
+                    "non-monotonic session revision"
+                );
+                let transaction = SessionTransaction { entries, leaf_id };
+                session.validate(&transaction)?;
+                session.apply(transaction, revision, updated_at);
             }
         }
+        offset += raw.len();
+        valid_len = offset;
     }
-
-    let actual_len = bytes.len() as u64;
-    let needs_separator = valid_file_len == actual_len && !bytes.ends_with(b"\n");
-    Ok(Session {
-        metadata: SessionMetadata {
-            version,
-            id,
-            cwd,
-            created_at,
-            updated_at,
-            title,
-        },
-        messages,
-        path: Some(path.to_path_buf()),
-        expected_file_len: actual_len,
-        valid_file_len,
-        needs_separator,
-    })
+    let mut session = session.context("empty session file")?;
+    session.storage = Some(cursor_for(
+        path.to_path_buf(),
+        bytes.len() as u64,
+        valid_len as u64,
+        valid_len == bytes.len() && !bytes.ends_with(b"\n"),
+        fingerprint(bytes),
+    ));
+    Ok(session)
 }
-
 fn read_header(path: &Path) -> Result<(String, u32, u64, PathBuf)> {
-    let file = File::open(path)
-        .with_context(|| format!("Failed to open session file {}", path.display()))?;
-    let mut reader = BufReader::new(file);
+    let file = open_data(path, true, false)?;
     let mut bytes = Vec::new();
-    loop {
-        let (consumed, found_newline) = {
-            let available = reader
-                .fill_buf()
-                .with_context(|| format!("Failed to read session header {}", path.display()))?;
-            if available.is_empty() {
-                break;
-            }
-            let remaining = (MAX_HEADER_BYTES + 1) as usize - bytes.len();
-            let newline = available.iter().position(|byte| *byte == b'\n');
-            let consumed = newline
-                .map(|position| position + 1)
-                .unwrap_or(available.len())
-                .min(remaining);
-            bytes.extend_from_slice(&available[..consumed]);
-            (
-                consumed,
-                newline.is_some_and(|position| position < consumed),
-            )
-        };
-        reader.consume(consumed);
-        ensure!(
-            bytes.len() as u64 <= MAX_HEADER_BYTES,
-            "Session header in {} exceeds {MAX_HEADER_BYTES} bytes",
-            path.display()
-        );
-        if found_newline {
-            break;
-        }
-    }
-    let line_end = bytes
-        .iter()
-        .position(|byte| *byte == b'\n')
-        .unwrap_or(bytes.len());
-    let line = std::str::from_utf8(&bytes[..line_end])
-        .with_context(|| format!("Session header {} is not valid UTF-8", path.display()))?;
-    match serde_json::from_str::<StoredRecord>(line)
-        .with_context(|| format!("Session header {} is not valid JSON", path.display()))?
-    {
+    BufReader::new(file.take(MAX_HEADER_BYTES + 1)).read_until(b'\n', &mut bytes)?;
+    ensure!(
+        bytes.len() as u64 <= MAX_HEADER_BYTES,
+        "session header too large"
+    );
+    match serde_json::from_slice::<StoredRecord>(&bytes)? {
         StoredRecord::Session {
-            version,
             id,
+            version,
             created_at,
             cwd,
-        } => Ok((id, version, created_at, cwd)),
-        StoredRecord::Message { .. } => {
-            bail!("First record in {} is not a session header", path.display())
+        } => {
+            validate_id(&id)?;
+            Ok((id, version, created_at, cwd))
         }
+        _ => bail!("first record is not a session header"),
     }
 }
-
-fn encode_record(record: &StoredRecord) -> Result<Vec<u8>> {
-    let mut encoded = serde_json::to_vec(record).context("Failed to encode session record")?;
-    encoded.push(b'\n');
-    Ok(encoded)
+fn cursor_for(
+    path: PathBuf,
+    expected_len: u64,
+    valid_len: u64,
+    needs_separator: bool,
+    fingerprint: u64,
+) -> StorageCursor {
+    StorageCursor {
+        path,
+        expected_len,
+        valid_len,
+        needs_separator,
+        fingerprint,
+    }
 }
-
-fn validate_session_id(id: &str) -> Result<()> {
-    Uuid::parse_str(id)
-        .with_context(|| format!("Invalid session id {id}"))
-        .map(|_| ())
+fn validate_id(id: &str) -> Result<()> {
+    Uuid::parse_str(id).context("invalid session ID")?;
+    Ok(())
 }
-
-fn canonical_cwd(cwd: &Path) -> Result<PathBuf> {
-    cwd.canonicalize()
-        .with_context(|| format!("Failed to resolve workspace {}", cwd.display()))
+fn fingerprint(bytes: &[u8]) -> u64 {
+    hash_more(0xcbf29ce484222325, bytes)
 }
-
-fn ensure_path_is_in_root(path: &Path, root: &Path) -> Result<()> {
-    let parent = path
-        .parent()
-        .context("Session file has no parent directory")?
-        .canonicalize()
-        .with_context(|| format!("Failed to resolve session path {}", path.display()))?;
+fn hash_more(mut hash: u64, bytes: &[u8]) -> u64 {
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+fn private_directory(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+fn options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    options
+}
+fn create_private(path: &Path) -> std::io::Result<File> {
+    options().write(true).create_new(true).open(path)
+}
+fn open_data(path: &Path, read: bool, write: bool) -> Result<File> {
+    let file = options().read(read).write(write).open(path)?;
     ensure!(
-        parent == root,
-        "Session file {} is outside repository root {}",
-        path.display(),
-        root.display()
+        file.metadata()?.is_file(),
+        "session path must be a regular file"
     );
+    Ok(file)
+}
+fn open_lock(path: &Path) -> Result<File> {
+    let file = options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)?;
+    ensure!(file.metadata()?.is_file(), "lock must be a regular file");
+    Ok(file)
+}
+fn sync_directory(root: &Path) -> Result<()> {
+    File::open(root)?.sync_all()?;
     Ok(())
 }
-
-fn now_millis() -> Result<u64> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("System clock is before the Unix epoch")?
-        .as_millis()
-        .try_into()
-        .context("Current timestamp does not fit in u64")
-}
-
-fn title_from_message(message: &Message) -> Option<String> {
-    if message.role != MessageRole::User {
-        return None;
+fn atomic_replace(root: &Path, path: &Path, bytes: &[u8]) -> Result<()> {
+    let temporary = root.join(format!(".session-{}.tmp", Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        let mut file = create_private(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        sync_directory(root)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
     }
-    let title = message
-        .text_content()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    if title.is_empty() {
-        return None;
-    }
-    Some(title.chars().take(80).collect())
+    result
 }
-
-#[cfg(unix)]
-fn set_private_directory_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).with_context(|| {
-        format!(
-            "Failed to set private permissions on session directory {}",
-            path.display()
-        )
-    })
-}
-
-#[cfg(not(unix))]
-fn set_private_directory_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn set_private_file_options(options: &mut OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    options.mode(0o600);
-}
-
-#[cfg(not(unix))]
-fn set_private_file_options(_options: &mut OpenOptions) {}
-
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -671,7 +731,7 @@ mod compatibility_tests {
     use serde_json::json;
 
     #[test]
-    fn v1_history_decodes_tool_pairs_and_continues_without_rewriting_the_file() {
+    fn v1_history_migrates_with_an_exact_backup_and_preserves_entry_ids() {
         let workspace = tempfile::tempdir().unwrap();
         let storage = tempfile::tempdir().unwrap();
         let repository = JsonlSessionRepository::new(storage.path()).unwrap();
@@ -707,9 +767,14 @@ mod compatibility_tests {
             .append(&mut session, Message::text(MessageRole::Assistant, "done"))
             .unwrap();
         let stored = fs::read_to_string(&path).unwrap();
-        assert!(stored.starts_with(&original));
-        let last: serde_json::Value = serde_json::from_str(stored.lines().last().unwrap()).unwrap();
-        assert_eq!(last["message"]["content"], "done");
+        assert_ne!(stored, original);
+        assert_eq!(
+            fs::read_to_string(storage.path().join("legacy.jsonl.v1.bak")).unwrap(),
+            original
+        );
+        assert_eq!(session.metadata().version, 3);
+        assert_eq!(session.messages()[0].id, "user");
+        assert_eq!(session.model_messages().unwrap().len(), 4);
         assert_eq!(repository.open(&id).unwrap().messages().len(), 4);
 
         let image = Message {
@@ -720,17 +785,17 @@ mod compatibility_tests {
                 },
             }],
         };
-        assert!(repository.append(&mut session, image).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), stored);
+        repository.append(&mut session, image.clone()).unwrap();
+        assert_eq!(repository.open(&id).unwrap().messages()[4].message, &image);
     }
 
     #[test]
-    fn v2_preserves_images_reasoning_and_scoped_provider_state() {
+    fn v3_preserves_images_reasoning_and_scoped_provider_state() {
         let workspace = tempfile::tempdir().unwrap();
         let storage = tempfile::tempdir().unwrap();
         let repository = JsonlSessionRepository::new(storage.path()).unwrap();
         let mut session = repository.create(workspace.path()).unwrap();
-        assert_eq!(session.metadata().version, 2);
+        assert_eq!(session.metadata().version, 3);
         let user = Message {
             role: MessageRole::User,
             content: vec![
@@ -764,7 +829,7 @@ mod compatibility_tests {
             .append_all(&mut session, [user.clone(), assistant.clone()])
             .unwrap();
         let reopened = repository.open(&session.metadata().id).unwrap();
-        assert_eq!(reopened.messages()[0].message, user);
-        assert_eq!(reopened.messages()[1].message, assistant);
+        assert_eq!(reopened.messages()[0].message, &user);
+        assert_eq!(reopened.messages()[1].message, &assistant);
     }
 }

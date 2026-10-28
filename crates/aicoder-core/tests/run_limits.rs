@@ -773,3 +773,304 @@ async fn conservative_failure_accounting_does_not_replace_the_original_failure_w
     assert!(turn.tokens.estimated);
     assert!(turn.tokens.used > 105);
 }
+
+#[tokio::test]
+async fn session_checkpoints_survive_provider_failure_and_are_visible_before_terminal_events() {
+    use aicoder_core::session::*;
+    let workspace = tempfile::tempdir().unwrap();
+    let storage = tempfile::tempdir().unwrap();
+    for repository in [
+        Arc::new(MemorySessionRepository::new()) as Arc<dyn SessionRepository>,
+        Arc::new(JsonlSessionRepository::new(storage.path()).unwrap()),
+    ] {
+        let script = Script::new(vec![Step::Reply(calls(&["done"])), Step::Fail]);
+        let done = Arc::new(AtomicUsize::new(0));
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let executor = TurnExecutor::builder_from_shared(script)
+            .workspace(workspace.path())
+            .registry(tools(&[("done", false, 4)], &done, &notify))
+            .build()
+            .unwrap();
+        let agent = Agent::new(executor, AgentConfig::new("test"));
+        let session = repository.create(workspace.path()).unwrap();
+        let id = session.metadata().id.clone();
+        let target = repository.clone();
+        let expected = id.clone();
+        let terminal = Arc::new(AtomicUsize::new(0));
+        let observed = terminal.clone();
+        let handler = Arc::new(move |event: &AgentRawEventEnvelope| {
+            if matches!(event.event, AgentRawEvent::AgentFailed { .. }) {
+                let session = target.open(&expected).unwrap();
+                assert_eq!(session.chat_messages().len(), 3);
+                assert!(
+                    matches!(&session.active_entries().last().unwrap().data,SessionEntryData::TurnEnd {record,..} if record.stop.is_some())
+                );
+                observed.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let outcome = agent
+            .run_with_session_outcome(
+                repository.as_ref(),
+                SessionSelection::Existing(id.clone()),
+                "work",
+                handler,
+                TurnExecutionContext::new(),
+            )
+            .await;
+        assert!(matches!(outcome, AgentTurnOutcome::Failed(_)));
+        assert_eq!(done.load(Ordering::SeqCst), 1);
+        assert_eq!(terminal.load(Ordering::SeqCst), 1);
+        let saved = repository.open(&id).unwrap();
+        assert_eq!(saved.chat_messages().len(), 3);
+        assert!(
+            saved
+                .model_messages()
+                .unwrap()
+                .iter()
+                .any(|m| m.role == MessageRole::System)
+        );
+        assert!(saved.unfinished_turn().is_none());
+        // A subsequent turn consumes recorded results without executing the operation again.
+        let resumed_script = Script::new(vec![Step::Reply(reply("recovered"))]);
+        let resumed = Agent::new(
+            TurnExecutor::builder_from_shared(resumed_script.clone())
+                .workspace(workspace.path())
+                .registry(ToolRegistry::default())
+                .build()
+                .unwrap(),
+            AgentConfig::new("test"),
+        );
+        resumed
+            .run_with_session(
+                repository.as_ref(),
+                SessionSelection::Existing(id),
+                "continue",
+                Arc::new(()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(done.load(Ordering::SeqCst), 1);
+        let requests = resumed_script.requests.lock().unwrap();
+        assert!(
+            requests[0]
+                .messages
+                .iter()
+                .any(|m| m.tool_result().is_some())
+        );
+    }
+}
+
+#[tokio::test]
+async fn dropping_a_running_task_keeps_checkpoints_and_releases_session_ownership() {
+    use aicoder_core::session::*;
+    let workspace = tempfile::tempdir().unwrap();
+    let storage = tempfile::tempdir().unwrap();
+    let repository = Arc::new(JsonlSessionRepository::new(storage.path()).unwrap());
+    let session = repository.create(workspace.path()).unwrap();
+    let id = session.metadata().id.clone();
+    let script = Script::new(vec![Step::Reply(calls(&["done"])), Step::Pending]);
+    let started = script.started.clone();
+    let done = Arc::new(AtomicUsize::new(0));
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let executor = TurnExecutor::builder_from_shared(script)
+        .workspace(workspace.path())
+        .registry(tools(&[("done", false, 4)], &done, &notify))
+        .build()
+        .unwrap();
+    let agent = Agent::new(executor, AgentConfig::new("test"));
+    let target = repository.clone();
+    let selection = SessionSelection::Existing(id.clone());
+    let run = tokio::spawn(async move {
+        agent
+            .run_with_session(target.as_ref(), selection, "work", Arc::new(()))
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), started.notified())
+        .await
+        .unwrap();
+    let mut reader = repository.open(&id).unwrap();
+    assert_eq!(reader.messages().len(), 3);
+    assert!(repository.acquire_run(&mut reader).is_err());
+    assert!(repository.delete(&id).is_err());
+    run.abort();
+    assert!(run.await.unwrap_err().is_cancelled());
+    let saved = repository.open(&id).unwrap();
+    assert!(saved.unfinished_turn().is_some());
+    assert_eq!(saved.chat_messages().len(), 3);
+    assert_eq!(done.load(Ordering::SeqCst), 1);
+    let script = Script::new(vec![Step::Reply(reply("continued"))]);
+    let executor = TurnExecutor::builder_from_shared(script.clone())
+        .workspace(workspace.path())
+        .registry(ToolRegistry::default())
+        .build()
+        .unwrap();
+    Agent::new(executor, AgentConfig::new("test"))
+        .run_with_session(
+            repository.as_ref(),
+            SessionSelection::Existing(id.clone()),
+            "inspect then continue",
+            Arc::new(()),
+        )
+        .await
+        .unwrap();
+    let session = repository.open(&id).unwrap();
+    assert!(session.unfinished_turn().is_none());
+    assert!(session.entries().iter().any(|e|matches!(&e.data,SessionEntryData::TurnEnd {record,..} if record.statistics.is_none() && record.stop.is_some())));
+    let requests = script.requests.lock().unwrap();
+    assert!(
+        requests[0]
+            .messages
+            .iter()
+            .any(|m| m.role == MessageRole::System)
+    );
+}
+
+struct FailingJournal {
+    fail_tools: bool,
+    checkpoints: Mutex<Vec<(usize, Message)>>,
+    finished: AtomicUsize,
+}
+#[async_trait]
+impl RunJournal for FailingJournal {
+    async fn checkpoint(&self, index: usize, message: &Message) -> anyhow::Result<()> {
+        if message.role == MessageRole::Tool && self.fail_tools {
+            anyhow::bail!("disk full");
+        }
+        self.checkpoints
+            .lock()
+            .unwrap()
+            .push((index, message.clone()));
+        Ok(())
+    }
+    async fn finish(&self, _: &RunOutcome) -> anyhow::Result<()> {
+        self.finished.fetch_add(1, Ordering::SeqCst);
+        anyhow::bail!("terminal write failed")
+    }
+}
+#[tokio::test]
+async fn journal_failure_stops_execution_retains_completed_operations_and_reports_secondary_failure()
+ {
+    let script = Script::new(vec![
+        Step::Reply(calls(&["done", "pending"])),
+        Step::Reply(reply("must not run")),
+    ]);
+    let done = Arc::new(AtomicUsize::new(0));
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let executor = TurnExecutor::builder_from_shared(script.clone())
+        .workspace(std::env::temp_dir())
+        .registry(tools(
+            &[("done", false, 4), ("pending", true, 0)],
+            &done,
+            &notify,
+        ))
+        .build()
+        .unwrap();
+    let journal = FailingJournal {
+        fail_tools: true,
+        checkpoints: Mutex::new(vec![]),
+        finished: AtomicUsize::new(0),
+    };
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(2),
+        executor.run_with_journal(
+            request(),
+            Arc::new(()),
+            TurnExecutionContext::new(),
+            &journal,
+        ),
+    )
+    .await
+    .unwrap();
+    let turn = stopped(outcome);
+    assert!(matches!(&turn.stop,RunStop::Failed(failure) if failure.stage==RunStage::Persistence));
+    assert!(turn.persistence_error.is_some());
+    assert_eq!(done.load(Ordering::SeqCst), 1);
+    assert_eq!(turn.messages.len(), 3);
+    assert_eq!(journal.finished.load(Ordering::SeqCst), 1);
+    assert_eq!(script.requests.lock().unwrap().len(), 1);
+    assert_eq!(journal.checkpoints.lock().unwrap().len(), 1);
+}
+#[tokio::test]
+async fn failed_terminal_journal_write_cannot_report_a_completed_run() {
+    let script = Script::new(vec![Step::Reply(reply("candidate"))]);
+    let executor = executor(script, RunBudget::default());
+    let journal = FailingJournal {
+        fail_tools: false,
+        checkpoints: Mutex::new(vec![]),
+        finished: AtomicUsize::new(0),
+    };
+    let events = Arc::new(Mutex::new(vec![]));
+    let target = events.clone();
+    let handler = Arc::new(move |event: &AgentRawEventEnvelope| {
+        target.lock().unwrap().push(event.event.clone())
+    });
+    let turn = stopped(
+        executor
+            .run_with_journal(request(), handler, TurnExecutionContext::new(), &journal)
+            .await,
+    );
+    assert!(matches!(&turn.stop,RunStop::Failed(f) if f.stage==RunStage::Persistence));
+    assert_eq!(turn.messages[1].text_content(), "candidate");
+    assert!(
+        !events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, AgentRawEvent::AgentCompleted { .. }))
+    );
+}
+
+#[tokio::test]
+async fn session_cancellation_preserves_a_later_parallel_result_and_repairs_only_the_missing_call()
+{
+    use aicoder_core::session::*;
+    let workspace = tempfile::tempdir().unwrap();
+    let storage = tempfile::tempdir().unwrap();
+    for repository in [
+        Arc::new(MemorySessionRepository::new()) as Arc<dyn SessionRepository>,
+        Arc::new(JsonlSessionRepository::new(storage.path()).unwrap()),
+    ] {
+        let script = Script::new(vec![Step::Reply(calls(&["pending", "done"]))]);
+        let done = Arc::new(AtomicUsize::new(0));
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let executor = TurnExecutor::builder_from_shared(script)
+            .workspace(workspace.path())
+            .registry(tools(
+                &[("pending", true, 0), ("done", false, 4)],
+                &done,
+                &notify,
+            ))
+            .build()
+            .unwrap();
+        let agent = Agent::new(executor, AgentConfig::new("test"));
+        let session = repository.create(workspace.path()).unwrap();
+        let id = session.metadata().id.clone();
+        let target = repository.clone();
+        let selection = SessionSelection::Existing(id.clone());
+        let context = TurnExecutionContext::new();
+        let cancel = context.clone();
+        let run = tokio::spawn(async move {
+            agent
+                .run_with_session_outcome(target.as_ref(), selection, "work", Arc::new(()), context)
+                .await
+        });
+        tokio::time::timeout(Duration::from_secs(2), notify.notified())
+            .await
+            .unwrap();
+        cancel.cancel("stop parallel batch");
+        let outcome = run.await.unwrap();
+        assert!(
+            matches!(&outcome,AgentTurnOutcome::Aborted(turn) if turn.persistence_error.is_none())
+        );
+        let saved = repository.open(&id).unwrap();
+        assert_eq!(saved.chat_messages().len(), 3);
+        assert_eq!(saved.chat_messages()[2].tool_result().unwrap().0, "c1");
+        assert!(saved.unfinished_turn().is_none());
+        let context = saved.model_messages().unwrap();
+        assert_eq!(context[2].tool_result().unwrap().0, "c0");
+        assert!(context[2].tool_result().unwrap().2);
+        assert_eq!(context[3].tool_result().unwrap().0, "c1");
+        assert!(!context[3].tool_result().unwrap().2);
+        assert_eq!(done.load(Ordering::SeqCst), 1);
+    }
+}
