@@ -26,6 +26,8 @@ jobs:
         run: cargo test --locked --workspace
       - name: Offline smoke
         run: cargo run --locked -p aicoder-core --example offline_smoke
+      - name: In-memory model provider example
+        run: cargo run --locked -p aicoder-core --example model_provider
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

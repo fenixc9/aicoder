@@ -23,6 +23,8 @@ and [project instructions](AGENTS.md) for development conventions.
 The [development roadmap](docs/roadmap.md) defines the plan for a lightweight,
 extensible core and Pi feature parity across SDK, CLI, TUI, and Web integrations.
 See [API migrations](docs/migrations.md) when updating an embedded application.
+The [provider-neutral model API](docs/model-api.md) is available during S1;
+the agent loop's migration to that contract is still in progress.
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs
 request construction or session persistence. Both layers consume the single

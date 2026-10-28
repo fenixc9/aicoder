@@ -37,3 +37,17 @@ sample, application binaries grow by 0.7–1.2%, clean release compilation takes
 44.0 seconds, and the offline runtime peaks at 4.50 MiB RSS. Timing and RSS are
 diagnostic samples, not statistical proof of improvement. HTTP/SSE behavior
 is covered by the migrated provider tests as well as the workspace checks.
+
+## S1: provider-neutral model contract
+
+`aicoder_core::model` now provides `Message`, `ContentBlock`, `ModelRequest`,
+`ModelResponse`, `ModelUsage`, `ModelSpec`, `ModelRegistry`, `ProviderError`,
+`ModelEventSink` and `ModelProvider`. `ChatClient` implements `ModelProvider`
+through validated request/response conversion. See [the model API guide](model-api.md)
+and run `cargo run --locked -p aicoder-core --example model_provider` for an
+in-memory implementation without a model-service dependency.
+
+Existing `ChatCompletionProvider`, `TurnExecutor` and session APIs are retained
+in this migration step. Applications can call `ModelProvider::generate` now;
+the next S1 change migrates the execution/session/tool path to the new types
+and retires the legacy public message types. This is not a second agent loop.

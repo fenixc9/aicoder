@@ -1,10 +1,14 @@
 //! Model service adapters for aicoder. HTTP and service configuration live here, not in core.
 //!
-//! The first adapter implements the existing OpenAI-compatible completion boundary.
-//! Protocol-neutral model types are the next S1 migration step.
+//! The OpenAI-compatible adapter implements both the provider-neutral model contract
+//! and the legacy completion boundary while the agent loop migrates to the new API.
 
 mod chat;
+mod event_sink;
+mod model;
 mod stream;
+
+pub(crate) use event_sink::ProviderEventSink;
 
 pub use chat::{ChatClient, ClientConfig};
 

@@ -8,6 +8,7 @@ pub mod cancellation;
 pub mod completion;
 pub mod context;
 pub mod events;
+pub mod model;
 pub mod redaction;
 pub mod session;
 pub mod state;

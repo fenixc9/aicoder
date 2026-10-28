@@ -12,12 +12,13 @@ use std::{
 
 use aicoder_core::{
     cancellation::TurnExecutionContext,
-    events::{AgentEventEmitter, AgentRawEvent},
+    events::AgentRawEvent,
     redaction::{sanitize_text, sanitize_url},
     types::{ApiError, ChatCompletionRequest, ChatCompletionResponse, StreamChunk, StreamOptions},
 };
 
 use super::stream::{ChatStreamAccumulator, SseDecoder, SseEvent};
+use crate::ProviderEventSink;
 
 const MAX_ERROR_BODY_BYTES: usize = 8 * 1024;
 const BASE_RETRY_DELAY: Duration = Duration::from_millis(500);
@@ -76,7 +77,7 @@ fn retry_delay(headers: Option<&HeaderMap>, retry_number: u32) -> Duration {
 }
 
 fn emit_retry(
-    events: Option<&AgentEventEmitter>,
+    events: Option<&dyn ProviderEventSink>,
     attempt: u32,
     delay: Duration,
     reason: impl Into<String>,
@@ -143,8 +144,9 @@ impl Default for ClientConfig {
 
 /// OpenAI 兼容 API 客户端
 pub struct ChatClient {
-    config: ClientConfig,
+    pub(crate) config: ClientConfig,
     http_client: Client,
+    pub(crate) models: aicoder_core::model::ModelRegistry,
 }
 
 impl ChatClient {
@@ -165,6 +167,7 @@ impl ChatClient {
         Ok(Self {
             config,
             http_client,
+            models: aicoder_core::model::ModelRegistry::default(),
         })
     }
 
@@ -212,7 +215,7 @@ impl ChatClient {
     pub(crate) async fn chat_completion_with_events(
         &self,
         request: ChatCompletionRequest,
-        events: &AgentEventEmitter,
+        events: &dyn ProviderEventSink,
     ) -> Result<ChatCompletionResponse> {
         self.chat_completion_inner(request, Some(events)).await
     }
@@ -220,17 +223,26 @@ impl ChatClient {
     async fn chat_completion_inner(
         &self,
         request: ChatCompletionRequest,
-        events: Option<&AgentEventEmitter>,
+        events: Option<&dyn ProviderEventSink>,
+    ) -> Result<ChatCompletionResponse> {
+        self.chat_completion_body(serde_json::to_value(request)?, events)
+            .await
+    }
+
+    pub(crate) async fn chat_completion_body(
+        &self,
+        request: serde_json::Value,
+        events: Option<&dyn ProviderEventSink>,
     ) -> Result<ChatCompletionResponse> {
         let url = format!("{}/chat/completions", self.config.base_url);
         let request_body = serde_json::to_string(&request)?;
 
         tracing::debug!(
             url = %sanitize_url(&url),
-            model = %sanitize_text(&request.model, 256),
-            messages = request.messages.len(),
-            tools = request.tools.as_ref().map_or(0, Vec::len),
-            stream = request.stream.unwrap_or(false),
+            model = %sanitize_text(request["model"].as_str().unwrap_or_default(), 256),
+            messages = request["messages"].as_array().map_or(0, Vec::len),
+            tools = request["tools"].as_array().map_or(0, Vec::len),
+            stream = request["stream"].as_bool().unwrap_or(false),
             request_bytes = request_body.len(),
             "Sending chat completion request"
         );
@@ -263,11 +275,12 @@ impl ChatClient {
                     continue;
                 }
                 Err(error) => {
-                    anyhow::bail!(
+                    return Err(crate::model::transport_error(format!(
                         "HTTP request failed after {} attempt(s): {}",
                         attempt,
                         sanitize_text(&error.to_string(), 2048)
-                    );
+                    ))
+                    .into());
                 }
             };
 
@@ -296,11 +309,12 @@ impl ChatClient {
                     continue;
                 }
                 Err(error) => {
-                    anyhow::bail!(
+                    return Err(crate::model::transport_error(format!(
                         "Failed to read response body after {} attempt(s): {}",
                         attempt,
                         sanitize_text(&error.to_string(), 2048)
-                    );
+                    ))
+                    .into());
                 }
             };
 
@@ -345,22 +359,32 @@ impl ChatClient {
 
             if status.is_server_error() {
                 let body = sanitize_text(&body, MAX_ERROR_BODY_BYTES);
-                return Err(anyhow::anyhow!(
-                    "Server error (status {}) after {} attempt(s)\nBody: {}",
+                return Err(crate::model::http_error(
                     status,
-                    attempt,
-                    body
-                ));
+                    format!(
+                        "Server error (status {}) after {} attempt(s)\nBody: {}",
+                        status, attempt, body
+                    ),
+                )
+                .into());
             }
 
             if let Ok(api_err) = serde_json::from_str::<ApiError>(&body) {
                 let error_type = sanitize_text(&api_err.error_type, 256);
                 let message = sanitize_text(&api_err.message, MAX_ERROR_BODY_BYTES);
-                anyhow::bail!("API error: {} - {}", error_type, message);
+                return Err(crate::model::http_error(
+                    status,
+                    format!("API error: {} - {}", error_type, message),
+                )
+                .into());
             }
 
             let body = sanitize_text(&body, MAX_ERROR_BODY_BYTES);
-            anyhow::bail!("API error (status {}): {}", status, body);
+            return Err(crate::model::http_error(
+                status,
+                format!("API error (status {}): {}", status, body),
+            )
+            .into());
         }
 
         unreachable!("HTTP attempt loop always returns or errors")
@@ -377,22 +401,30 @@ impl ChatClient {
     async fn chat_completion_stream_inner(
         &self,
         mut request: ChatCompletionRequest,
-        events: Option<&AgentEventEmitter>,
+        events: Option<&dyn ProviderEventSink>,
     ) -> Result<impl Stream<Item = Result<StreamChunk>>> {
-        use futures::stream::StreamExt;
-
         request.stream = Some(true);
         request
             .stream_options
             .get_or_insert_with(StreamOptions::default);
+        self.chat_completion_stream_body(serde_json::to_value(request)?, events)
+            .await
+    }
+
+    async fn chat_completion_stream_body(
+        &self,
+        request: serde_json::Value,
+        events: Option<&dyn ProviderEventSink>,
+    ) -> Result<impl Stream<Item = Result<StreamChunk>>> {
+        use futures::stream::StreamExt;
         let url = format!("{}/chat/completions", self.config.base_url);
         let request_body = serde_json::to_string(&request)?;
 
         tracing::debug!(
             url = %sanitize_url(&url),
-            model = %sanitize_text(&request.model, 256),
-            messages = request.messages.len(),
-            tools = request.tools.as_ref().map_or(0, Vec::len),
+            model = %sanitize_text(request["model"].as_str().unwrap_or_default(), 256),
+            messages = request["messages"].as_array().map_or(0, Vec::len),
+            tools = request["tools"].as_array().map_or(0, Vec::len),
             request_bytes = request_body.len(),
             "Sending streaming chat completion request"
         );
@@ -409,10 +441,10 @@ impl ChatClient {
 
             'streaming: while let Some(result) = response_stream.next().await {
                 let bytes = result.map_err(|error| {
-                    anyhow::anyhow!(
+                    anyhow::Error::from(crate::model::transport_error(format!(
                         "Stream transport error: {}",
                         sanitize_text(&error.to_string(), 2048)
-                    )
+                    )))
                 })?;
                 for event in decoder.push(&bytes)? {
                     match event {
@@ -451,7 +483,7 @@ impl ChatClient {
         url: &str,
         request_body: &str,
         total_attempts: u32,
-        events: Option<&AgentEventEmitter>,
+        events: Option<&dyn ProviderEventSink>,
     ) -> Result<reqwest::Response> {
         for attempt in 1..=total_attempts {
             tracing::debug!(attempt, total_attempts, "Starting streaming HTTP attempt");
@@ -491,11 +523,12 @@ impl ChatClient {
                         attempt,
                         "Streaming HTTP request failed"
                     );
-                    anyhow::bail!(
+                    return Err(crate::model::transport_error(format!(
                         "Streaming HTTP request failed after {} attempt(s): {}",
                         attempt,
                         sanitize_text(&error.to_string(), 2048)
-                    );
+                    ))
+                    .into());
                 }
             };
 
@@ -522,11 +555,12 @@ impl ChatClient {
                     continue;
                 }
                 Err(error) => {
-                    anyhow::bail!(
+                    return Err(crate::model::transport_error(format!(
                         "Failed to read streaming error response after {} attempt(s): {}",
                         attempt,
                         sanitize_text(&error.to_string(), 2048)
-                    );
+                    ))
+                    .into());
                 }
             };
 
@@ -545,12 +579,14 @@ impl ChatClient {
             }
 
             let body = sanitize_text(&body, MAX_ERROR_BODY_BYTES);
-            anyhow::bail!(
-                "Streaming API error (status {}) after {} attempt(s): {}",
+            return Err(crate::model::http_error(
                 status,
-                attempt,
-                body
-            );
+                format!(
+                    "Streaming API error (status {}) after {} attempt(s): {}",
+                    status, attempt, body
+                ),
+            )
+            .into());
         }
 
         unreachable!("streaming HTTP attempt loop always returns or errors")
@@ -576,7 +612,7 @@ impl ChatClient {
     pub(crate) async fn chat_completion_stream_collect_with_events(
         &self,
         mut request: ChatCompletionRequest,
-        events: &AgentEventEmitter,
+        events: &dyn ProviderEventSink,
     ) -> Result<ChatCompletionResponse> {
         use futures::StreamExt;
 
@@ -614,16 +650,28 @@ impl ChatClient {
     pub(crate) async fn chat_completion_stream_collect_with_context(
         &self,
         mut request: ChatCompletionRequest,
-        events: &AgentEventEmitter,
+        events: &dyn ProviderEventSink,
+        context: &TurnExecutionContext,
+    ) -> Result<ChatCompletionResponse> {
+        request.stream = Some(true);
+        request
+            .stream_options
+            .get_or_insert_with(StreamOptions::default);
+        self.collect_stream_body(serde_json::to_value(request)?, events, context)
+            .await
+    }
+
+    pub(crate) async fn collect_stream_body(
+        &self,
+        request: serde_json::Value,
+        events: &dyn ProviderEventSink,
         context: &TurnExecutionContext,
     ) -> Result<ChatCompletionResponse> {
         use futures::StreamExt;
-
-        request.stream = Some(true);
         let stream = tokio::select! {
             biased;
             cancelled = context.cancelled() => return Err(cancelled.into()),
-            stream = self.chat_completion_stream_inner(request, Some(events)) => stream?,
+            stream = self.chat_completion_stream_body(request, Some(events)) => stream?,
         };
         events.emit(AgentRawEvent::ModelResponseStarted);
         futures::pin_mut!(stream);
@@ -665,7 +713,7 @@ impl ChatClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aicoder_core::events::AgentRawEventEnvelope;
+    use aicoder_core::events::{AgentEventEmitter, AgentRawEventEnvelope};
     use futures::StreamExt;
     use std::{
         io::{self, Write},
@@ -927,6 +975,284 @@ mod tests {
             stop: None,
             response_format: None,
         }
+    }
+
+    #[tokio::test]
+    async fn normalized_model_api_encodes_images_schema_and_decodes_tool_calls() {
+        use aicoder_core::model::*;
+        let response = r#"{"id":"normalized","object":"chat.completion","created":1,"model":"deepseek-chat","choices":[{"index":0,"message":{"role":"assistant","reasoning":"thinking","tool_calls":[{"id":"call-1","type":"function","function":{"name":"read","arguments":"{\"path\":\"a.rs\"}"}}]},"finish_reason":"tool_calls"}]}"#;
+        let (url, captured) = spawn_mock_server("200 OK", "application/json", response).await;
+        let mut client = test_client(url);
+        let mut spec = ModelSpec::new("openai-compatible", "deepseek-chat");
+        spec.capabilities = ModelCapabilities {
+            images: true,
+            tools: true,
+            structured_output: true,
+            ..Default::default()
+        };
+        client.register_model(spec).unwrap();
+        let mut request = ModelRequest::new(
+            "deepseek-chat",
+            vec![Message {
+                role: MessageRole::User,
+                content: vec![
+                    ContentBlock::Text {
+                        text: "inspect".into(),
+                    },
+                    ContentBlock::Image {
+                        source: ImageSource::Url {
+                            url: "https://example.com/image.png".into(),
+                        },
+                    },
+                ],
+            }],
+        );
+        request.stream = false;
+        request.tools.push(ToolDefinition {
+            name: "read".into(),
+            description: None,
+            parameters: serde_json::json!({"type":"object"}),
+        });
+        request.tool_choice = ModelToolChoice::Named("read".into());
+        request.options.response_format = Some(ResponseFormat::JsonSchema {
+            name: "answer".into(),
+            schema: serde_json::json!({"type":"object"}),
+            strict: true,
+        });
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        let result = client
+            .generate(
+                request,
+                Arc::new(move |event| recorded.lock().unwrap().push(event)),
+                TurnExecutionContext::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.stop_reason, StopReason::ToolCalls);
+        assert_eq!(
+            result.message.tool_calls().next().unwrap().arguments["path"],
+            "a.rs"
+        );
+        assert_eq!(result.usage.total_tokens, None);
+        let body: serde_json::Value =
+            serde_json::from_str(captured.await.unwrap().split_once("\r\n\r\n").unwrap().1)
+                .unwrap();
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image_url");
+        assert_eq!(body["tool_choice"]["function"]["name"], "read");
+        assert!(body["tools"][0]["function"].get("description").is_none());
+        assert_eq!(body["response_format"]["json_schema"]["strict"], true);
+        let events = events.lock().unwrap();
+        assert!(matches!(events.first(), Some(ModelEvent::Started)));
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Finished {
+                stop_reason: StopReason::ToolCalls
+            })
+        ));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, ModelEvent::Usage { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn normalized_stream_reports_deltas_and_one_terminal_usage() {
+        use aicoder_core::model::*;
+        let response = concat!(
+            "data: {\"id\":\"s\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"}}]}\n\n",
+            "data: {\"id\":\"s\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"test-model\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":1,\"total_tokens\":5}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (url, _) = spawn_mock_server("200 OK", "text/event-stream", response).await;
+        let client = test_client(url);
+        let request = ModelRequest::new(
+            "deepseek-chat",
+            vec![Message::text(MessageRole::User, "hello")],
+        );
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        let result = client
+            .generate(
+                request,
+                Arc::new(move |event| recorded.lock().unwrap().push(event)),
+                TurnExecutionContext::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.message.text_content(), "hello");
+        assert_eq!(result.usage.total_tokens, Some(5));
+        let events = events.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ModelEvent::TextDelta { delta } if delta == "hello"))
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, ModelEvent::Usage { .. }))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            events.last(),
+            Some(ModelEvent::Finished {
+                stop_reason: StopReason::Complete
+            })
+        ));
+    }
+
+    #[tokio::test]
+    async fn normalized_api_rejects_unsupported_or_cancelled_requests_before_http() {
+        use aicoder_core::model::*;
+        let client = test_client("http://127.0.0.1:1".into());
+        let mut request = ModelRequest::new(
+            "deepseek-chat",
+            vec![Message::text(MessageRole::User, "hello")],
+        );
+        request.messages[0].content.push(ContentBlock::Image {
+            source: ImageSource::Url {
+                url: "https://example.com/a.png".into(),
+            },
+        });
+        let error = client
+            .generate(request.clone(), Arc::new(()), TurnExecutionContext::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::Unsupported);
+        let context = TurnExecutionContext::new();
+        context.cancel("stop before request");
+        let error = client
+            .generate(request, Arc::new(()), context)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn normalized_api_preserves_http_error_kind_status_and_redaction() {
+        use aicoder_core::model::*;
+        for (status, expected, retryable) in [
+            ("401 Unauthorized", ProviderErrorKind::Authentication, false),
+            (
+                "429 Too Many Requests",
+                ProviderErrorKind::RateLimited,
+                true,
+            ),
+            (
+                "503 Service Unavailable",
+                ProviderErrorKind::Transport,
+                true,
+            ),
+        ] {
+            let (url, _) = spawn_mock_server(
+                status,
+                "application/json",
+                r#"{"error":{"message":"api_key=private-secret"}}"#,
+            )
+            .await;
+            let client = test_client_with_retries(url, 0);
+            let mut request = ModelRequest::new(
+                "deepseek-chat",
+                vec![Message::text(MessageRole::User, "hello")],
+            );
+            request.stream = false;
+            let error = client
+                .generate(request, Arc::new(()), TurnExecutionContext::new())
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind, expected);
+            assert_eq!(error.http_status, Some(status[..3].parse::<u16>().unwrap()));
+            assert_eq!(error.retryable, retryable);
+            assert!(!error.message.contains("private-secret"));
+        }
+    }
+
+    #[tokio::test]
+    async fn normalized_stream_cancellation_has_one_aborted_terminal_event() {
+        use aicoder_core::model::*;
+        let response = concat!(
+            "data: {\"id\":\"s\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n",
+            "data: {\"id\":\"s\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let (url, _) = spawn_mock_server("200 OK", "text/event-stream", response).await;
+        let client = test_client(url);
+        let request = ModelRequest::new(
+            "deepseek-chat",
+            vec![Message::text(MessageRole::User, "hello")],
+        );
+        let context = TurnExecutionContext::new();
+        let cancellation = context.clone();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        let error = client
+            .generate(
+                request,
+                Arc::new(move |event| {
+                    if matches!(event, ModelEvent::TextDelta { .. }) {
+                        cancellation.cancel("stop after partial text");
+                    }
+                    recorded.lock().unwrap().push(event);
+                }),
+                context,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::Cancelled);
+        let events = events.lock().unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(e, ModelEvent::Aborted { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ModelEvent::Finished { .. }))
+        );
+        assert!(matches!(events.last(), Some(ModelEvent::Aborted { .. })));
+    }
+
+    #[tokio::test]
+    async fn normalized_incomplete_stream_retains_reported_usage_before_error() {
+        use aicoder_core::model::*;
+        let response = "data: {\"id\":\"s\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n\n";
+        let (url, _) = spawn_mock_server("200 OK", "text/event-stream", response).await;
+        let client = test_client(url);
+        let request = ModelRequest::new(
+            "deepseek-chat",
+            vec![Message::text(MessageRole::User, "hello")],
+        );
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorded = events.clone();
+        let error = client
+            .generate(
+                request,
+                Arc::new(move |event| recorded.lock().unwrap().push(event)),
+                TurnExecutionContext::new(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::InvalidResponse);
+        let events = events.lock().unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ModelEvent::Usage { usage } if usage.total_tokens == Some(7)))
+        );
+        assert!(matches!(events.last(), Some(ModelEvent::Aborted { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, ModelEvent::Finished { .. }))
+        );
     }
 
     #[test]

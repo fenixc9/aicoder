@@ -1,9 +1,10 @@
+use crate::ProviderEventSink;
 use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{Context, Result};
 
 use aicoder_core::{
-    events::{AgentEventEmitter, AgentRawEvent, StreamEnd, ToolCallKey},
+    events::{AgentRawEvent, StreamEnd, ToolCallKey},
     types::{
         ChatCompletionResponse, ChatMessage, Choice, FunctionCall, LogProbs, Role, StreamChunk,
         StreamDelta, StreamToolCall, ToolCall, ToolType, Usage,
@@ -198,12 +199,16 @@ impl ChatStreamAccumulator {
     pub(crate) fn push_with_events(
         &mut self,
         chunk: StreamChunk,
-        events: &AgentEventEmitter,
+        events: &dyn ProviderEventSink,
     ) -> Result<()> {
         self.push_inner(chunk, Some(events))
     }
 
-    fn push_inner(&mut self, chunk: StreamChunk, events: Option<&AgentEventEmitter>) -> Result<()> {
+    fn push_inner(
+        &mut self,
+        chunk: StreamChunk,
+        events: Option<&dyn ProviderEventSink>,
+    ) -> Result<()> {
         if self.state == AccumulatorState::Finished {
             anyhow::bail!("Received a stream chunk after the stream was finished");
         }
@@ -250,7 +255,7 @@ impl ChatStreamAccumulator {
         Ok(())
     }
 
-    pub(crate) fn abort_events(&self, events: &AgentEventEmitter, reason: impl Into<String>) {
+    pub(crate) fn abort_events(&self, events: &dyn ProviderEventSink, reason: impl Into<String>) {
         let reason = Arc::<str>::from(reason.into());
         for (choice_index, choice) in &self.choices {
             if choice.events_ended {
@@ -309,7 +314,7 @@ impl ChatStreamAccumulator {
 
     pub(crate) fn finish_with_events(
         self,
-        events: &AgentEventEmitter,
+        events: &dyn ProviderEventSink,
     ) -> Result<ChatCompletionResponse> {
         if let Err(error) = self.validate_complete() {
             self.abort_events(events, error.to_string());
@@ -351,7 +356,7 @@ fn apply_delta(
     choice: &mut ChoiceAccumulator,
     choice_index: i32,
     delta: StreamDelta,
-    events: Option<&AgentEventEmitter>,
+    events: Option<&dyn ProviderEventSink>,
 ) -> Result<()> {
     if let Some(role) = delta.role {
         merge_stable(&mut choice.role, role, "choice role")?;
@@ -400,7 +405,7 @@ fn apply_tool_call(
     choice: &mut ChoiceAccumulator,
     choice_index: i32,
     delta: StreamToolCall,
-    events: Option<&AgentEventEmitter>,
+    events: Option<&dyn ProviderEventSink>,
 ) -> Result<()> {
     if delta.index < 0 {
         anyhow::bail!("Stream tool call index must be non-negative");
@@ -448,7 +453,7 @@ fn apply_tool_call(
 }
 
 fn emit_choice_ended(
-    events: &AgentEventEmitter,
+    events: &dyn ProviderEventSink,
     choice_index: i32,
     choice: &ChoiceAccumulator,
 ) -> Result<()> {
@@ -573,7 +578,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use aicoder_core::events::AgentRawEventEnvelope;
+    use aicoder_core::events::{AgentEventEmitter, AgentRawEventEnvelope};
 
     fn chunk(value: serde_json::Value) -> StreamChunk {
         serde_json::from_value(value).unwrap()

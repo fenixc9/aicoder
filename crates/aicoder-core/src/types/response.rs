@@ -52,6 +52,7 @@ pub enum FinishReason {
     /// 模型返回了工具调用
     #[serde(rename = "tool_calls")]
     ToolCalls,
+    #[serde(rename = "content_filter", alias = "contentfilter")]
     ContentFilter,
     /// 模型拒绝生成（安全原因）
     /// 注：OpenAI 新版 API 中已不再使用 `guard` 作为 finish_reason

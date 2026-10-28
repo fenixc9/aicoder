@@ -2,7 +2,8 @@
 
 状态：S0 已完成；S1 进行中。本文替代旧 TODO 的排期。
 基线和验证依据见 [S0 开发基线](development-baseline.md)。
-S1 已完成 HTTP adapter 的 crate 分离，协议类型仍待迁移；见 [迁移说明](migrations.md)。
+S1 已完成 HTTP adapter 的 crate 分离，并提供可调用的统一模型 API；执行器与旧会话
+仍待切换。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
 
 ## 1. 产品目标
 
@@ -123,9 +124,10 @@ Web 目标是可接入且有可运行示例，不在此路线图中建设完整�
 
 已交付第一步：`aicoder-providers` 接管 HTTP/SSE、重试和模型客户端，三个应用已迁移；
 core 正常依赖树不含 reqwest/Hyper/TLS/UI 库。现有 wire types 暂保留，下面涉及
-协议无关模型契约的任务尚未验收。
+统一模型契约及 OpenAI 转换层已提供，新 API 可直接调用；执行器尚未切换，不能据此
+认定整个 S1 已完成。
 
-- [ ] 确定内部 Message、ContentBlock、ModelSpec、ProviderError、Usage 类型。
+- [x] 确定内部 Message、ContentBlock、ModelSpec、ProviderError、Usage 类型。
 - [ ] 将 OpenAI wire types、HTTP、重试和认证装配从执行循环移出。
 - [ ] 新增 providers crate，先完善 OpenAI-compatible adapter；配置 endpoint、
   代理、超时及 API key，明确服务兼容差异。

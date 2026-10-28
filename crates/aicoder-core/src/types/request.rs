@@ -19,7 +19,11 @@ pub struct ChatMessage {
     /// 文本内容（assistant 回复或 user 输入时）
     pub content: Option<String>,
     /// 推理内容（某些模型如 qwen3 返回 reasoning 而非 content）
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        alias = "reasoning_content",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub reasoning: Option<String>,
     /// 工具调用列表（仅 assistant 消息可能包含）
     #[serde(skip_serializing_if = "Option::is_none")]
