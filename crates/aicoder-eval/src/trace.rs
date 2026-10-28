@@ -169,6 +169,8 @@ fn event_kind(event: &AgentRawEvent) -> &'static str {
         AgentRawEvent::ToolExecutionStarted { .. } => "tool_execution_started",
         AgentRawEvent::ToolExecutionEnded { .. } => "tool_execution_ended",
         AgentRawEvent::UsageUpdated { .. } => "usage_updated",
+        AgentRawEvent::RunInputApplied { .. } => "run_input_applied",
+        AgentRawEvent::RunApprovalRequested { .. } => "run_approval_requested",
     }
 }
 

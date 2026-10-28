@@ -234,7 +234,7 @@ fn draw_timeline(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
 fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let title = if app.is_running() {
-        " Input locked while agent runs "
+        " Input: Enter steer / Alt+Enter follow-up "
     } else {
         " Input "
     };
@@ -254,7 +254,7 @@ fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
             ),
         area,
     );
-    if app.focus == Focus::Input && !app.is_running() && app.approval.is_none() {
+    if app.focus == Focus::Input && app.approval.is_none() {
         frame.set_cursor_position((
             area.x
                 .saturating_add(1 + cursor.saturating_sub(horizontal_scroll)),

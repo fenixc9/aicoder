@@ -239,6 +239,17 @@ pub struct UsageUpdatedEvent {
     pub usage: Arc<ModelUsage>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RunApprovalRequestedEvent {
+    pub meta: AgentEventMeta,
+    pub request: Arc<crate::PendingRunApproval>,
+}
+#[derive(Debug, Clone)]
+pub struct RunInputAppliedEvent {
+    pub meta: AgentEventMeta,
+    pub input: Arc<crate::RunInput>,
+}
+
 /// The single event interface for agent applications.
 ///
 /// `on_raw_event` observes every event before its type-specific callback. Applications can use it
@@ -248,6 +259,8 @@ pub struct UsageUpdatedEvent {
 pub trait AgentEventHandler: Send + Sync + 'static {
     fn on_raw_event(&self, _event: &AgentRawEventEnvelope) {}
 
+    fn on_run_approval_requested(&self, _event: RunApprovalRequestedEvent) {}
+    fn on_run_input_applied(&self, _event: RunInputAppliedEvent) {}
     fn on_agent_started(&self, _event: AgentStartedEvent) {}
     fn on_agent_completed(&self, _event: AgentCompletedEvent) {}
     fn on_agent_failed(&self, _event: AgentFailedEvent) {}
@@ -336,6 +349,18 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
                 meta,
                 transition: *transition,
             });
+        }
+        AgentRawEvent::RunApprovalRequested { request } => {
+            handler.on_run_approval_requested(RunApprovalRequestedEvent {
+                meta,
+                request: request.clone(),
+            })
+        }
+        AgentRawEvent::RunInputApplied { input } => {
+            handler.on_run_input_applied(RunInputAppliedEvent {
+                meta,
+                input: input.clone(),
+            })
         }
         AgentRawEvent::RoundStarted => {
             handler.on_round_started(RoundStartedEvent { meta });

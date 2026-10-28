@@ -27,8 +27,10 @@ pub struct AgentEventEmitter {
 impl AgentEventEmitter {
     /// Starts an ordered event dispatcher. The owner must call `shutdown` after producers finish.
     pub fn new(handler: Arc<dyn AgentEventHandler>) -> Self {
+        Self::with_run_id(handler, RunId::new())
+    }
+    pub(crate) fn with_run_id(handler: Arc<dyn AgentEventHandler>, run_id: RunId) -> Self {
         let (sender, mut receiver) = mpsc::unbounded_channel::<EventCommand>();
-        let run_id = RunId::new();
         let run_id_text = run_id.to_string();
         thread::Builder::new()
             .name(format!("aicoder-events-{}", &run_id_text[..8]))

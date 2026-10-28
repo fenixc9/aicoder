@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use aicoder_core::TurnExecutionContext;
+use aicoder_core::{RunControlConfig, RunHandle, RunInputKind, TurnExecutionContext};
 use anyhow::{Context, Result, ensure};
 use app::{App, AppEvent, Focus, TimelineItem};
 use clap::Parser;
@@ -200,7 +200,7 @@ fn handle_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) -> Result<()
         _ if app.focus == Focus::Sessions && !app.is_running() => {
             handle_session_key(app, runtime, key)?
         }
-        _ if app.focus == Focus::Input && !app.is_running() => handle_input_key(app, runtime, key),
+        _ if app.focus == Focus::Input => handle_input_key(app, runtime, key),
         _ => {}
     }
     Ok(())
@@ -242,10 +242,28 @@ fn handle_input_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) {
             if handle_slash_command(app, &prompt) {
                 return;
             }
+            if app.is_running() {
+                let kind = if key.modifiers.contains(KeyModifiers::ALT) {
+                    RunInputKind::FollowUp
+                } else {
+                    RunInputKind::Steer
+                };
+                app.queue_input(kind, prompt);
+                return;
+            }
             let selection = app.session_selection.clone();
             let context = TurnExecutionContext::new();
-            runtime.start_turn(selection, prompt.clone(), context.clone());
+            let (handle, control) = RunHandle::channel(
+                context.clone(),
+                RunControlConfig {
+                    handle_approvals: true,
+                    ..Default::default()
+                },
+            )
+            .expect("default TUI run controls");
+            runtime.start_turn(selection, prompt.clone(), control);
             app.begin_turn(prompt, context);
+            app.active_handle = Some(handle);
         }
         KeyCode::Char(character)
             if !key.modifiers.contains(KeyModifiers::CONTROL)

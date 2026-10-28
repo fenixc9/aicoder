@@ -4,23 +4,18 @@ use std::{
 };
 
 use aicoder_core::{
-    AgentRawEvent, AgentRawEventEnvelope, AgentRunState, AgentTurnOutcome, SessionSelection,
-    ToolExecutionOutcome, TurnExecutionContext,
+    AgentRawEvent, AgentRawEventEnvelope, AgentRunState, AgentTurnOutcome, ApprovalRequestId,
+    RunHandle, RunInputKind, SessionSelection, ToolExecutionOutcome, TurnExecutionContext,
     model::{Message, MessageRole, ModelUsage},
     session::{Session, SessionEntryData, SessionInfo},
     tools::ToolInvocation,
 };
-use tokio::sync::oneshot;
 use unicode_width::UnicodeWidthStr;
 
 use crate::commands::{self, CommandSpec};
 
 pub enum AppEvent {
     Agent(AgentRawEventEnvelope),
-    Approval {
-        invocation: ToolInvocation,
-        respond_to: oneshot::Sender<bool>,
-    },
     TurnFinished(Box<AgentTurnOutcome>),
 }
 
@@ -53,7 +48,7 @@ pub enum TimelineItem {
 
 pub struct PendingApproval {
     pub invocation: ToolInvocation,
-    pub respond_to: oneshot::Sender<bool>,
+    pub id: ApprovalRequestId,
 }
 
 #[derive(Default)]
@@ -147,6 +142,7 @@ pub struct App {
     pub usage: ModelUsage,
     pub round: usize,
     pub active_context: Option<TurnExecutionContext>,
+    pub active_handle: Option<RunHandle>,
     pub started_at: Option<Instant>,
     pub elapsed: Duration,
     pub approval: Option<PendingApproval>,
@@ -171,6 +167,7 @@ impl App {
             usage: ModelUsage::zero(),
             round: 0,
             active_context: None,
+            active_handle: None,
             started_at: None,
             elapsed: Duration::ZERO,
             approval: None,
@@ -254,31 +251,50 @@ impl App {
 
     pub fn cancel(&mut self, reason: &str) {
         if let Some(context) = &self.active_context {
-            context.cancel(reason);
+            if let Some(handle) = &self.active_handle {
+                let _ = handle.cancel(reason);
+            } else {
+                context.cancel(reason);
+            }
             self.timeline
                 .push(TimelineItem::Notice("Cancelling active turn...".into()));
         }
         self.approval = None;
     }
 
+    pub fn queue_input(&mut self, kind: RunInputKind, prompt: String) {
+        let Some(handle) = &self.active_handle else {
+            self.input.replace(prompt);
+            return;
+        };
+        let message = Message::text(MessageRole::User, prompt.clone());
+        let result = match kind {
+            RunInputKind::Steer => handle.steer(message),
+            RunInputKind::FollowUp => handle.follow_up(message),
+        };
+        match result {
+            Ok(id) => self.timeline.push(TimelineItem::Notice(format!(
+                "Queued {kind:?} #{id}: {prompt}"
+            ))),
+            Err(error) => {
+                self.input.replace(prompt);
+                self.timeline.push(TimelineItem::Error(error.to_string()));
+            }
+        }
+        self.scroll_back = 0;
+    }
     pub fn resolve_approval(&mut self, approved: bool) {
-        if let Some(approval) = self.approval.take() {
-            let _ = approval.respond_to.send(approved);
+        if let Some(approval) = self.approval.take()
+            && let Some(handle) = &self.active_handle
+            && let Err(error) = handle.respond_approval(&approval.id, approved)
+        {
+            self.timeline.push(TimelineItem::Notice(error.to_string()));
         }
     }
 
     pub fn apply(&mut self, event: AppEvent) {
         match event {
             AppEvent::Agent(envelope) => self.apply_agent_event(envelope),
-            AppEvent::Approval {
-                invocation,
-                respond_to,
-            } => {
-                self.approval = Some(PendingApproval {
-                    invocation,
-                    respond_to,
-                });
-            }
             AppEvent::TurnFinished(outcome) => self.finish_turn(*outcome),
         }
     }
@@ -286,6 +302,40 @@ impl App {
     fn apply_agent_event(&mut self, envelope: AgentRawEventEnvelope) {
         self.round = self.round.max(envelope.round.unwrap_or(0));
         match envelope.event {
+            AgentRawEvent::RunInputApplied { input } => {
+                self.timeline.push(TimelineItem::Notice(format!(
+                    "Applied {:?} #{}",
+                    input.kind, input.id
+                )));
+                push_message(&mut self.timeline, &input.message);
+            }
+            AgentRawEvent::RunApprovalRequested { request } => {
+                if self.active_handle.as_ref().is_some_and(|handle| {
+                    handle
+                        .snapshot()
+                        .approvals
+                        .iter()
+                        .any(|pending| pending.id == request.id)
+                }) {
+                    self.approval = Some(PendingApproval {
+                        id: request.id.clone(),
+                        invocation: request.invocation.clone(),
+                    });
+                }
+            }
+            AgentRawEvent::ToolApprovalResolved { .. } => {
+                if let Some(pending) = &self.approval
+                    && self.active_handle.as_ref().is_none_or(|handle| {
+                        !handle
+                            .snapshot()
+                            .approvals
+                            .iter()
+                            .any(|request| request.id == pending.id)
+                    })
+                {
+                    self.approval = None;
+                }
+            }
             AgentRawEvent::StateChanged { transition } => self.state = transition.current,
             AgentRawEvent::ReasoningStarted { .. } => self.timeline.push(TimelineItem::Reasoning {
                 text: String::new(),
@@ -371,6 +421,14 @@ impl App {
             | AgentTurnOutcome::Limited(turn)
             | AgentTurnOutcome::Stopped(turn)
             | AgentTurnOutcome::Failed(turn) => {
+                for input in &turn.progress.pending_inputs {
+                    self.timeline.push(TimelineItem::Notice(format!(
+                        "Not applied: {:?} #{}: {}",
+                        input.kind,
+                        input.id,
+                        input.message.text_content()
+                    )));
+                }
                 self.round = turn.progress.rounds;
                 let round = (self.round > 0).then_some(self.round);
                 self.state = match &turn.stop {
@@ -398,6 +456,7 @@ impl App {
             .map(|started| started.elapsed())
             .unwrap_or(self.elapsed);
         self.active_context = None;
+        self.active_handle = None;
         self.started_at = None;
         self.approval = None;
     }
@@ -410,6 +469,14 @@ impl App {
             match &entry.data {
                 SessionEntryData::Message { message } => push_message(&mut self.timeline, message),
                 SessionEntryData::TurnEnd { record, .. } => {
+                    for input in &record.pending_inputs {
+                        self.timeline.push(TimelineItem::Notice(format!(
+                            "Not applied: {:?} #{}: {}",
+                            input.kind,
+                            input.id,
+                            input.message.text_content()
+                        )));
+                    }
                     if let Some(statistics) = &record.statistics {
                         self.usage.accumulate(&statistics.usage);
                     }
@@ -578,6 +645,45 @@ mod tests {
             round: Some(1),
             event,
         })
+    }
+
+    #[test]
+    fn queued_controls_wait_for_application_and_rejected_text_is_restored() {
+        use aicoder_core::{RunControlConfig, RunHandle};
+        let context = TurnExecutionContext::new();
+        let (handle, control) = RunHandle::channel(
+            context.clone(),
+            RunControlConfig {
+                max_pending_inputs: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut app = App::new(vec![]);
+        app.begin_turn("initial".into(), context);
+        app.active_handle = Some(handle.clone());
+        app.queue_input(RunInputKind::Steer, "redirect".into());
+        assert!(
+            matches!(app.timeline.last(),Some(TimelineItem::Notice(text)) if text.contains("Queued"))
+        );
+        assert_eq!(
+            app.timeline
+                .iter()
+                .filter(|item| matches!(item, TimelineItem::User(_)))
+                .count(),
+            1
+        );
+        app.queue_input(RunInputKind::FollowUp, "keep this draft".into());
+        assert_eq!(app.input.value(), "keep this draft");
+        let pending = handle.snapshot().pending_inputs[0].clone();
+        app.apply(event(
+            1,
+            AgentRawEvent::RunInputApplied {
+                input: Arc::new(pending),
+            },
+        ));
+        assert!(matches!(app.timeline.last(),Some(TimelineItem::User(text)) if text=="redirect"));
+        drop(control);
     }
 
     #[test]

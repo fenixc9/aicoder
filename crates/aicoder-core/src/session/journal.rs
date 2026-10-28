@@ -79,6 +79,33 @@ impl RunJournal for SessionJournal<'_> {
         state.saved.insert(index, entry_id);
         Ok(())
     }
+    async fn input(&self, index: usize, input: &crate::RunInput) -> Result<()> {
+        let mut state = self.state.lock().expect("session journal poisoned");
+        ensure!(
+            !state.saved.contains_key(&index),
+            "control input position already saved"
+        );
+        self.write(
+            &mut state,
+            vec![
+                SessionEntryData::Extension {
+                    namespace: "aicoder.run.input".into(),
+                    data: serde_json::json!({"run_id":input.run_id,"id":input.id,"kind":input.kind}),
+                },
+                SessionEntryData::Message {
+                    message: input.message.clone(),
+                },
+            ],
+        )?;
+        let entry_id = state
+            .session
+            .metadata()
+            .leaf_id
+            .clone()
+            .expect("control input checkpoint");
+        state.saved.insert(index, entry_id);
+        Ok(())
+    }
     async fn finish(&self, outcome: &RunOutcome) -> Result<()> {
         let mut state = self.state.lock().expect("session journal poisoned");
         let progress = outcome.progress();

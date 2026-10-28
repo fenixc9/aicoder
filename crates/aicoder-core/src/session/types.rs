@@ -59,6 +59,8 @@ pub enum SessionEntryData {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnRecord {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_inputs: Vec<crate::RunInput>,
     pub stop: Option<RunStop>,
     pub partial_response: Option<PartialModelResponse>,
     /// Absent when a process disappeared before it could record final accounting.
@@ -76,6 +78,7 @@ pub struct TurnStatistics {
 impl TurnRecord {
     pub fn from_progress(progress: &RunProgress, stop: Option<RunStop>) -> Self {
         Self {
+            pending_inputs: progress.pending_inputs.clone(),
             stop,
             partial_response: progress.partial_response.clone(),
             statistics: Some(TurnStatistics {
@@ -90,6 +93,7 @@ impl TurnRecord {
     }
     pub fn recovered() -> Self {
         Self {
+            pending_inputs: Vec::new(),
             stop: Some(RunStop::Cancelled {
                 reason: "Previous process ended without recording a terminal outcome".into(),
             }),

@@ -88,6 +88,12 @@ pub enum ToolExecutionOutcome {
 
 #[derive(Debug, Clone)]
 pub enum AgentRawEvent {
+    RunApprovalRequested {
+        request: Arc<crate::PendingRunApproval>,
+    },
+    RunInputApplied {
+        input: Arc<crate::RunInput>,
+    },
     AgentStarted {
         model: Arc<str>,
     },

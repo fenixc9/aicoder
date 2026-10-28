@@ -142,6 +142,48 @@ impl Agent {
             None,
         )
     }
+    pub async fn run_controlled(
+        &self,
+        prompt: impl Into<String>,
+        handler: Arc<dyn AgentEventHandler>,
+        control: crate::RunControl,
+    ) -> AgentTurnOutcome {
+        self.run_outcome(prompt, handler, control.context.clone())
+            .await
+    }
+    pub async fn run_with_session_controlled(
+        &self,
+        repository: &dyn SessionRepository,
+        selection: SessionSelection,
+        prompt: impl Into<String>,
+        handler: Arc<dyn AgentEventHandler>,
+        control: crate::RunControl,
+    ) -> AgentTurnOutcome {
+        control.shared.start();
+        let mut outcome = self
+            .run_with_session_outcome(
+                repository,
+                selection,
+                prompt,
+                handler,
+                control.context.clone(),
+            )
+            .await;
+        if control.shared.status() != crate::RunControlStatus::Finished {
+            let pending = control.shared.seal();
+            match &mut outcome {
+                AgentTurnOutcome::Completed(result) => {
+                    result.execution_result.progress.pending_inputs = pending
+                }
+                AgentTurnOutcome::Aborted(turn)
+                | AgentTurnOutcome::Limited(turn)
+                | AgentTurnOutcome::Stopped(turn)
+                | AgentTurnOutcome::Failed(turn) => turn.progress.pending_inputs = pending,
+            }
+            control.finish();
+        }
+        outcome
+    }
     pub async fn run_with_session(
         &self,
         repository: &dyn SessionRepository,
@@ -201,6 +243,9 @@ impl Agent {
                 RunProgress::new(initial),
                 Some(session.metadata().clone()),
             );
+        }
+        if let Some(control) = &context.control {
+            control.session(session.metadata().id.clone());
         }
         let lease = match repository.acquire_run(&mut session) {
             Ok(lease) => lease,

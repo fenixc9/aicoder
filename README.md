@@ -28,6 +28,8 @@ loop, tools, sessions and frontends. Structured [run outcomes and budgets](docs/
 limits, failures and cancellation. [Provider profiles](docs/provider-configuration.md) configure proxy, credentials,
 timeouts and compatible-service behavior. [Tree sessions and recovery](docs/sessions.md)
 cover branches, durable tool checkpoints, interrupted turns and backed-up v1/v2 migration.
+[RunHandle controls](docs/run-control.md) add bounded steer/follow-up queues and scoped
+asynchronous approvals over the same execution loop.
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs
 request construction or session persistence. Both layers consume the single
@@ -65,7 +67,8 @@ Pass `--session <ID>` to open an existing session for the selected workspace.
 
 Use `Tab` to switch between the session list and input, `Enter` to send or open
 a session, and `j`/`k` to navigate sessions. `n` creates a new conversation and
-`d` deletes the selected session after confirmation. During a run, `Esc`
+`d` deletes the selected session after confirmation. During a run, Enter submits
+steering and Alt+Enter queues a follow-up. `Esc`
 cancels the active model request, approval, or tool execution. Approval dialogs
 accept `y` or `n`; `Ctrl-C` cancels an active turn or exits while idle. TUI logs
 are written to `$AICODER_HOME/tui.log` or `~/.aicoder/tui.log`.

@@ -144,13 +144,15 @@ Web 目标是可接入且有可运行示例，不在此路线图中建设完整�
 ### S2：会话、控制与事件契约
 
 会话树、v3 迁移、独占运行与中断恢复已落地；见 [会话契约](sessions.md)。
-S2 尚未整体完成，下面的运行控制和事件项继续推进。[本次验收](s2-sessions-acceptance.md)
-记录了 202 个测试和轻量指标。
+RunHandle 的有界输入、steer/follow-up 和异步审批已接入核心与 TUI；见 [运行控制](run-control.md)。
+S2 尚未整体完成，下面的事件项继续推进。[会话验收](s2-sessions-acceptance.md)
+保留了前一增量的 202 个测试与轻量指标；[运行控制验收](s2-controls-acceptance.md)
+记录了当前 219 个测试和性能采样。
 
 - [x] 将会话扩展为追加式树：entry ID、parent ID、当前叶节点、模型/压缩/扩展记录。
 - [x] 定义版本、原子写入、并发冲突、崩溃恢复及旧 JSONL 的迁移和备份路径。
 - [x] 将中断前已完成的交互持久化；不把未配对的工具调用直接发回模型。
-- [ ] 引入 RunHandle，支持 cancel、steer、follow-up 和异步审批响应。
+- [x] 引入 RunHandle，支持 cancel、steer、follow-up 和异步审批响应。
   在安全执行点投递 steer；正在执行的变更工具不被强行回滚。
 - [ ] 定义事件 schema、序号、session/run/round 标识、生命周期和终止事件。
 - [ ] 定义背压与断连：消费者慢时限制缓冲，重要记录不能静默丢弃；

@@ -13,9 +13,10 @@ pub use handler::{
     ContextCompactionCompletedEvent, ContextCompactionFailedEvent, ContextCompactionStartedEvent,
     ModelRequestStartedEvent, ModelResponseCompletedEvent, ModelResponseFailedEvent,
     ModelResponseStartedEvent, ModelRetryScheduledEvent, ReasoningChunkEvent, ReasoningEndedEvent,
-    ReasoningStartedEvent, RoundCompletedEvent, RoundStartedEvent, ToolApprovalRequestedEvent,
-    ToolApprovalResolvedEvent, ToolCallChunkEvent, ToolCallEndedEvent, ToolCallStartedEvent,
-    ToolExecutionEndedEvent, ToolExecutionStartedEvent, UsageUpdatedEvent,
+    ReasoningStartedEvent, RoundCompletedEvent, RoundStartedEvent, RunApprovalRequestedEvent,
+    RunInputAppliedEvent, ToolApprovalRequestedEvent, ToolApprovalResolvedEvent,
+    ToolCallChunkEvent, ToolCallEndedEvent, ToolCallStartedEvent, ToolExecutionEndedEvent,
+    ToolExecutionStartedEvent, UsageUpdatedEvent,
 };
 pub(crate) use model::RunModelEventSink;
 pub use types::{

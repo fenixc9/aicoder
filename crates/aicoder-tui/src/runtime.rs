@@ -3,14 +3,11 @@ use std::{path::PathBuf, sync::Arc};
 
 use aicoder_core::{
     Agent, AgentConfig, AgentEventHandler, AgentRawEventEnvelope, ContextWindowConfig,
-    PruningContextCompactor, SessionSelection, TurnExecutionConfig, TurnExecutionContext,
-    TurnExecutor,
+    PruningContextCompactor, RunControl, SessionSelection, TurnExecutionConfig, TurnExecutor,
     session::{JsonlSessionRepository, Session, SessionInfo, SessionRepository},
-    tools::{ApprovalHandler, ToolInvocation},
 };
 use anyhow::{Result, ensure};
-use async_trait::async_trait;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use crate::app::AppEvent;
 
@@ -27,30 +24,6 @@ impl EventForwarder {
 impl AgentEventHandler for EventForwarder {
     fn on_raw_event(&self, event: &AgentRawEventEnvelope) {
         let _ = self.sender.send(AppEvent::Agent(event.clone()));
-    }
-}
-
-pub struct TuiApproval {
-    sender: mpsc::UnboundedSender<AppEvent>,
-}
-
-impl TuiApproval {
-    pub fn new(sender: mpsc::UnboundedSender<AppEvent>) -> Self {
-        Self { sender }
-    }
-}
-
-#[async_trait]
-impl ApprovalHandler for TuiApproval {
-    async fn approve(&self, invocation: &ToolInvocation) -> Result<bool> {
-        let (respond_to, response) = oneshot::channel();
-        self.sender
-            .send(AppEvent::Approval {
-                invocation: invocation.clone(),
-                respond_to,
-            })
-            .map_err(|_| anyhow::anyhow!("TUI event loop closed during tool approval"))?;
-        Ok(response.await.unwrap_or(false))
     }
 }
 
@@ -73,8 +46,7 @@ impl AgentRuntime {
         let model = client.model().to_string();
         let mut builder = TurnExecutor::builder(client)
             .workspace(&workspace)
-            .config(TurnExecutionConfig::default())
-            .approval(TuiApproval::new(sender.clone()));
+            .config(TurnExecutionConfig::default());
         if let Some(max_context_tokens) = context_window {
             builder =
                 builder.context_compactor(PruningContextCompactor::new(ContextWindowConfig {
@@ -122,19 +94,20 @@ impl AgentRuntime {
         self.repository.delete(id)
     }
 
-    pub fn start_turn(
-        &self,
-        selection: SessionSelection,
-        prompt: String,
-        context: TurnExecutionContext,
-    ) {
+    pub fn start_turn(&self, selection: SessionSelection, prompt: String, control: RunControl) {
         let agent = Arc::clone(&self.agent);
         let repository = Arc::clone(&self.repository);
         let sender = self.sender.clone();
         let handler = Arc::new(EventForwarder::new(sender.clone()));
         tokio::spawn(async move {
             let outcome = agent
-                .run_with_session_outcome(repository.as_ref(), selection, prompt, handler, context)
+                .run_with_session_controlled(
+                    repository.as_ref(),
+                    selection,
+                    prompt,
+                    handler,
+                    control,
+                )
                 .await;
             let _ = sender.send(AppEvent::TurnFinished(Box::new(outcome)));
         });

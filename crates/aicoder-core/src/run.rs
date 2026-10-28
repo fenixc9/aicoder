@@ -181,6 +181,8 @@ impl PartialModelResponse {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunProgress {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_inputs: Vec<crate::RunInput>,
     pub messages: Vec<Message>,
     pub input_messages: usize,
     pub usage: ModelUsage,
@@ -197,6 +199,7 @@ pub struct RunProgress {
 impl RunProgress {
     pub fn new(messages: Vec<Message>) -> Self {
         Self {
+            pending_inputs: Vec::new(),
             input_messages: messages.len(),
             messages,
             usage: ModelUsage::zero(),

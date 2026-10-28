@@ -7,6 +7,7 @@ pub mod agent;
 pub mod cancellation;
 pub mod completion;
 pub mod context;
+pub mod control;
 pub mod events;
 pub mod journal;
 pub mod model;
@@ -45,3 +46,8 @@ pub use run::{
 };
 
 pub use journal::RunJournal;
+
+pub use control::{
+    ApprovalRequestId, PendingRunApproval, RejectedRunInput, RunControl, RunControlConfig,
+    RunControlError, RunControlSnapshot, RunControlStatus, RunHandle, RunInput, RunInputKind,
+};

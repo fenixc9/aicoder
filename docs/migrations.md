@@ -167,3 +167,17 @@ v1/v2 open stays unchanged; explicit `migrate` or first mutation preserves exact
 `.v1.bak` / `.v2.bak` originals before atomic replacement. Stop older clients first.
 The [session guide](sessions.md) documents rollback, corruption and uncertain tool
 outcomes, along with new CLI branch/inspection/migration commands.
+
+## S2: RunHandle controls
+
+New controlled methods consume a unique `RunControl`; the host keeps a cloneable
+`RunHandle`. Existing context-only methods remain available. TUI uses core-scoped
+approval IDs and accepts steering/follow-up while running. See [run control](run-control.md)
+for lifecycle, bounds, safe points and pending-input recovery.
+
+`RunProgress` and `TurnRecord` add `pending_inputs` (serde default/omitted when empty).
+External struct literals need the field; older serialized outcomes/v3 records remain
+readable. `RunJournal::input` has a default checkpoint implementation; override it to
+retain input provenance in a custom journal. Raw event matches must handle the new
+`RunInputApplied` and `RunApprovalRequested` variants; typed callback defaults are no-ops.
+The underlying event queue is not yet bounded/versioned; that remains the next S2 item.

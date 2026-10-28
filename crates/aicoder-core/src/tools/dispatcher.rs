@@ -152,14 +152,38 @@ impl ToolDispatcher {
             Option<DispatchJournal<'_>>,
         )>,
     ) -> Result<Message> {
-        let result = self
-            .execute_call(
+        let result = if context.is_some_and(|context| {
+            context
+                .control
+                .as_ref()
+                .is_some_and(|control| control.has_steering())
+        }) {
+            emit_event(
+                events,
+                AgentRawEvent::ToolExecutionStarted {
+                    call_id: call.id.clone().into(),
+                    name: call.name.clone().into(),
+                    arguments: call.arguments.to_string().into(),
+                },
+            );
+            Ok(failed_tool_message(
+                events,
+                call,
+                control.map(|(limits, _, _)| limits.as_ref()),
+                ToolFailure::new(
+                    "steered_before_execution",
+                    "Tool was not executed because steering input is waiting",
+                ),
+            ))
+        } else {
+            self.execute_call(
                 call,
                 events,
                 context,
                 control.map(|(limits, _, _)| limits.as_ref()),
             )
-            .await;
+            .await
+        };
         if let (Some((_, capture, journal)), Ok(message)) = (control, &result) {
             capture.0.lock().expect("tool progress poisoned")[index] = Some(message.clone());
             if let Some(journal) = journal
@@ -286,11 +310,21 @@ impl ToolDispatcher {
                     capability: invocation.capability,
                 },
             );
-            let approval = self.approval.approve(&invocation);
+            let approval = async {
+                if let Some(control) = context
+                    .and_then(|context| context.control.as_ref())
+                    .filter(|control| control.handle_approvals())
+                {
+                    control.approve(&invocation, events).await
+                } else {
+                    self.approval.approve(&invocation).await
+                }
+            };
             let approval = match context {
                 Some(context) => tokio::select! {
                     biased;
                     cancelled = context.cancelled() => Err(anyhow::Error::from(cancelled)),
+                    _=async {match &context.control {Some(control)=>control.steering_requested().await,None=>std::future::pending().await}}=>Err(crate::control::SteeringRequested.into()),
                     approval = approval => approval,
                 },
                 None => approval.await,
@@ -316,6 +350,28 @@ impl ToolDispatcher {
                         call,
                         limits,
                         ToolFailure::new("approval_denied", "User denied tool execution"),
+                    ));
+                }
+                Err(error)
+                    if error
+                        .downcast_ref::<crate::control::SteeringRequested>()
+                        .is_some() =>
+                {
+                    emit_event(
+                        events,
+                        AgentRawEvent::ToolApprovalResolved {
+                            call_id: invocation.call_id.clone().into(),
+                            approved: false,
+                        },
+                    );
+                    return Ok(failed_tool_message(
+                        events,
+                        call,
+                        limits,
+                        ToolFailure::new(
+                            "steered_before_execution",
+                            "Approval was superseded by steering; tool was not executed",
+                        ),
                     ));
                 }
                 Err(error) if error.downcast_ref::<TurnCancelled>().is_some() => {
@@ -352,6 +408,23 @@ impl ToolDispatcher {
                     ));
                 }
             }
+        }
+
+        if context.is_some_and(|context| {
+            context
+                .control
+                .as_ref()
+                .is_some_and(|control| control.has_steering())
+        }) {
+            return Ok(failed_tool_message(
+                events,
+                call,
+                limits,
+                ToolFailure::new(
+                    "steered_before_execution",
+                    "Tool was superseded by steering before execution",
+                ),
+            ));
         }
 
         tracing::debug!(

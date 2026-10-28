@@ -45,6 +45,9 @@ The underlying cancellation, budget or failure type remains available in the
 error chain. Move result data from `result.progress`; borrowing fields such as
 `result.messages` also works through `Deref`.
 
+`RunProgress.pending_inputs` retains unconsumed control messages on interruption;
+[RunHandle](run-control.md) defines their queue, application and persistence boundaries.
+
 `Agent` adds session identity. Its structured outcomes distinguish `Completed`,
 `Aborted`, `Limited`, `Stopped` and `Failed`; `progress()` returns the same core
 progress for all variants. A session persistence failure retains completed

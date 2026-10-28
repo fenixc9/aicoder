@@ -10,8 +10,9 @@ use tokio_util::sync::CancellationToken;
 
 const DEFAULT_REASON: &str = "Turn execution was cancelled";
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TurnExecutionContext {
+    pub(crate) control: Option<Arc<crate::control::ControlState>>,
     token: CancellationToken,
     reason: Arc<Mutex<Option<Arc<str>>>>,
     parent: Option<Arc<TurnExecutionContext>>,
@@ -20,6 +21,7 @@ pub struct TurnExecutionContext {
 impl TurnExecutionContext {
     pub fn new() -> Self {
         Self {
+            control: None,
             token: CancellationToken::new(),
             reason: Arc::new(Mutex::new(None)),
             parent: None,
@@ -57,6 +59,7 @@ impl TurnExecutionContext {
     /// Parent cancellation propagates down; stopping a child does not cancel its caller.
     pub fn child(&self) -> Self {
         Self {
+            control: self.control.clone(),
             token: self.token.child_token(),
             reason: Arc::new(Mutex::new(None)),
             parent: Some(Arc::new(self.clone())),
@@ -104,6 +107,15 @@ impl fmt::Display for TurnCancelled {
 }
 
 impl Error for TurnCancelled {}
+
+impl fmt::Debug for TurnExecutionContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TurnExecutionContext")
+            .field("cancelled", &self.is_cancelled())
+            .field("controlled", &self.control.is_some())
+            .finish_non_exhaustive()
+    }
+}
 
 #[cfg(test)]
 mod tests {

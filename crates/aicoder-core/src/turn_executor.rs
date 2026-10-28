@@ -129,6 +129,26 @@ impl TurnExecutor {
     ) -> RunOutcome {
         self.run_with_journal(request, handler, context, &()).await
     }
+    /// Consume the unique execution side while the cloneable handle remains with the host.
+    pub async fn run_controlled(
+        &self,
+        request: ModelRequest,
+        handler: Arc<dyn AgentEventHandler>,
+        control: crate::RunControl,
+    ) -> RunOutcome {
+        self.run_with_journal(request, handler, control.context.clone(), &())
+            .await
+    }
+    pub async fn run_controlled_with_journal(
+        &self,
+        request: ModelRequest,
+        handler: Arc<dyn AgentEventHandler>,
+        control: crate::RunControl,
+        journal: &dyn crate::RunJournal,
+    ) -> RunOutcome {
+        self.run_with_journal(request, handler, control.context.clone(), journal)
+            .await
+    }
     pub fn model_spec(
         &self,
         model: &str,
@@ -145,7 +165,16 @@ impl TurnExecutor {
         let context = context.child();
         let limits = Arc::new(RunLimiter::new(self.config.budget.clone(), context.clone()));
         let mut progress = RunProgress::new(request.messages.clone());
-        let events = AgentEventEmitter::new(handler);
+        if let Some(control) = &context.control {
+            control.start();
+        }
+        let events = AgentEventEmitter::with_run_id(
+            handler,
+            context
+                .control
+                .as_ref()
+                .map_or_else(crate::RunId::new, |control| control.id()),
+        );
         events.emit(AgentRawEvent::AgentStarted {
             model: request.model.clone().into(),
         });
@@ -193,6 +222,9 @@ impl TurnExecutor {
             execution = Err(error);
         }
         limits.snapshot(&mut progress);
+        if let Some(control) = &context.control {
+            progress.pending_inputs = control.seal();
+        }
         let mut outcome = match execution {
             Ok((final_message, finish_reason)) => RunOutcome::Completed(TurnExecutionResult {
                 final_message,
@@ -224,6 +256,9 @@ impl TurnExecutor {
                     RunOutcome::Interrupted(turn)
                 }
             };
+        }
+        if let Some(control) = &context.control {
+            control.finish();
         }
         let progress = outcome.progress();
         let round = (progress.rounds > 0).then_some(progress.rounds);
@@ -305,6 +340,15 @@ impl TurnExecutor {
             let round_events = events.for_round(round);
             round_events.emit(AgentRawEvent::RoundStarted);
             transition_state(state, &round_events, AgentRunState::AwaitingModel { round })?;
+            apply_inputs(
+                &mut context_messages,
+                progress,
+                context,
+                journal,
+                InputBoundary::BeforeModel,
+                &round_events,
+            )
+            .await?;
             if let Some(compactor) = &self.context_compactor {
                 let input = ContextCompactionInput {
                     model: &request.model,
@@ -595,10 +639,41 @@ impl TurnExecutor {
                             outcome: crate::events::CompletionVerificationOutcome::Accepted,
                             feedback: None,
                         });
+                        limits.check()?;
+                        let more_input = context
+                            .control
+                            .as_ref()
+                            .is_some_and(|control| control.next(true, true).is_some());
+                        if more_input {
+                            checkpoint(
+                                journal,
+                                progress.messages.len() - 1,
+                                &assistant_message,
+                                context,
+                            )
+                            .await?;
+                        }
+                        if more_input
+                            && apply_inputs(
+                                &mut context_messages,
+                                progress,
+                                context,
+                                journal,
+                                InputBoundary::AfterCompletion {
+                                    round_limit: self.config.max_rounds,
+                                },
+                                &round_events,
+                            )
+                            .await?
+                        {
+                            round_events.emit(AgentRawEvent::RoundCompleted {
+                                outcome: RoundOutcome::FinalAnswer,
+                            });
+                            continue;
+                        }
                         round_events.emit(AgentRawEvent::RoundCompleted {
                             outcome: RoundOutcome::FinalAnswer,
                         });
-                        limits.check()?;
                         return Ok((assistant_message, finish_reason));
                     }
                     Ok(CompletionVerdict::Rejected { feedback }) => {
@@ -712,6 +787,60 @@ impl TurnExecutor {
         }
         .into())
     }
+}
+
+enum InputBoundary {
+    BeforeModel,
+    AfterCompletion { round_limit: usize },
+}
+async fn apply_inputs(
+    messages: &mut Vec<Message>,
+    progress: &mut RunProgress,
+    context: &TurnExecutionContext,
+    journal: &dyn crate::RunJournal,
+    boundary: InputBoundary,
+    events: &AgentEventEmitter,
+) -> Result<bool> {
+    let Some(control) = &context.control else {
+        return Ok(false);
+    };
+    let mut applied = false;
+    let follow_up = matches!(boundary, InputBoundary::AfterCompletion { .. });
+    for _ in 0..control.max_pending_inputs() {
+        if context.is_cancelled() {
+            return Err(context.error().into());
+        }
+        let Some(input) = control.next(follow_up && !applied, follow_up && !applied) else {
+            break;
+        };
+        if let InputBoundary::AfterCompletion { round_limit } = boundary
+            && progress.rounds >= round_limit
+        {
+            return Err(BudgetExceeded {
+                resource: BudgetResource::Rounds,
+                limit: round_limit as u64,
+                used: progress.rounds as u64,
+                requested: Some(1),
+            }
+            .into());
+        }
+        let index = progress.messages.len();
+        progress.messages.push(input.message.clone());
+        tokio::select! {
+            biased;
+            cancelled=context.cancelled()=>return Err(cancelled.into()),
+            result=journal.input(index,&input)=>{
+                result.map_err(|error|anyhow::Error::from(RunFailure::from_error(RunStage::Persistence,&error)))?;
+            }
+        }
+        control.applied(input.id);
+        messages.push(input.message.clone());
+        events.emit(AgentRawEvent::RunInputApplied {
+            input: Arc::new(input),
+        });
+        applied = true;
+    }
+    Ok(applied)
 }
 
 fn classify_stop(error: &anyhow::Error, limits: &RunLimiter, stage: RunStage) -> RunStop {
