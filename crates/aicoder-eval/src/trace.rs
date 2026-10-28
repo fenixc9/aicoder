@@ -10,7 +10,6 @@ use aicoder_core::events::{
     RoundOutcome, ToolExecutionOutcome,
 };
 use anyhow::{Context, Result};
-use serde::Serialize;
 
 use crate::TrajectorySummary;
 
@@ -103,74 +102,12 @@ impl AgentTrace {
         let events = self
             .events
             .iter()
-            .map(PortableTraceEvent::from)
+            .map(|record| &record.envelope)
             .collect::<Vec<_>>();
         let encoded = serde_json::to_string_pretty(&events)
             .context("Failed to encode evaluation event trace")?;
         fs::write(path, encoded)
             .with_context(|| format!("Failed to write event trace {}", path.display()))
-    }
-}
-
-#[derive(Serialize)]
-struct PortableTraceEvent {
-    elapsed_ms: u64,
-    run_id: String,
-    sequence: u64,
-    round: Option<usize>,
-    kind: &'static str,
-    event: String,
-}
-
-impl From<&TimedAgentEvent> for PortableTraceEvent {
-    fn from(recorded: &TimedAgentEvent) -> Self {
-        Self {
-            elapsed_ms: recorded.elapsed.as_millis().try_into().unwrap_or(u64::MAX),
-            run_id: recorded.envelope.run_id.to_string(),
-            sequence: recorded.envelope.sequence,
-            round: recorded.envelope.round,
-            kind: event_kind(&recorded.envelope.event),
-            event: format!("{:?}", recorded.envelope.event),
-        }
-    }
-}
-
-fn event_kind(event: &AgentRawEvent) -> &'static str {
-    match event {
-        AgentRawEvent::AgentStarted { .. } => "agent_started",
-        AgentRawEvent::AgentCompleted { .. } => "agent_completed",
-        AgentRawEvent::AgentFailed { .. } => "agent_failed",
-        AgentRawEvent::AgentAborted { .. } => "agent_aborted",
-        AgentRawEvent::AgentStopped { .. } => "agent_stopped",
-        AgentRawEvent::StateChanged { .. } => "state_changed",
-        AgentRawEvent::RoundStarted => "round_started",
-        AgentRawEvent::RoundCompleted { .. } => "round_completed",
-        AgentRawEvent::ModelRequestStarted => "model_request_started",
-        AgentRawEvent::ModelResponseStarted => "model_response_started",
-        AgentRawEvent::ModelRetryScheduled { .. } => "model_retry_scheduled",
-        AgentRawEvent::ModelResponseCompleted { .. } => "model_response_completed",
-        AgentRawEvent::ModelResponseFailed { .. } => "model_response_failed",
-        AgentRawEvent::CompletionVerificationStarted => "completion_verification_started",
-        AgentRawEvent::CompletionVerificationEnded { .. } => "completion_verification_ended",
-        AgentRawEvent::ContextCompactionStarted { .. } => "context_compaction_started",
-        AgentRawEvent::ContextCompactionCompleted { .. } => "context_compaction_completed",
-        AgentRawEvent::ContextCompactionFailed { .. } => "context_compaction_failed",
-        AgentRawEvent::ReasoningStarted { .. } => "reasoning_started",
-        AgentRawEvent::ReasoningChunk { .. } => "reasoning_chunk",
-        AgentRawEvent::ReasoningEnded { .. } => "reasoning_ended",
-        AgentRawEvent::ContentStarted { .. } => "content_started",
-        AgentRawEvent::ContentChunk { .. } => "content_chunk",
-        AgentRawEvent::ContentEnded { .. } => "content_ended",
-        AgentRawEvent::ToolCallStarted { .. } => "tool_call_started",
-        AgentRawEvent::ToolCallChunk { .. } => "tool_call_chunk",
-        AgentRawEvent::ToolCallEnded { .. } => "tool_call_ended",
-        AgentRawEvent::ToolApprovalRequested { .. } => "tool_approval_requested",
-        AgentRawEvent::ToolApprovalResolved { .. } => "tool_approval_resolved",
-        AgentRawEvent::ToolExecutionStarted { .. } => "tool_execution_started",
-        AgentRawEvent::ToolExecutionEnded { .. } => "tool_execution_ended",
-        AgentRawEvent::UsageUpdated { .. } => "usage_updated",
-        AgentRawEvent::RunInputApplied { .. } => "run_input_applied",
-        AgentRawEvent::RunApprovalRequested { .. } => "run_approval_requested",
     }
 }
 
@@ -227,6 +164,37 @@ mod tests {
     use aicoder_core::events::RunId;
 
     #[test]
+    fn exported_trace_contains_the_canonical_event_object_instead_of_debug_text() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("trace.json");
+        let trace = AgentTrace {
+            events: vec![TimedAgentEvent {
+                elapsed: Duration::ZERO,
+                envelope: AgentRawEventEnvelope::new(
+                    RunId::new(),
+                    1,
+                    None,
+                    AgentRawEvent::AgentStarted {
+                        model: "offline".into(),
+                    },
+                ),
+            }],
+        };
+        trace.write_json(&path).unwrap();
+        let records: Vec<AgentRawEventEnvelope> =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(records.len(), 1);
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(
+            value[0]["schema_version"],
+            aicoder_core::events::EVENT_SCHEMA_VERSION
+        );
+        assert_eq!(value[0]["event"]["type"], "agent_started");
+        assert!(value[0]["event"].is_object());
+    }
+
+    #[test]
     fn summary_counts_context_compaction_activity() {
         let run_id = RunId::new();
         let trace = AgentTrace {
@@ -234,6 +202,11 @@ mod tests {
                 TimedAgentEvent {
                     elapsed: Duration::ZERO,
                     envelope: AgentRawEventEnvelope {
+                        schema_version: aicoder_core::events::EVENT_SCHEMA_VERSION,
+                        session_id: None,
+                        turn_id: None,
+                        elapsed_ms: 0,
+                        termination: None,
                         run_id,
                         sequence: 1,
                         round: Some(1),
@@ -248,6 +221,11 @@ mod tests {
                 TimedAgentEvent {
                     elapsed: Duration::ZERO,
                     envelope: AgentRawEventEnvelope {
+                        schema_version: aicoder_core::events::EVENT_SCHEMA_VERSION,
+                        session_id: None,
+                        turn_id: None,
+                        elapsed_ms: 0,
+                        termination: None,
                         run_id,
                         sequence: 2,
                         round: Some(2),

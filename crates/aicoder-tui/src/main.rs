@@ -22,7 +22,6 @@ use crossterm::{
 use futures::StreamExt;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use runtime::AgentRuntime;
-use tokio::sync::mpsc;
 
 #[derive(Debug, Parser)]
 #[command(name = "aicoder-tui", about = "Interactive terminal UI for aicoder")]
@@ -72,14 +71,7 @@ async fn main() -> Result<()> {
         .with_context(|| format!("Failed to resolve workspace {}", cli.workspace.display()))?;
     let client = aicoder_providers::ChatClient::from_env_model(cli.model.as_deref())?;
     let model = client.model().to_string();
-    let (sender, receiver) = mpsc::unbounded_channel();
-    let runtime = AgentRuntime::new(
-        workspace,
-        session_root()?,
-        client,
-        cli.context_window,
-        sender,
-    )?;
+    let runtime = AgentRuntime::new(workspace, session_root()?, client, cli.context_window)?;
     let mut app = App::new(runtime.sessions()?);
     if let Some(session_id) = cli.session {
         let session = runtime.open_session(&session_id)?;
@@ -95,14 +87,13 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("Failed to initialize terminal")?;
     terminal.clear()?;
-    run(&mut terminal, app, runtime, receiver, &model).await
+    run(&mut terminal, app, runtime, &model).await
 }
 
 async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     mut app: App,
     runtime: AgentRuntime,
-    mut receiver: mpsc::UnboundedReceiver<AppEvent>,
     model: &str,
 ) -> Result<()> {
     let mut terminal_events = EventStream::new();
@@ -112,29 +103,36 @@ async fn run(
         if app.should_quit {
             break;
         }
-        tokio::select! {
-            _ = tick.tick() => {}
-            Some(event) = receiver.recv() => {
-                let finished = matches!(event, AppEvent::TurnFinished(_));
+        enum Action {
+            Tick,
+            Agent(AppEvent),
+            Terminal(Option<io::Result<Event>>),
+        }
+        let action = tokio::select! {
+            _=tick.tick()=>Action::Tick,
+            event=async {match &mut app.run {Some(run)=>run.recv().await,None=>std::future::pending().await}}=>Action::Agent(event),
+            event=terminal_events.next()=>Action::Terminal(event),
+        };
+        match action {
+            Action::Tick => {}
+            Action::Agent(event) => {
+                let finished = matches!(event, AppEvent::TurnFinished(_) | AppEvent::RunDropped);
                 app.apply(event);
                 if finished {
                     app.sessions = runtime.sessions().unwrap_or_else(|error| {
-                        tracing::error!(error = %format!("{error:#}"), "Failed to refresh sessions");
+                        tracing::error!(error=%format!("{error:#}"),"Failed to refresh sessions");
                         Vec::new()
                     });
                 }
             }
-            event = terminal_events.next() => {
-                match event {
-                    Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                        handle_key(&mut app, &runtime, key)?;
-                    }
-                    Some(Ok(Event::Resize(_, _))) => {}
-                    Some(Ok(_)) => {}
-                    Some(Err(error)) => return Err(error).context("Failed to read terminal event"),
-                    None => break,
+            Action::Terminal(event) => match event {
+                Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
+                    handle_key(&mut app, &runtime, key)?
                 }
-            }
+                Some(Ok(_)) => {}
+                Some(Err(error)) => return Err(error).context("Failed to read terminal event"),
+                None => break,
+            },
         }
     }
     if app.is_running() {
@@ -261,9 +259,17 @@ fn handle_input_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) {
                 },
             )
             .expect("default TUI run controls");
-            runtime.start_turn(selection, prompt.clone(), control);
-            app.begin_turn(prompt, context);
-            app.active_handle = Some(handle);
+            match runtime.start_turn(selection, prompt.clone(), control) {
+                Ok(run) => {
+                    app.begin_turn(prompt, context);
+                    app.active_handle = Some(handle);
+                    app.run = Some(run);
+                }
+                Err(error) => {
+                    app.input.replace(prompt);
+                    app.timeline.push(TimelineItem::Error(error.to_string()));
+                }
+            }
         }
         KeyCode::Char(character)
             if !key.modifiers.contains(KeyModifiers::CONTROL)

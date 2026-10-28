@@ -17,6 +17,8 @@ use crate::commands::{self, CommandSpec};
 pub enum AppEvent {
     Agent(AgentRawEventEnvelope),
     TurnFinished(Box<AgentTurnOutcome>),
+    ObservationFailed(String),
+    RunDropped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,6 +134,8 @@ impl InputBuffer {
 }
 
 pub struct App {
+    pub run: Option<crate::runtime::ActiveRun>,
+    observation_incomplete: bool,
     pub sessions: Vec<SessionInfo>,
     pub selected_session: usize,
     pub session_selection: SessionSelection,
@@ -157,6 +161,8 @@ pub struct App {
 impl App {
     pub fn new(sessions: Vec<SessionInfo>) -> Self {
         Self {
+            run: None,
+            observation_incomplete: false,
             sessions,
             selected_session: 0,
             session_selection: SessionSelection::New,
@@ -239,6 +245,7 @@ impl App {
     }
 
     pub fn begin_turn(&mut self, prompt: String, context: TurnExecutionContext) {
+        self.observation_incomplete = false;
         self.timeline.push(TimelineItem::User(prompt));
         self.active_context = Some(context);
         self.started_at = Some(Instant::now());
@@ -296,6 +303,25 @@ impl App {
         match event {
             AppEvent::Agent(envelope) => self.apply_agent_event(envelope),
             AppEvent::TurnFinished(outcome) => self.finish_turn(*outcome),
+            AppEvent::ObservationFailed(error) => {
+                self.observation_incomplete = true;
+                self.timeline.push(TimelineItem::Notice(format!("Live observation ended: {error}. The run continues; its result will restore the transcript.")));
+            }
+            AppEvent::RunDropped => {
+                if let Some(handle) = &self.active_handle
+                    && let Some(id) = handle.snapshot().session_id
+                {
+                    self.session_selection = SessionSelection::Existing(id);
+                }
+                self.timeline.push(TimelineItem::Error("Run task ended without a result. Reopen the session to inspect recorded progress.".into()));
+                self.state = AgentRunState::Failed {
+                    round: (self.round > 0).then_some(self.round),
+                };
+                self.active_context = None;
+                self.active_handle = None;
+                self.approval = None;
+                self.run = None;
+            }
         }
     }
 
@@ -406,6 +432,32 @@ impl App {
     }
 
     fn finish_turn(&mut self, outcome: AgentTurnOutcome) {
+        if self.observation_incomplete {
+            self.timeline.clear();
+            self.tool_indexes.clear();
+            for message in &outcome.progress().messages {
+                push_message(&mut self.timeline, message);
+            }
+            if let Some(partial) = &outcome.progress().partial_response {
+                if !partial.reasoning.is_empty() {
+                    self.timeline.push(TimelineItem::Reasoning {
+                        text: partial.reasoning.clone(),
+                        open: false,
+                    });
+                }
+                if !partial.text.is_empty() {
+                    self.timeline.push(TimelineItem::Assistant {
+                        text: format!("[Partial response] {}", partial.text),
+                        open: false,
+                    });
+                }
+            }
+            self.timeline.push(TimelineItem::Notice(
+                "Transcript restored from the authoritative run result.".into(),
+            ));
+            self.observation_incomplete = false;
+        }
+        self.run = None;
         match outcome {
             AgentTurnOutcome::Completed(result) => {
                 self.round = result.execution_result.rounds;
@@ -640,11 +692,52 @@ mod tests {
 
     fn event(sequence: u64, event: AgentRawEvent) -> AppEvent {
         AppEvent::Agent(AgentRawEventEnvelope {
+            schema_version: aicoder_core::events::EVENT_SCHEMA_VERSION,
+            session_id: None,
+            turn_id: None,
+            elapsed_ms: 0,
+            termination: None,
             run_id: RunId::new(),
             sequence,
             round: Some(1),
             event,
         })
+    }
+
+    #[test]
+    fn incomplete_live_timeline_is_rebuilt_from_the_run_result_without_erasing_the_draft() {
+        use aicoder_core::{AgentTurnResult, RunProgress, TurnExecutionResult};
+        let mut app = App::new(vec![]);
+        app.begin_turn("initial".into(), TurnExecutionContext::new());
+        app.input.replace("next draft".into());
+        app.timeline.push(TimelineItem::Assistant {
+            text: "incomplete".into(),
+            open: true,
+        });
+        app.apply(AppEvent::ObservationFailed("lagged".into()));
+        let mut progress = RunProgress::new(vec![
+            Message::text(MessageRole::User, "initial"),
+            Message::text(MessageRole::Assistant, "complete answer"),
+        ]);
+        progress.rounds = 1;
+        app.apply(AppEvent::TurnFinished(Box::new(
+            AgentTurnOutcome::Completed(AgentTurnResult {
+                execution_result: TurnExecutionResult {
+                    final_message: Message::text(MessageRole::Assistant, "complete answer"),
+                    finish_reason: Some(aicoder_core::model::StopReason::Complete),
+                    progress,
+                },
+                session: None,
+            }),
+        )));
+        assert_eq!(app.input.value(), "next draft");
+        assert!(!app.is_running());
+        assert!(app.timeline.iter().any(|item|matches!(item,TimelineItem::Assistant {text,open:false} if text=="complete answer")));
+        assert!(
+            !app.timeline
+                .iter()
+                .any(|item| matches!(item,TimelineItem::Assistant {text,..} if text=="incomplete"))
+        );
     }
 
     #[test]

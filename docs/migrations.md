@@ -180,4 +180,33 @@ External struct literals need the field; older serialized outcomes/v3 records re
 readable. `RunJournal::input` has a default checkpoint implementation; override it to
 retain input provenance in a custom journal. Raw event matches must handle the new
 `RunInputApplied` and `RunApprovalRequested` variants; typed callback defaults are no-ops.
-The underlying event queue is not yet bounded/versioned; that remains the next S2 item.
+Versioned bounded observation is now implemented; see [events](events.md).
+
+## S2: canonical events and bounded observation
+
+`AgentRawEventEnvelope` gains schema/version, producer time, optional session/turn and
+terminal summary metadata. It serializes as protocol v1; `event` is a tagged object.
+Use `AgentRawEventEnvelope::new` for external fixtures and fill required lifecycle
+metadata when producing a complete trace. EventMeta and typed metadata events are now
+Clone rather than Copy. Raw exhaustive matches gain SessionBound and
+RoundOutcome::Stopped. `TurnExecutionConfig` gains `events: EventDeliveryConfig`;
+use defaults in struct literals or configure callback count/bytes and drain timeout.
+
+`RunProgress` adds `event_delivery` with a serde default; external literals must
+supply it. Callback queues are now bounded. Slow/panicking/timed-out callbacks are
+detached and reported there, preserving primary execution results.
+`RunHandle`/`RunControl` expose bounded EventSubscriptions; overflow produces an explicit
+error and a contiguous prefix. Dropping observation does not cancel execution. Callback
+shutdown has a real-time bound and cannot forcibly preempt an in-flight synchronous
+function. See [the complete lifecycle and limits](events.md).
+
+`serde` gains its Arc/Rc feature and UUID gains serde support; no new Rust packages or
+runtime services are introduced. The JSON Schema checker uses a separate development-only
+Python requirement in CI and is not an agent/runtime dependency.
+
+Evaluation trace JSON now contains canonical structured envelopes, replacing Debug
+strings. Historical traces without schema version are not protocol v1. SWE-bench batch
+reports move to schema 3 and include event_schema_version; checkpoints missing or
+mismatching that value regenerate cases. v3 session file syntax stays unchanged.
+Session terminal records retain their existing stats rather than claiming final
+observer acknowledgements that can occur only after terminal publication.

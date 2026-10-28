@@ -1,8 +1,10 @@
 //! Explicit lifecycle state for one agent run.
 
+use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
 pub enum AgentRunState {
     Idle,
     Preparing,
@@ -73,13 +75,13 @@ impl AgentRunState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentStateTransition {
     pub previous: AgentRunState,
     pub current: AgentRunState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InvalidAgentStateTransition {
     pub previous: AgentRunState,
     pub requested: AgentRunState,

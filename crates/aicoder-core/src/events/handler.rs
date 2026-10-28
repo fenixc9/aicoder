@@ -12,8 +12,13 @@ use super::{
 };
 
 /// Metadata shared by every typed event.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AgentEventMeta {
+    pub schema_version: u32,
+    pub session_id: Option<Arc<str>>,
+    pub turn_id: Option<Arc<str>>,
+    pub elapsed_ms: u64,
+    pub termination: Option<Arc<super::RunTermination>>,
     pub run_id: RunId,
     pub sequence: u64,
     pub round: Option<usize>,
@@ -22,6 +27,11 @@ pub struct AgentEventMeta {
 impl From<&AgentRawEventEnvelope> for AgentEventMeta {
     fn from(envelope: &AgentRawEventEnvelope) -> Self {
         Self {
+            schema_version: envelope.schema_version,
+            session_id: envelope.session_id.clone(),
+            turn_id: envelope.turn_id.clone(),
+            elapsed_ms: envelope.elapsed_ms,
+            termination: envelope.termination.clone(),
             run_id: envelope.run_id,
             sequence: envelope.sequence,
             round: envelope.round,
@@ -31,7 +41,7 @@ impl From<&AgentRawEventEnvelope> for AgentEventMeta {
 
 macro_rules! meta_event {
     ($name:ident) => {
-        #[derive(Debug, Clone, Copy)]
+        #[derive(Debug, Clone)]
         pub struct $name {
             pub meta: AgentEventMeta,
         }
@@ -69,7 +79,7 @@ pub struct AgentStoppedEvent {
     pub stop: Arc<crate::RunStop>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AgentStateChangedEvent {
     pub meta: AgentEventMeta,
     pub transition: AgentStateTransition,
@@ -139,7 +149,7 @@ pub struct ContextCompactionFailedEvent {
     pub message: Arc<str>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ReasoningStartedEvent {
     pub meta: AgentEventMeta,
     pub response_index: i32,
@@ -159,7 +169,7 @@ pub struct ReasoningEndedEvent {
     pub outcome: StreamEnd,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ContentStartedEvent {
     pub meta: AgentEventMeta,
     pub response_index: i32,
@@ -179,7 +189,7 @@ pub struct ContentEndedEvent {
     pub outcome: StreamEnd,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ToolCallStartedEvent {
     pub meta: AgentEventMeta,
     pub key: ToolCallKey,
@@ -240,6 +250,12 @@ pub struct UsageUpdatedEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionBoundEvent {
+    pub meta: AgentEventMeta,
+    pub session_id: Arc<str>,
+    pub turn_id: Arc<str>,
+}
+#[derive(Debug, Clone)]
 pub struct RunApprovalRequestedEvent {
     pub meta: AgentEventMeta,
     pub request: Arc<crate::PendingRunApproval>,
@@ -257,6 +273,11 @@ pub struct RunInputAppliedEvent {
 /// presentation. Payloads are owned and backed by `Arc` where useful, so callbacks can retain or
 /// forward events without copying complete streaming chunks.
 pub trait AgentEventHandler: Send + Sync + 'static {
+    /// Explicit no-observation handler; avoids a callback worker and queue.
+    fn is_noop(&self) -> bool {
+        false
+    }
+    fn on_session_bound(&self, _event: SessionBoundEvent) {}
     fn on_raw_event(&self, _event: &AgentRawEventEnvelope) {}
 
     fn on_run_approval_requested(&self, _event: RunApprovalRequestedEvent) {}
@@ -301,7 +322,11 @@ pub trait AgentEventHandler: Send + Sync + 'static {
     fn on_usage_updated(&self, _event: UsageUpdatedEvent) {}
 }
 
-impl AgentEventHandler for () {}
+impl AgentEventHandler for () {
+    fn is_noop(&self) -> bool {
+        true
+    }
+}
 
 impl<F> AgentEventHandler for F
 where
@@ -362,6 +387,14 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
                 input: input.clone(),
             })
         }
+        AgentRawEvent::SessionBound {
+            session_id,
+            turn_id,
+        } => handler.on_session_bound(SessionBoundEvent {
+            meta,
+            session_id: session_id.clone(),
+            turn_id: turn_id.clone(),
+        }),
         AgentRawEvent::RoundStarted => {
             handler.on_round_started(RoundStartedEvent { meta });
         }
@@ -610,6 +643,11 @@ mod tests {
 
     fn envelope(sequence: u64, event: AgentRawEvent) -> AgentRawEventEnvelope {
         AgentRawEventEnvelope {
+            schema_version: crate::events::EVENT_SCHEMA_VERSION,
+            session_id: None,
+            turn_id: None,
+            elapsed_ms: 0,
+            termination: None,
             run_id: RunId::new(),
             sequence,
             round: Some(1),

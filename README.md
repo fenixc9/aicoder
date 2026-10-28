@@ -29,7 +29,9 @@ limits, failures and cancellation. [Provider profiles](docs/provider-configurati
 timeouts and compatible-service behavior. [Tree sessions and recovery](docs/sessions.md)
 cover branches, durable tool checkpoints, interrupted turns and backed-up v1/v2 migration.
 [RunHandle controls](docs/run-control.md) add bounded steer/follow-up queues and scoped
-asynchronous approvals over the same execution loop.
+asynchronous approvals over the same execution loop. [Versioned events](docs/events.md)
+provide bounded subscriptions, explicit overflow/disconnect reports, and structured
+bench traces. S0–S2 are complete; shared runtime/project context is next in S3.
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs
 request construction or session persistence. Both layers consume the single

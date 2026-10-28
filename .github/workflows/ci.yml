@@ -30,7 +30,24 @@ jobs:
         run: cargo run --locked -p aicoder-core --example model_provider
       - name: Embedded agent example
         run: cargo run --locked -p aicoder-core --example embedded_agent
+      - name: Controlled offline agent example
+        run: cargo run --locked -p aicoder-core --example controlled_agent
+      - name: Versioned event stream example
+        run: cargo run --locked -p aicoder-core --example event_stream
+      - name: Explicit subscription overflow example
+        run: cargo run --locked -p aicoder-core --example event_stream -- --overflow
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --workspace --no-deps
+
+  event-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install development schema checker
+        run: |
+          python3 -m venv "$RUNNER_TEMP/aicoder-schema"
+          "$RUNNER_TEMP/aicoder-schema/bin/python" -m pip install -r scripts/requirements-schema.txt
+      - name: Validate published event fixture
+        run: '"$RUNNER_TEMP/aicoder-schema/bin/python" scripts/check_event_schema.py'

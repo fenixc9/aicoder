@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::ToolCapability;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolInvocation {
     pub call_id: String,
     pub name: String,

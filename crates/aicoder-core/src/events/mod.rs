@@ -3,8 +3,11 @@
 mod emitter;
 mod handler;
 mod model;
+mod subscription;
+mod validation;
+pub use validation::EventTraceValidator;
 mod types;
-pub use emitter::AgentEventEmitter;
+pub use emitter::{AgentEventEmitter, EventDeliveryConfig};
 #[allow(unused_imports)]
 pub use handler::{
     AgentAbortedEvent, AgentCompletedEvent, AgentEventHandler, AgentEventMeta, AgentFailedEvent,
@@ -14,12 +17,17 @@ pub use handler::{
     ModelRequestStartedEvent, ModelResponseCompletedEvent, ModelResponseFailedEvent,
     ModelResponseStartedEvent, ModelRetryScheduledEvent, ReasoningChunkEvent, ReasoningEndedEvent,
     ReasoningStartedEvent, RoundCompletedEvent, RoundStartedEvent, RunApprovalRequestedEvent,
-    RunInputAppliedEvent, ToolApprovalRequestedEvent, ToolApprovalResolvedEvent,
+    RunInputAppliedEvent, SessionBoundEvent, ToolApprovalRequestedEvent, ToolApprovalResolvedEvent,
     ToolCallChunkEvent, ToolCallEndedEvent, ToolCallStartedEvent, ToolExecutionEndedEvent,
     ToolExecutionStartedEvent, UsageUpdatedEvent,
 };
 pub(crate) use model::RunModelEventSink;
+pub use subscription::{
+    EventBufferConfig, EventDeliveryReport, EventDeliveryStatus, EventSource, EventStreamError,
+    EventSubscription, MAX_EVENT_SUBSCRIPTIONS, ObserverDeliveryReport, SubscribeError,
+};
 pub use types::{
-    AgentRawEvent, AgentRawEventEnvelope, AgentStage, CompletionVerificationOutcome, RoundOutcome,
-    RunId, StreamEnd, ToolCallKey, ToolExecutionOutcome,
+    AgentRawEvent, AgentRawEventEnvelope, AgentStage, CompletionVerificationOutcome,
+    EVENT_SCHEMA_VERSION, PendingInputRef, RoundOutcome, RunId, RunTermination, StreamEnd,
+    ToolCallKey, ToolExecutionOutcome,
 };

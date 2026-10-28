@@ -5,7 +5,8 @@ use crate::model::ToolDefinition;
 
 use super::ToolContext;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolCapability {
     ReadOnly,
     Mutating,

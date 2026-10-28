@@ -123,9 +123,7 @@ run callbacks execute. Status `Dropped` means the execution owner was destroyed 
 may have no durable terminal record.
 
 The existing event envelope uses the handle's run ID. `RunInputApplied` and
-`RunApprovalRequested` have typed callbacks as well as raw events. Full event schema,
-versioning and bounded observation are the remaining S2 work; the old event transport
-and TUI event channel are still unbounded in this increment. `RunHandle::changed` is
+`RunApprovalRequested` have typed callbacks as well as raw events. [Versioned events and bounded observation](events.md) are implemented for core and TUI. `RunHandle::changed` is
 a control-state observation API, not a replay log or event delivery guarantee.
 
 `RunJournal::input` defaults to `checkpoint`. The bundled session journal overrides

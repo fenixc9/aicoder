@@ -188,7 +188,20 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
     assert_eq!(batch.summary.incomplete, 0);
     assert_eq!(batch.summary.failed, 0);
     assert!(output.join("predictions.json").is_file());
-    assert!(output.join("cases/owner__repo-1/trace.json").is_file());
+    let trace_path = output.join("cases/owner__repo-1/trace.json");
+    assert!(trace_path.is_file());
+    assert_eq!(batch.schema_version, 3);
+    assert_eq!(
+        batch.event_schema_version,
+        aicoder_core::events::EVENT_SCHEMA_VERSION
+    );
+    let frames: Vec<aicoder_core::AgentRawEventEnvelope> =
+        serde_json::from_slice(&fs::read(&trace_path).unwrap()).unwrap();
+    let mut validator = aicoder_core::events::EventTraceValidator::new();
+    for frame in frames {
+        validator.observe(&frame).unwrap();
+    }
+    validator.finish().unwrap();
 
     let resumed = SweBenchBatchRunner::new(
         adapter.clone(),
@@ -202,6 +215,32 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
     assert_eq!(resumed.summary.resumed, 1);
     assert!(resumed.cases[0].resumed);
     assert_eq!(resumed.cases[0].status, SweBenchBatchCaseStatus::Completed);
+
+    let checkpoint = output.join("cases/owner__repo-1/checkpoint.json");
+    let mut legacy: serde_json::Value =
+        serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
+    legacy
+        .as_object_mut()
+        .unwrap()
+        .remove("event_schema_version");
+    fs::write(&checkpoint, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    let regenerated = SweBenchBatchRunner::new(
+        adapter.clone(),
+        SweBenchBatchOptions::new(&output, "baseline-test").dataset("fixture"),
+    )
+    .run(
+        vec![adapter.adapt(&dataset.instances[0]).unwrap()],
+        |workspace| {
+            TurnExecutor::builder(PatchProvider::new())
+                .workspace(workspace)
+                .approval(AllowAllApproval)
+                .build()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(regenerated.summary.resumed, 0);
+    assert_eq!(regenerated.summary.completed, 1);
 
     let changed = SweBenchBatchRunner::new(
         adapter.clone(),

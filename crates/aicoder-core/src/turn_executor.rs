@@ -30,6 +30,7 @@ pub struct TurnExecutionConfig {
     pub max_rounds: usize,
     pub stream: bool,
     pub budget: RunBudget,
+    pub events: crate::events::EventDeliveryConfig,
 }
 
 impl Default for TurnExecutionConfig {
@@ -38,10 +39,15 @@ impl Default for TurnExecutionConfig {
             max_rounds: 8,
             stream: true,
             budget: RunBudget::default(),
+            events: crate::events::EventDeliveryConfig::default(),
         }
     }
 }
 
+pub(crate) struct RunScope {
+    pub(crate) events: AgentEventEmitter,
+    state: AgentRunStateMachine,
+}
 pub struct TurnExecutor {
     provider: Arc<dyn ModelProvider>,
     dispatcher: Arc<ToolDispatcher>,
@@ -162,24 +168,43 @@ impl TurnExecutor {
         context: TurnExecutionContext,
         journal: &dyn crate::RunJournal,
     ) -> RunOutcome {
-        let context = context.child();
-        let limits = Arc::new(RunLimiter::new(self.config.budget.clone(), context.clone()));
-        let mut progress = RunProgress::new(request.messages.clone());
+        let scope = self.start_scope(&request.model, handler, &context);
+        self.run_scoped(request, context, journal, scope).await
+    }
+    pub(crate) fn start_scope(
+        &self,
+        model: &str,
+        handler: Arc<dyn AgentEventHandler>,
+        context: &TurnExecutionContext,
+    ) -> RunScope {
         if let Some(control) = &context.control {
             control.start();
         }
-        let events = AgentEventEmitter::with_run_id(
-            handler,
-            context
-                .control
-                .as_ref()
-                .map_or_else(crate::RunId::new, |control| control.id()),
+        let source = context.control.as_ref().map_or_else(
+            || crate::events::EventSource::new(crate::RunId::new()),
+            |control| control.event_source(),
         );
+        let events = AgentEventEmitter::with_source(handler, source, self.config.events.clone());
         events.emit(AgentRawEvent::AgentStarted {
-            model: request.model.clone().into(),
+            model: model.into(),
         });
         let mut state = AgentRunStateMachine::new();
-        let mut execution = match transition_state(&mut state, &events, AgentRunState::Preparing) {
+        transition_state(&mut state, &events, AgentRunState::Preparing)
+            .expect("new run can prepare");
+        RunScope { events, state }
+    }
+    pub(crate) async fn run_scoped(
+        &self,
+        request: ModelRequest,
+        context: TurnExecutionContext,
+        journal: &dyn crate::RunJournal,
+        scope: RunScope,
+    ) -> RunOutcome {
+        let context = context.child();
+        let limits = Arc::new(RunLimiter::new(self.config.budget.clone(), context.clone()));
+        let mut progress = RunProgress::new(request.messages.clone());
+        let RunScope { events, mut state } = scope;
+        let mut execution = match self.config.events.validate() {
             Err(error) => Err(error),
             Ok(())
                 if limits
@@ -222,6 +247,7 @@ impl TurnExecutor {
             execution = Err(error);
         }
         limits.snapshot(&mut progress);
+        progress.event_delivery = events.delivery_report();
         if let Some(control) = &context.control {
             progress.pending_inputs = control.seal();
         }
@@ -257,9 +283,33 @@ impl TurnExecutor {
                 }
             };
         }
+        self.finish_scope(RunScope { events, state }, outcome, &context)
+            .await
+    }
+    pub(crate) async fn finish_preparation(
+        &self,
+        scope: RunScope,
+        mut outcome: RunOutcome,
+        context: &TurnExecutionContext,
+    ) -> RunOutcome {
+        let progress = outcome.progress_mut();
+        if let Some(control) = &context.control {
+            progress.pending_inputs = control.seal();
+        }
+        progress.event_delivery = scope.events.delivery_report();
+        self.finish_scope(scope, outcome, context).await
+    }
+    async fn finish_scope(
+        &self,
+        scope: RunScope,
+        mut outcome: RunOutcome,
+        context: &TurnExecutionContext,
+    ) -> RunOutcome {
+        let RunScope { events, mut state } = scope;
         if let Some(control) = &context.control {
             control.finish();
         }
+        events.close_round(&outcome);
         let progress = outcome.progress();
         let round = (progress.rounds > 0).then_some(progress.rounds);
         let terminal = match outcome.stop() {
@@ -281,6 +331,7 @@ impl TurnExecutor {
                 persistence_error: None,
             });
         }
+        events.set_termination(&outcome);
         match &outcome {
             RunOutcome::Completed(result) => events.emit(AgentRawEvent::AgentCompleted {
                 rounds: result.rounds,
@@ -302,7 +353,11 @@ impl TurnExecutor {
             },
         }
         context.cancel("run finished");
-        events.shutdown().await;
+        let delivery = events.shutdown().await;
+        match &mut outcome {
+            RunOutcome::Completed(result) => result.progress.event_delivery = delivery,
+            RunOutcome::Interrupted(turn) => turn.progress.event_delivery = delivery,
+        }
         outcome
     }
 
@@ -1041,6 +1096,7 @@ impl TurnExecutorBuilder {
     }
 
     pub fn build(self) -> Result<TurnExecutor> {
+        self.execution_config.events.validate()?;
         let registry = match self.registry {
             Some(registry) => registry,
             None => Arc::new(default_registry()?),

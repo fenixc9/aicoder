@@ -141,4 +141,4 @@ aicoder --session SESSION_ID --prompt 'continue from this branch'
 `session-tree --json` emits metadata and all entries for inspection/export without
 loading provider credentials. TUI opens the persisted selected branch; visual branch
 navigation remains future frontend work. [RunHandle controls](run-control.md) provide steer/follow-up and scoped approvals.
-Versioned events with bounded subscription behavior remain the next S2 increment.
+[Versioned events and bounded subscription behavior](events.md) complete S2.

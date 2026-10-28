@@ -181,6 +181,7 @@ async fn run(arguments: RunArgs) -> Result<()> {
                 .workspace(workspace)
                 .approval(AllowAllApproval)
                 .config(TurnExecutionConfig {
+                    events: Default::default(),
                     max_rounds,
                     stream,
                     budget: budget.clone(),

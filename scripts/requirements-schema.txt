@@ -1,0 +1,2 @@
+# Development/CI only. Not required by any Rust binary.
+jsonschema==4.19.2

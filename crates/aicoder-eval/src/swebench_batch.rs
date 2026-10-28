@@ -96,6 +96,8 @@ pub struct SweBenchBatchSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SweBenchBatchReport {
     pub schema_version: u32,
+    #[serde(default)]
+    pub event_schema_version: u32,
     pub run_id: String,
     pub dataset: String,
     pub model: String,
@@ -218,7 +220,8 @@ impl SweBenchBatchRunner {
         }
 
         let report = SweBenchBatchReport {
-            schema_version: 2,
+            schema_version: 3,
+            event_schema_version: aicoder_core::events::EVENT_SCHEMA_VERSION,
             run_id: self.options.run_id.clone(),
             dataset: self.options.dataset.clone(),
             model: self.adapter.model().to_string(),
@@ -247,6 +250,8 @@ struct CaseRunResult {
 struct CaseCheckpoint {
     #[serde(default)]
     model_contract_version: u32,
+    #[serde(default)]
+    event_schema_version: u32,
     run_id: String,
     dataset: String,
     model: String,
@@ -264,6 +269,7 @@ impl CaseCheckpoint {
         options: &SweBenchBatchOptions,
     ) -> bool {
         self.model_contract_version == 2
+            && self.event_schema_version == aicoder_core::events::EVENT_SCHEMA_VERSION
             && self.run_id == options.run_id
             && self.dataset == options.dataset
             && self.model == adapter.model()
@@ -324,6 +330,7 @@ where
         write_trace_atomic(&trace_path, &report)?;
         let checkpoint = CaseCheckpoint {
             model_contract_version: 2,
+            event_schema_version: aicoder_core::events::EVENT_SCHEMA_VERSION,
             run_id: options.run_id.clone(),
             dataset: options.dataset.clone(),
             model: adapter.model().to_string(),

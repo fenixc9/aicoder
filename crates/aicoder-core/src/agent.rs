@@ -220,45 +220,30 @@ impl Agent {
         handler: Arc<dyn AgentEventHandler>,
         context: TurnExecutionContext,
     ) -> AgentTurnOutcome {
+        let context = context.child();
+        let scope = self
+            .turn_executor
+            .start_scope(&self.config.model, handler, &context);
         let user = Message::text(MessageRole::User, prompt);
         let mut initial = self.system_messages();
         initial.push(user.clone());
-        if context.is_cancelled() {
-            return interrupted(
-                RunStop::Cancelled {
-                    reason: context.reason().to_string(),
-                },
-                RunProgress::new(initial),
-                None,
-            );
-        }
-        let workspace = self.turn_executor.workspace_root();
-        let mut session = match select_session(repository, workspace, selection) {
-            Ok(session) => session,
-            Err(error) => return failed(error, RunProgress::new(initial), None),
-        };
-        if let Err(error) = ensure_session_workspace(&session, workspace) {
-            return failed(
-                error,
-                RunProgress::new(initial),
-                Some(session.metadata().clone()),
-            );
-        }
-        if let Some(control) = &context.control {
-            control.session(session.metadata().id.clone());
-        }
-        let lease = match repository.acquire_run(&mut session) {
-            Ok(lease) => lease,
-            Err(error) => {
-                return failed(
-                    error,
-                    RunProgress::new(initial),
-                    Some(session.metadata().clone()),
-                );
+        let mut metadata = None;
+        let prepared = (|| -> Result<_> {
+            if context.is_cancelled() {
+                return Err(context.error().into());
             }
-        };
-        let turn_id = uuid::Uuid::new_v4().to_string();
-        let prepared = (|| -> Result<Vec<Message>> {
+            let workspace = self.turn_executor.workspace_root();
+            let mut session = select_session(repository, workspace, selection)?;
+            metadata = Some(session.metadata().clone());
+            ensure_session_workspace(&session, workspace)?;
+            if let Some(control) = &context.control {
+                control.session(session.metadata().id.clone());
+            }
+            let turn_id = uuid::Uuid::new_v4().to_string();
+            scope
+                .events
+                .bind_session(session.metadata().id.clone(), turn_id.clone());
+            let lease = repository.acquire_run(&mut session)?;
             let mut entries = Vec::new();
             if let Some(previous) = session.unfinished_turn() {
                 entries.push(SessionEntryData::TurnEnd {
@@ -284,27 +269,42 @@ impl Agent {
             let mut messages = self.system_messages();
             messages.extend(prior);
             messages.push(user);
-            Ok(messages)
+            Ok((
+                SessionJournal::new(repository, session, turn_id),
+                lease,
+                messages,
+            ))
         })();
-        let messages = match prepared {
-            Ok(messages) => messages,
+        let (journal, lease, messages) = match prepared {
+            Ok(prepared) => prepared,
             Err(error) => {
-                return failed(
-                    error,
-                    RunProgress::new(initial),
-                    Some(session.metadata().clone()),
-                );
+                let mut progress = RunProgress::new(initial);
+                let stop = if let Some(cancelled) = error.downcast_ref::<crate::TurnCancelled>() {
+                    RunStop::Cancelled {
+                        reason: cancelled.reason().into(),
+                    }
+                } else {
+                    progress.stage = RunStage::Persistence;
+                    RunStop::Failed(RunFailure::from_error(RunStage::Persistence, &error))
+                };
+                let outcome = self
+                    .turn_executor
+                    .finish_preparation(
+                        scope,
+                        RunOutcome::Interrupted(InterruptedTurn {
+                            stop,
+                            progress,
+                            persistence_error: None,
+                        }),
+                        &context,
+                    )
+                    .await;
+                return from_execution(outcome, metadata);
             }
         };
-        let journal = SessionJournal::new(repository, session, turn_id);
         let execution = self
             .turn_executor
-            .run_with_journal(
-                self.completion_request(messages),
-                handler,
-                context,
-                &journal,
-            )
+            .run_scoped(self.completion_request(messages), context, &journal, scope)
             .await;
         let metadata = journal.metadata();
         drop(lease);
@@ -362,18 +362,6 @@ fn interrupted(
         RunStop::Model(_) => AgentTurnOutcome::Stopped(turn),
         RunStop::Failed(_) => AgentTurnOutcome::Failed(turn),
     }
-}
-fn failed(
-    error: anyhow::Error,
-    mut progress: RunProgress,
-    session: Option<SessionMetadata>,
-) -> AgentTurnOutcome {
-    progress.stage = RunStage::Persistence;
-    interrupted(
-        RunStop::Failed(RunFailure::from_error(RunStage::Persistence, &error)),
-        progress,
-        session,
-    )
 }
 fn ensure_session_workspace(session: &Session, workspace: &std::path::Path) -> Result<()> {
     ensure!(

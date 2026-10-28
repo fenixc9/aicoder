@@ -87,7 +87,22 @@ impl EvalRunner {
             workspace_after: &after,
             workspace_diff: &workspace_diff,
         };
-        let evaluations = self.evaluate_all(&context).await;
+        let mut evaluations = self.evaluate_all(&context).await;
+        let mut validator = aicoder_core::events::EventTraceValidator::new();
+        let trace_validation = trace
+            .events
+            .iter()
+            .try_for_each(|record| validator.observe(&record.envelope))
+            .and_then(|()| validator.finish());
+        if execution.progress().event_delivery.has_failures() || trace_validation.is_err() {
+            evaluations.push(crate::EvaluationResult::evaluator_error(
+                "event_observation",
+                trace_validation.err().map_or_else(
+                    || "Event delivery was incomplete".into(),
+                    |error| error.to_string(),
+                ),
+            ));
+        }
         let verdict = aggregate_verdict(&evaluations);
         let progress = execution.progress();
         let usage = &progress.usage;

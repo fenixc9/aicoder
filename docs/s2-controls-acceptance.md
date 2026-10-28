@@ -1,5 +1,8 @@
 # S2 RunHandle acceptance
 
+Historical increment record. [Final S2 acceptance](s2-events-acceptance.md) supersedes
+the remaining-stage status below; these measurements and test counts remain archived.
+
 RunHandle cancellation, bounded steer/follow-up and asynchronous approval are now
 implemented in the shared core and used by TUI. S2 remains open for versioned event
 schemas, bounded event observation and disconnect behavior. This increment does not

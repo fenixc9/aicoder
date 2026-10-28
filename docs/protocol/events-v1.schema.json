@@ -1,0 +1,1971 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aicoder:events:v1",
+  "title": "aicoder event envelope v1",
+  "description": "Canonical writer format. EventTraceValidator checks cross-record lifecycle and identity invariants.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "run_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "round": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "session_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "turn_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "elapsed_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "termination": {
+      "$ref": "#/$defs/termination"
+    },
+    "event": {
+      "$ref": "#/$defs/event"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "sequence",
+    "round",
+    "elapsed_ms",
+    "event"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "turn_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "turn_id"
+        ]
+      },
+      "then": {
+        "required": [
+          "session_id"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "agent_completed",
+                  "agent_aborted",
+                  "agent_stopped",
+                  "agent_failed"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        },
+        "required": [
+          "event"
+        ]
+      },
+      "then": {
+        "required": [
+          "termination"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "usage": {
+      "type": "object",
+      "properties": {
+        "input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "total_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cached_input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cache_write_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": []
+    },
+    "duration": {
+      "type": "object",
+      "properties": {
+        "secs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "nanos": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999999999
+        }
+      },
+      "required": [
+        "secs",
+        "nanos"
+      ]
+    },
+    "tool_call": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "arguments": {}
+      },
+      "required": [
+        "id",
+        "name",
+        "arguments"
+      ]
+    },
+    "tool_key": {
+      "type": "object",
+      "properties": {
+        "response_index": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        },
+        "tool_index": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647
+        }
+      },
+      "required": [
+        "response_index",
+        "tool_index"
+      ]
+    },
+    "image": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "url"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "base64"
+            },
+            "media_type": {
+              "type": "string"
+            },
+            "data": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "media_type",
+            "data"
+          ]
+        }
+      ]
+    },
+    "content": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "reasoning"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "image"
+            },
+            "source": {
+              "$ref": "#/$defs/image"
+            }
+          },
+          "required": [
+            "type",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool_call"
+            },
+            "call": {
+              "$ref": "#/$defs/tool_call"
+            }
+          },
+          "required": [
+            "type",
+            "call"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool_result"
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "content": {},
+            "is_error": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "call_id",
+            "content",
+            "is_error"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "provider_data"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "data": {}
+          },
+          "required": [
+            "type",
+            "provider",
+            "data"
+          ]
+        }
+      ]
+    },
+    "message": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/content"
+          }
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
+    },
+    "capability": {
+      "enum": [
+        "read_only",
+        "mutating",
+        "command"
+      ]
+    },
+    "invocation": {
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "arguments": {},
+        "capability": {
+          "$ref": "#/$defs/capability"
+        }
+      },
+      "required": [
+        "call_id",
+        "name",
+        "arguments",
+        "capability"
+      ]
+    },
+    "input_kind": {
+      "enum": [
+        "steer",
+        "follow_up"
+      ]
+    },
+    "input_ref": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "kind": {
+          "$ref": "#/$defs/input_kind"
+        }
+      },
+      "required": [
+        "run_id",
+        "id",
+        "kind"
+      ]
+    },
+    "input": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "kind": {
+          "$ref": "#/$defs/input_kind"
+        },
+        "message": {
+          "$ref": "#/$defs/message"
+        }
+      },
+      "required": [
+        "run_id",
+        "id",
+        "kind",
+        "message"
+      ]
+    },
+    "approval_id": {
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [
+        "run_id",
+        "sequence"
+      ]
+    },
+    "approval": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/approval_id"
+        },
+        "invocation": {
+          "$ref": "#/$defs/invocation"
+        }
+      },
+      "required": [
+        "id",
+        "invocation"
+      ]
+    },
+    "stop_reason": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "complete"
+            }
+          },
+          "required": [
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "tool_calls"
+            }
+          },
+          "required": [
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "max_tokens"
+            }
+          },
+          "required": [
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "filtered"
+            }
+          },
+          "required": [
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "const": "other"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "reason",
+            "value"
+          ]
+        }
+      ]
+    },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "resource": {
+          "enum": [
+            "rounds",
+            "tool_calls",
+            "tool_calls_per_round",
+            "tokens",
+            "duration",
+            "output_bytes"
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "used": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "requested": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "resource",
+        "limit",
+        "used"
+      ]
+    },
+    "provider_error": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "authentication",
+            "rate_limited",
+            "transport",
+            "invalid_request",
+            "unsupported",
+            "model_not_found",
+            "invalid_response",
+            "cancelled",
+            "other"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "http_status": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parameter": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "kind",
+        "message",
+        "retryable"
+      ]
+    },
+    "failure": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "enum": [
+            "preparing",
+            "compaction",
+            "model",
+            "tools",
+            "verification",
+            "persistence"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/provider_error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "stage",
+        "message"
+      ]
+    },
+    "stop": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "cancelled"
+            },
+            "detail": {
+              "type": "object",
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "budget"
+            },
+            "detail": {
+              "$ref": "#/$defs/budget"
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "model"
+            },
+            "detail": {
+              "$ref": "#/$defs/stop_reason"
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "failed"
+            },
+            "detail": {
+              "$ref": "#/$defs/failure"
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
+          ]
+        }
+      ]
+    },
+    "state": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "idle"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "preparing"
+            }
+          },
+          "required": [
+            "state"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "awaiting_model"
+            },
+            "round": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "state",
+            "round"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "verifying_completion"
+            },
+            "round": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "state",
+            "round"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "executing_tools"
+            },
+            "round": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18446744073709551615
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "state",
+            "round",
+            "count"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "compacting"
+            },
+            "round": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "state",
+            "round"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "completed"
+            },
+            "rounds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "state",
+            "rounds"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "failed"
+            },
+            "round": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 18446744073709551615
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "round"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "aborted"
+            },
+            "round": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 18446744073709551615
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "round"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "const": "stopped"
+            },
+            "round": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 18446744073709551615
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "round"
+          ]
+        }
+      ]
+    },
+    "transition": {
+      "type": "object",
+      "properties": {
+        "previous": {
+          "$ref": "#/$defs/state"
+        },
+        "current": {
+          "$ref": "#/$defs/state"
+        }
+      },
+      "required": [
+        "previous",
+        "current"
+      ]
+    },
+    "round_outcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "final_answer"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "completion_rejected"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "stopped"
+            },
+            "stop": {
+              "$ref": "#/$defs/stop"
+            }
+          },
+          "required": [
+            "type",
+            "stop"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool_calls"
+            },
+            "count": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "type",
+            "count"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "failed"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "aborted"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "stream_end": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "completed"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "aborted"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "tool_outcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "succeeded"
+            },
+            "output": {},
+            "truncated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "output",
+            "truncated"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "failed"
+            },
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "timed_out"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "approval_denied"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "cancelled"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "termination": {
+      "type": "object",
+      "properties": {
+        "stop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/stop"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "persistence_error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/failure"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usage": {
+          "$ref": "#/$defs/usage"
+        },
+        "rounds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "tool_calls": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "output_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "tokens": {
+          "type": "object",
+          "properties": {
+            "used": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "estimated": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "used",
+            "estimated"
+          ]
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "pending_inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/input_ref"
+          }
+        }
+      },
+      "required": [
+        "usage",
+        "rounds",
+        "tool_calls",
+        "output_bytes",
+        "tokens",
+        "elapsed_ms",
+        "pending_inputs"
+      ]
+    },
+    "event": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "session_bound"
+            },
+            "session_id": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "turn_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "run_approval_requested"
+            },
+            "request": {
+              "$ref": "#/$defs/approval"
+            }
+          },
+          "required": [
+            "type",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "run_input_applied"
+            },
+            "input": {
+              "$ref": "#/$defs/input"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "agent_started"
+            },
+            "model": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "model"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "agent_completed"
+            },
+            "rounds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "usage": {
+              "$ref": "#/$defs/usage"
+            }
+          },
+          "required": [
+            "type",
+            "rounds",
+            "usage"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "agent_failed"
+            },
+            "stage": {
+              "enum": [
+                "turn",
+                "model",
+                "tool"
+              ]
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "stage",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "agent_aborted"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "agent_stopped"
+            },
+            "stop": {
+              "$ref": "#/$defs/stop"
+            }
+          },
+          "required": [
+            "type",
+            "stop"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "state_changed"
+            },
+            "transition": {
+              "$ref": "#/$defs/transition"
+            }
+          },
+          "required": [
+            "type",
+            "transition"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "round_started"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "round_completed"
+            },
+            "outcome": {
+              "$ref": "#/$defs/round_outcome"
+            }
+          },
+          "required": [
+            "type",
+            "outcome"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "model_request_started"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "model_response_started"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "model_retry_scheduled"
+            },
+            "attempt": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4294967295
+            },
+            "delay": {
+              "$ref": "#/$defs/duration"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "attempt",
+            "delay",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "model_response_completed"
+            },
+            "finish_reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/stop_reason"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "finish_reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "model_response_failed"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "completion_verification_started"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "completion_verification_ended"
+            },
+            "outcome": {
+              "enum": [
+                "accepted",
+                "rejected",
+                "failed"
+              ]
+            },
+            "feedback": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "outcome",
+            "feedback"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "context_compaction_started"
+            },
+            "strategy": {
+              "type": "string"
+            },
+            "estimated_tokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "target_tokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "type",
+            "strategy",
+            "estimated_tokens",
+            "target_tokens"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "context_compaction_completed"
+            },
+            "strategy": {
+              "type": "string"
+            },
+            "estimated_tokens_before": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "estimated_tokens_after": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            "removed_messages": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "type",
+            "strategy",
+            "estimated_tokens_before",
+            "estimated_tokens_after",
+            "removed_messages"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "context_compaction_failed"
+            },
+            "strategy": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "strategy",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "reasoning_started"
+            },
+            "response_index": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          },
+          "required": [
+            "type",
+            "response_index"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "reasoning_chunk"
+            },
+            "response_index": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            "delta": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "response_index",
+            "delta"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "reasoning_ended"
+            },
+            "response_index": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            "outcome": {
+              "$ref": "#/$defs/stream_end"
+            }
+          },
+          "required": [
+            "type",
+            "response_index",
+            "outcome"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "content_started"
+            },
+            "response_index": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            }
+          },
+          "required": [
+            "type",
+            "response_index"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "content_chunk"
+            },
+            "response_index": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            "delta": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "response_index",
+            "delta"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "content_ended"
+            },
+            "response_index": {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            "outcome": {
+              "$ref": "#/$defs/stream_end"
+            }
+          },
+          "required": [
+            "type",
+            "response_index",
+            "outcome"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool_call_started"
+            },
+            "key": {
+              "$ref": "#/$defs/tool_key"
+            }
+          },
+          "required": [
+            "type",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool_call_chunk"
+            },
+            "key": {
+              "$ref": "#/$defs/tool_key"
+            },
+            "id_delta": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "name_delta": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "arguments_delta": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "key",
+            "id_delta",
+            "name_delta",
+            "arguments_delta"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool_call_ended"
+            },
+            "key": {
+              "$ref": "#/$defs/tool_key"
+            },
+            "outcome": {
+              "$ref": "#/$defs/stream_end"
+            },
+            "tool_call": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/tool_call"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "key",
+            "outcome",
+            "tool_call"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool_approval_requested"
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "capability": {
+              "$ref": "#/$defs/capability"
+            }
+          },
+          "required": [
+            "type",
+            "call_id",
+            "name",
+            "capability"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool_approval_resolved"
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "approved": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "call_id",
+            "approved"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool_execution_started"
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "arguments": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "call_id",
+            "name",
+            "arguments"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "tool_execution_ended"
+            },
+            "call_id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "outcome": {
+              "$ref": "#/$defs/tool_outcome"
+            }
+          },
+          "required": [
+            "type",
+            "call_id",
+            "name",
+            "outcome"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "usage_updated"
+            },
+            "usage": {
+              "$ref": "#/$defs/usage"
+            }
+          },
+          "required": [
+            "type",
+            "usage"
+          ]
+        }
+      ]
+    }
+  }
+}

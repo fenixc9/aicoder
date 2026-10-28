@@ -104,4 +104,5 @@ for a full turn with a custom in-memory model, tool and store.
 
 Structured [run outcomes and budgets](run-outcomes.md) are shared across hosts.
 [Tree sessions and durable recovery](sessions.md) and [RunHandle controls](run-control.md)
-are available in S2; versioned event subscriptions remain the next task.
+and [versioned event subscriptions](events.md) complete S2; shared runtime and project
+context are next in S3.

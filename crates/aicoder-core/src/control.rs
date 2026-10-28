@@ -61,7 +61,7 @@ pub struct ApprovalRequestId {
     pub run_id: String,
     pub sequence: u64,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingRunApproval {
     pub id: ApprovalRequestId,
     pub invocation: ToolInvocation,
@@ -130,6 +130,7 @@ struct State {
     approval: Option<Approval>,
 }
 pub(crate) struct ControlState {
+    events: crate::events::EventSource,
     id: RunId,
     config: RunControlConfig,
     state: Mutex<State>,
@@ -160,8 +161,10 @@ impl RunHandle {
         {
             return Err(RunControlError::InvalidConfig);
         }
+        let id = RunId::new();
         let shared = Arc::new(ControlState {
-            id: RunId::new(),
+            events: crate::events::EventSource::new(id),
+            id,
             config,
             state: Mutex::new(State {
                 status: RunControlStatus::Waiting,
@@ -183,6 +186,15 @@ impl RunHandle {
             },
             RunControl { shared, context },
         ))
+    }
+    pub fn events(&self) -> crate::events::EventSource {
+        self.shared.events.clone()
+    }
+    pub fn subscribe(
+        &self,
+        limits: crate::events::EventBufferConfig,
+    ) -> Result<crate::events::EventSubscription, crate::events::SubscribeError> {
+        self.shared.events.subscribe(limits)
     }
     pub fn run_id(&self) -> RunId {
         self.shared.id
@@ -347,8 +359,8 @@ impl ControlState {
                 .collect(),
         }
     }
-    pub(crate) fn id(&self) -> RunId {
-        self.id
+    pub(crate) fn event_source(&self) -> crate::events::EventSource {
+        self.events.clone()
     }
     pub(crate) fn status(&self) -> RunControlStatus {
         self.state.lock().expect("run controls poisoned").status
@@ -485,6 +497,15 @@ impl ControlState {
     }
 }
 impl RunControl {
+    pub fn events(&self) -> crate::events::EventSource {
+        self.shared.events.clone()
+    }
+    pub fn subscribe(
+        &self,
+        limits: crate::events::EventBufferConfig,
+    ) -> Result<crate::events::EventSubscription, crate::events::SubscribeError> {
+        self.shared.events.subscribe(limits)
+    }
     pub(crate) fn finish(&self) {
         self.shared.finish();
     }
@@ -497,6 +518,7 @@ impl Drop for RunControl {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if state.status != RunControlStatus::Finished {
+            self.shared.events.abandon();
             self.context.cancel("controlled run was dropped");
             state.status = RunControlStatus::Dropped;
             state.approval = None;

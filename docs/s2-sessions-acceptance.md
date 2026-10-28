@@ -1,5 +1,8 @@
 # S2 session storage and recovery acceptance
 
+Historical increment record. [Final S2 acceptance](s2-events-acceptance.md) supersedes
+the remaining-stage status below; these measurements and test counts remain archived.
+
 This completes the session tree, storage/migration and interrupted-interaction
 items of S2. RunHandle steering/follow-up, versioned event subscriptions and
 backpressure remain open; this is not full S2 or Pi parity acceptance.

@@ -38,7 +38,7 @@ predictions.json is the official harness input. Case directories contain:
 
 - checkpoint.json: atomically published resume state;
 - report.json: outcome, usage, trajectory, workspace diff, and patch;
-- trace.json: ordered raw agent events with elapsed time;
+- trace.json: ordered versioned event envelopes with structured JSON payloads and producer elapsed time;
 - error.json: failure chain when generation could not complete.
 
 After generation, run the official harness and preserve its aggregate report
@@ -69,3 +69,7 @@ manifest; workers share the provider/HTTP pool. Sampling is unset by default,
 so choose supported settings explicitly when comparing runs. See
 [provider configuration](provider-configuration.md), especially DeepSeek thinking
 mode's history and unsupported-parameter behavior.
+
+Trace consumers should validate [event protocol v1](events.md). Incomplete observation
+is an evaluator error; old Debug-string traces are historical artifacts, and SWE-bench
+checkpoints without the event version are regenerated rather than mixed into new runs.

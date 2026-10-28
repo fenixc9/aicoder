@@ -268,6 +268,9 @@ impl RunModelEventSink {
 }
 impl ModelEventSink for RunModelEventSink {
     fn emit(&self, event: ModelEvent) {
+        if self.events.is_closed() {
+            return;
+        }
         let mut state = self.progress.lock().expect("model progress poisoned");
         if state.closed {
             return;
@@ -454,5 +457,19 @@ mod tests {
             }
         )));
         assert_eq!(recorded.iter().filter(|e|matches!(e,AgentRawEvent::UsageUpdated {usage} if usage.total_tokens==Some(5))).count(),1);
+    }
+    #[tokio::test]
+    async fn a_retained_provider_sink_ignores_new_payload_after_the_run_owner_is_dropped() {
+        let events = AgentEventEmitter::new(Arc::new(()));
+        let sink = RunModelEventSink::new(events.clone());
+        sink.emit(ModelEvent::TextDelta {
+            delta: "early".into(),
+        });
+        sink.retained();
+        drop(events);
+        sink.emit(ModelEvent::TextDelta {
+            delta: "late".repeat(1000),
+        });
+        assert!(sink.retained().1.is_empty());
     }
 }

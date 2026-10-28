@@ -181,6 +181,8 @@ impl PartialModelResponse {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunProgress {
+    #[serde(default)]
+    pub event_delivery: crate::events::EventDeliveryReport,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_inputs: Vec<crate::RunInput>,
     pub messages: Vec<Message>,
@@ -199,6 +201,7 @@ pub struct RunProgress {
 impl RunProgress {
     pub fn new(messages: Vec<Message>) -> Self {
         Self {
+            event_delivery: crate::events::EventDeliveryReport::default(),
             pending_inputs: Vec::new(),
             input_messages: messages.len(),
             messages,
@@ -261,6 +264,12 @@ pub enum RunOutcome {
     Interrupted(InterruptedTurn),
 }
 impl RunOutcome {
+    pub(crate) fn progress_mut(&mut self) -> &mut RunProgress {
+        match self {
+            Self::Completed(result) => &mut result.progress,
+            Self::Interrupted(turn) => &mut turn.progress,
+        }
+    }
     pub fn progress(&self) -> &RunProgress {
         match self {
             Self::Completed(r) => &r.progress,

@@ -337,6 +337,7 @@ async fn main() -> Result<()> {
     let builder = TurnExecutor::builder(client)
         .workspace(&cli.workspace)
         .config(TurnExecutionConfig {
+            events: Default::default(),
             max_rounds: cli.max_rounds,
             stream: true,
             budget: aicoder_core::RunBudget {
@@ -407,6 +408,12 @@ async fn main() -> Result<()> {
         eprintln!("Session: {}", session.id);
     }
     let progress = outcome.progress();
+    if progress.event_delivery.has_failures() {
+        eprintln!(
+            "Live event delivery was incomplete: {}",
+            serde_json::to_string(&progress.event_delivery)?
+        );
+    }
     let count = |value: Option<u64>| {
         value
             .map(|n| n.to_string())
