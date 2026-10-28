@@ -91,12 +91,7 @@ impl AgentRuntime {
                     "You are a coding assistant. Inspect the project before changing it, use tools when needed, verify changes, and report concisely. Reply in the user's language."
                         .into(),
                 ),
-                temperature: Some(0.2),
-                top_p: Some(1.0),
-                max_tokens: Some(4096),
-                seed: None,
-                stop: None,
-                response_format: None,
+                options: aicoder_core::model::ModelOptions {temperature:Some(0.2),top_p:Some(1.0),max_output_tokens:Some(4096),..Default::default()},
             },
         ));
         Ok(Self {

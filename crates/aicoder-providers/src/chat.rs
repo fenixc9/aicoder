@@ -1,4 +1,7 @@
 //! OpenAI 兼容 API 客户端
+use crate::wire::{
+    ApiError, ChatCompletionRequest, ChatCompletionResponse, StreamChunk, StreamOptions,
+};
 
 use anyhow::{Context, Result};
 use futures::Stream;
@@ -14,7 +17,6 @@ use aicoder_core::{
     cancellation::TurnExecutionContext,
     events::AgentRawEvent,
     redaction::{sanitize_text, sanitize_url},
-    types::{ApiError, ChatCompletionRequest, ChatCompletionResponse, StreamChunk, StreamOptions},
 };
 
 use super::stream::{ChatStreamAccumulator, SseDecoder, SseEvent};
@@ -210,14 +212,6 @@ impl ChatClient {
         request: ChatCompletionRequest,
     ) -> Result<ChatCompletionResponse> {
         self.chat_completion_inner(request, None).await
-    }
-
-    pub(crate) async fn chat_completion_with_events(
-        &self,
-        request: ChatCompletionRequest,
-        events: &dyn ProviderEventSink,
-    ) -> Result<ChatCompletionResponse> {
-        self.chat_completion_inner(request, Some(events)).await
     }
 
     async fn chat_completion_inner(
@@ -609,6 +603,7 @@ impl ChatClient {
         accumulator.finish()
     }
 
+    #[cfg(test)]
     pub(crate) async fn chat_completion_stream_collect_with_events(
         &self,
         mut request: ChatCompletionRequest,
@@ -642,11 +637,12 @@ impl ChatClient {
             finish_reason: response
                 .choices
                 .first()
-                .and_then(|choice| choice.finish_reason.clone()),
+                .and_then(|choice| choice.finish_reason.as_ref().map(crate::model::stop_reason)),
         });
         Ok(response)
     }
 
+    #[cfg(test)]
     pub(crate) async fn chat_completion_stream_collect_with_context(
         &self,
         mut request: ChatCompletionRequest,
@@ -704,7 +700,7 @@ impl ChatClient {
             finish_reason: response
                 .choices
                 .first()
-                .and_then(|choice| choice.finish_reason.clone()),
+                .and_then(|choice| choice.finish_reason.as_ref().map(crate::model::stop_reason)),
         });
         Ok(response)
     }
@@ -956,8 +952,8 @@ mod tests {
     fn test_request(stream: bool) -> ChatCompletionRequest {
         ChatCompletionRequest {
             model: "deepseek-chat".to_string(),
-            messages: vec![aicoder_core::types::ChatMessage {
-                role: aicoder_core::types::Role::User,
+            messages: vec![crate::wire::ChatMessage {
+                role: crate::wire::Role::User,
                 content: Some("hello".to_string()),
                 reasoning: None,
                 tool_calls: None,
@@ -1253,6 +1249,32 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, ModelEvent::Finished { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn turn_executor_uses_the_normalized_http_provider_and_counts_usage_once() {
+        use aicoder_core::{TurnExecutionConfig, TurnExecutor, model::*, tools::ToolRegistry};
+        let (url, _) =
+            spawn_mock_server("200 OK", "application/json", successful_response_body()).await;
+        let executor = TurnExecutor::builder(test_client(url))
+            .workspace(std::env::temp_dir())
+            .registry(ToolRegistry::default())
+            .config(TurnExecutionConfig {
+                stream: false,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        let result = executor
+            .run(ModelRequest::new(
+                "deepseek-chat",
+                vec![Message::text(MessageRole::User, "hello")],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(result.final_message.text_content(), "recovered");
+        assert_eq!(result.usage.total_tokens, Some(3));
+        assert_eq!(result.finish_reason, Some(StopReason::Complete));
     }
 
     #[test]
@@ -1574,7 +1596,7 @@ mod tests {
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some(" world"));
         assert_eq!(
             chunk.choices[0].finish_reason,
-            Some(aicoder_core::types::FinishReason::Stop)
+            Some(crate::wire::FinishReason::Stop)
         );
         assert!(stream.next().await.is_none());
 

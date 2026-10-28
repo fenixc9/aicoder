@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::types::ChatMessage;
+use crate::model::Message;
 
 /// Metadata shared by all records in a conversation session.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub struct SessionMetadata {
 pub struct SessionMessage {
     pub id: String,
     pub created_at: u64,
-    pub message: ChatMessage,
+    pub message: Message,
 }
 
 /// An opened session. Mutations should go through its repository.
@@ -41,7 +41,7 @@ impl Session {
         &self.messages
     }
 
-    pub fn chat_messages(&self) -> Vec<ChatMessage> {
+    pub fn chat_messages(&self) -> Vec<Message> {
         self.messages
             .iter()
             .map(|entry| entry.message.clone())

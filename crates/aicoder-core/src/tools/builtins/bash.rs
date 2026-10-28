@@ -5,7 +5,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::{process::Command, time::timeout};
 
-use crate::types::FunctionDefinition;
+use crate::model::ToolDefinition;
 
 use super::super::{
     ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess,
@@ -23,14 +23,14 @@ struct BashArguments {
 
 #[async_trait]
 impl ExecutableTool for BashTool {
-    fn definition(&self) -> FunctionDefinition {
-        FunctionDefinition {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
             name: "bash".to_string(),
             description: Some(
                 "Run a non-interactive bash command from the workspace. This is not sandboxed."
                     .to_string(),
             ),
-            parameters: Some(json!({
+            parameters: json!({
                 "type": "object",
                 "properties": {
                     "command": {"type": "string"},
@@ -38,7 +38,7 @@ impl ExecutableTool for BashTool {
                 },
                 "required": ["command"],
                 "additionalProperties": false
-            })),
+            }),
         }
     }
 

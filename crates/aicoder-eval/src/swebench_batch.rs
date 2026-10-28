@@ -89,7 +89,7 @@ pub struct SweBenchBatchSummary {
     pub failed: usize,
     pub predictions: usize,
     pub empty_patches: usize,
-    pub total_tokens: i64,
+    pub total_tokens: Option<u64>,
     pub duration_ms: u64,
 }
 
@@ -184,6 +184,7 @@ impl SweBenchBatchRunner {
         write_predictions_atomic(&predictions_path, &predictions)?;
 
         let mut summary = SweBenchBatchSummary {
+            total_tokens: Some(0),
             selected: results.len(),
             predictions: predictions.len(),
             duration_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
@@ -199,15 +200,25 @@ impl SweBenchBatchRunner {
                 summary.resumed += 1;
             }
             if let Some(checkpoint) = &result.checkpoint {
-                summary.total_tokens += i64::from(checkpoint.report.run.usage.total_tokens);
+                summary.total_tokens = summary.total_tokens.and_then(|total| {
+                    checkpoint
+                        .report
+                        .run
+                        .usage
+                        .total_tokens
+                        .and_then(|tokens| total.checked_add(tokens))
+                });
                 if checkpoint.prediction.model_patch.is_empty() {
                     summary.empty_patches += 1;
                 }
+            } else {
+                // Failed generation may have consumed tokens even when no prediction was saved.
+                summary.total_tokens = None;
             }
         }
 
         let report = SweBenchBatchReport {
-            schema_version: 1,
+            schema_version: 2,
             run_id: self.options.run_id.clone(),
             dataset: self.options.dataset.clone(),
             model: self.adapter.model().to_string(),
@@ -234,6 +245,8 @@ struct CaseRunResult {
 
 #[derive(Serialize, Deserialize)]
 struct CaseCheckpoint {
+    #[serde(default)]
+    model_contract_version: u32,
     run_id: String,
     dataset: String,
     model: String,
@@ -250,7 +263,8 @@ impl CaseCheckpoint {
         adapter: &SweBenchAdapter,
         options: &SweBenchBatchOptions,
     ) -> bool {
-        self.run_id == options.run_id
+        self.model_contract_version == 2
+            && self.run_id == options.run_id
             && self.dataset == options.dataset
             && self.model == adapter.model()
             && self.model_name_or_path == adapter.model_name()
@@ -309,6 +323,7 @@ where
         write_json_atomic(&report_path, &report)?;
         write_trace_atomic(&trace_path, &report)?;
         let checkpoint = CaseCheckpoint {
+            model_contract_version: 2,
             run_id: options.run_id.clone(),
             dataset: options.dataset.clone(),
             model: adapter.model().to_string(),

@@ -1,15 +1,13 @@
 use crate::ProviderEventSink;
+use crate::wire::{
+    ChatCompletionResponse, ChatMessage, Choice, FunctionCall, LogProbs, Role, StreamChunk,
+    StreamDelta, StreamToolCall, ToolCall, ToolType, Usage,
+};
 use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{Context, Result};
 
-use aicoder_core::{
-    events::{AgentRawEvent, StreamEnd, ToolCallKey},
-    types::{
-        ChatCompletionResponse, ChatMessage, Choice, FunctionCall, LogProbs, Role, StreamChunk,
-        StreamDelta, StreamToolCall, ToolCall, ToolType, Usage,
-    },
-};
+use aicoder_core::events::{AgentRawEvent, StreamEnd, ToolCallKey};
 
 const MAX_SSE_EVENT_BYTES: usize = 8 * 1024 * 1024;
 
@@ -161,7 +159,7 @@ struct ChoiceAccumulator {
     reasoning_event_open: bool,
     content_event_open: bool,
     tool_calls: BTreeMap<i32, ToolCallAccumulator>,
-    finish_reason: Option<aicoder_core::types::FinishReason>,
+    finish_reason: Option<crate::wire::FinishReason>,
     events_ended: bool,
     logprobs: Option<LogProbs>,
 }
@@ -247,7 +245,7 @@ impl ChatStreamAccumulator {
         if let Some(usage) = chunk_usage {
             if let Some(events) = events {
                 events.emit(AgentRawEvent::UsageUpdated {
-                    usage: usage.clone().into(),
+                    usage: crate::model::decode_usage(&usage)?.into(),
                 });
             }
             self.usage = Some(usage);
@@ -257,7 +255,7 @@ impl ChatStreamAccumulator {
 
     pub(crate) fn abort_events(&self, events: &dyn ProviderEventSink, reason: impl Into<String>) {
         let reason = Arc::<str>::from(reason.into());
-        for (choice_index, choice) in &self.choices {
+        for (response_index, choice) in &self.choices {
             if choice.events_ended {
                 continue;
             }
@@ -266,20 +264,20 @@ impl ChatStreamAccumulator {
             };
             if choice.reasoning_event_open {
                 events.emit(AgentRawEvent::ReasoningEnded {
-                    choice_index: *choice_index,
+                    response_index: *response_index,
                     outcome: outcome(),
                 });
             }
             if choice.content_event_open {
                 events.emit(AgentRawEvent::ContentEnded {
-                    choice_index: *choice_index,
+                    response_index: *response_index,
                     outcome: outcome(),
                 });
             }
             for tool_index in choice.tool_calls.keys() {
                 events.emit(AgentRawEvent::ToolCallEnded {
                     key: ToolCallKey {
-                        choice_index: *choice_index,
+                        response_index: *response_index,
                         tool_index: *tool_index,
                     },
                     outcome: outcome(),
@@ -354,7 +352,7 @@ impl ChatStreamAccumulator {
 
 fn apply_delta(
     choice: &mut ChoiceAccumulator,
-    choice_index: i32,
+    response_index: i32,
     delta: StreamDelta,
     events: Option<&dyn ProviderEventSink>,
 ) -> Result<()> {
@@ -367,11 +365,11 @@ fn apply_delta(
             && let Some(events) = events
         {
             if !choice.reasoning_event_open {
-                events.emit(AgentRawEvent::ReasoningStarted { choice_index });
+                events.emit(AgentRawEvent::ReasoningStarted { response_index });
                 choice.reasoning_event_open = true;
             }
             events.emit(AgentRawEvent::ReasoningChunk {
-                choice_index,
+                response_index,
                 delta: reasoning.clone().into(),
             });
         }
@@ -383,11 +381,11 @@ fn apply_delta(
             && let Some(events) = events
         {
             if !choice.content_event_open {
-                events.emit(AgentRawEvent::ContentStarted { choice_index });
+                events.emit(AgentRawEvent::ContentStarted { response_index });
                 choice.content_event_open = true;
             }
             events.emit(AgentRawEvent::ContentChunk {
-                choice_index,
+                response_index,
                 delta: content.clone().into(),
             });
         }
@@ -395,7 +393,7 @@ fn apply_delta(
     }
     if let Some(tool_calls) = delta.tool_calls {
         for tool_call in tool_calls {
-            apply_tool_call(choice, choice_index, tool_call, events)?;
+            apply_tool_call(choice, response_index, tool_call, events)?;
         }
     }
     Ok(())
@@ -403,7 +401,7 @@ fn apply_delta(
 
 fn apply_tool_call(
     choice: &mut ChoiceAccumulator,
-    choice_index: i32,
+    response_index: i32,
     delta: StreamToolCall,
     events: Option<&dyn ProviderEventSink>,
 ) -> Result<()> {
@@ -411,7 +409,7 @@ fn apply_tool_call(
         anyhow::bail!("Stream tool call index must be non-negative");
     }
     let key = ToolCallKey {
-        choice_index,
+        response_index,
         tool_index: delta.index,
     };
     let is_new = !choice.tool_calls.contains_key(&delta.index);
@@ -454,7 +452,7 @@ fn apply_tool_call(
 
 fn emit_choice_ended(
     events: &dyn ProviderEventSink,
-    choice_index: i32,
+    response_index: i32,
     choice: &ChoiceAccumulator,
 ) -> Result<()> {
     let completed_tools = choice
@@ -463,7 +461,7 @@ fn emit_choice_ended(
         .map(|(tool_index, tool_call)| {
             Ok((
                 ToolCallKey {
-                    choice_index,
+                    response_index,
                     tool_index: *tool_index,
                 },
                 build_tool_call(tool_call)?,
@@ -473,13 +471,13 @@ fn emit_choice_ended(
 
     if choice.reasoning_event_open {
         events.emit(AgentRawEvent::ReasoningEnded {
-            choice_index,
+            response_index,
             outcome: StreamEnd::Completed,
         });
     }
     if choice.content_event_open {
         events.emit(AgentRawEvent::ContentEnded {
-            choice_index,
+            response_index,
             outcome: StreamEnd::Completed,
         });
     }
@@ -487,7 +485,7 @@ fn emit_choice_ended(
         events.emit(AgentRawEvent::ToolCallEnded {
             key,
             outcome: StreamEnd::Completed,
-            tool_call: Some(tool_call.into()),
+            tool_call: Some(crate::model::decode_call(&tool_call)?.into()),
         });
     }
     Ok(())

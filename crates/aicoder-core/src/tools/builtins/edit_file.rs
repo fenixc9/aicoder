@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::types::FunctionDefinition;
+use crate::model::ToolDefinition;
 
 use super::super::{
     ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess, util::parse_arguments,
@@ -39,14 +39,14 @@ struct PreparedEdit {
 
 #[async_trait]
 impl ExecutableTool for EditFileTool {
-    fn definition(&self) -> FunctionDefinition {
-        FunctionDefinition {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
             name: "edit_file".to_string(),
             description: Some(
                 "Atomically apply exact text replacements to one UTF-8 file. Every old_text must match exactly once in the original file and edits must not overlap."
                     .to_string(),
             ),
-            parameters: Some(json!({
+            parameters: json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
@@ -67,7 +67,7 @@ impl ExecutableTool for EditFileTool {
                 },
                 "required": ["path", "edits"],
                 "additionalProperties": false
-            })),
+            }),
         }
     }
 

@@ -28,6 +28,8 @@ jobs:
         run: cargo run --locked -p aicoder-core --example offline_smoke
       - name: In-memory model provider example
         run: cargo run --locked -p aicoder-core --example model_provider
+      - name: Embedded agent example
+        run: cargo run --locked -p aicoder-core --example embedded_agent
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

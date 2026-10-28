@@ -2,6 +2,7 @@
 
 mod emitter;
 mod handler;
+mod model;
 mod types;
 pub use emitter::AgentEventEmitter;
 pub(crate) use handler::dispatch_event;
@@ -17,9 +18,8 @@ pub use handler::{
     ToolApprovalResolvedEvent, ToolCallChunkEvent, ToolCallEndedEvent, ToolCallStartedEvent,
     ToolExecutionEndedEvent, ToolExecutionStartedEvent, UsageUpdatedEvent,
 };
+pub(crate) use model::RunModelEventSink;
 pub use types::{
     AgentRawEvent, AgentRawEventEnvelope, AgentStage, CompletionVerificationOutcome, RoundOutcome,
     RunId, StreamEnd, ToolCallKey, ToolExecutionOutcome,
 };
-
-pub use types::emit_full_response_events;

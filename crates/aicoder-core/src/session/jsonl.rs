@@ -11,11 +11,11 @@ use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::types::{ChatMessage, Role};
+use crate::model::{Message, MessageRole};
 
 use super::{Session, SessionInfo, SessionMessage, SessionMetadata, SessionRepository};
 
-const SESSION_VERSION: u32 = 1;
+use super::SESSION_VERSION;
 const MAX_HEADER_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,7 +30,7 @@ enum StoredRecord {
     Message {
         id: String,
         created_at: u64,
-        message: ChatMessage,
+        message: serde_json::Value,
     },
 }
 
@@ -174,8 +174,8 @@ impl SessionRepository for JsonlSessionRepository {
         Ok(sessions)
     }
 
-    fn append(&self, session: &mut Session, message: ChatMessage) -> Result<()> {
-        if message.role == Role::System {
+    fn append(&self, session: &mut Session, message: Message) -> Result<()> {
+        if message.role == MessageRole::System {
             bail!("System messages are runtime context and cannot be stored in a session");
         }
         let path = session
@@ -192,7 +192,11 @@ impl SessionRepository for JsonlSessionRepository {
         let encoded = encode_record(&StoredRecord::Message {
             id: entry.id.clone(),
             created_at: entry.created_at,
-            message: entry.message.clone(),
+            message: if session.metadata.version == 1 {
+                super::legacy::encode(&entry.message)?
+            } else {
+                serde_json::to_value(&entry.message)?
+            },
         })?;
 
         let mut file = OpenOptions::new()
@@ -329,7 +333,7 @@ fn load_session(path: &Path) -> Result<Session> {
         ),
     };
     ensure!(
-        version == SESSION_VERSION,
+        version == 1 || version == SESSION_VERSION,
         "Unsupported session version {version} in {}",
         path.display()
     );
@@ -354,8 +358,13 @@ fn load_session(path: &Path) -> Result<Session> {
                 message,
             } => {
                 ensure!(ids.insert(id.clone()), "Duplicate message id {id}");
+                let message: Message = if version == 1 {
+                    super::legacy::decode(message)?
+                } else {
+                    serde_json::from_value(message).context("invalid v2 message")?
+                };
                 ensure!(
-                    message.role != Role::System,
+                    message.role != MessageRole::System,
                     "Session {} contains a persisted system message",
                     path.display()
                 );
@@ -488,13 +497,12 @@ fn now_millis() -> Result<u64> {
         .context("Current timestamp does not fit in u64")
 }
 
-fn title_from_message(message: &ChatMessage) -> Option<String> {
-    if message.role != Role::User {
+fn title_from_message(message: &Message) -> Option<String> {
+    if message.role != MessageRole::User {
         return None;
     }
     let title = message
-        .content
-        .as_deref()?
+        .text_content()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
@@ -539,15 +547,8 @@ mod tests {
 
     use super::*;
 
-    fn message(role: Role, content: &str) -> ChatMessage {
-        ChatMessage {
-            role,
-            content: Some(content.to_string()),
-            reasoning: None,
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        }
+    fn message(role: MessageRole, content: &str) -> Message {
+        Message::text(role, content.to_string())
     }
 
     #[test]
@@ -559,16 +560,16 @@ mod tests {
         repository
             .append(
                 &mut session,
-                message(Role::User, "  inspect   this project "),
+                message(MessageRole::User, "  inspect   this project "),
             )
             .unwrap();
         repository
-            .append(&mut session, message(Role::Assistant, "done"))
+            .append(&mut session, message(MessageRole::Assistant, "done"))
             .unwrap();
 
         let reopened = repository.open(&session.metadata().id).unwrap();
         assert_eq!(reopened.messages().len(), 2);
-        assert_eq!(reopened.chat_messages()[1].content.as_deref(), Some("done"));
+        assert_eq!(reopened.chat_messages()[1].text_content().as_str(), "done");
         assert_eq!(
             reopened.metadata().title.as_deref(),
             Some("inspect this project")
@@ -598,11 +599,11 @@ mod tests {
         let mut first = repository.create(workspace.path()).unwrap();
         let mut stale = repository.open(&first.metadata().id).unwrap();
         repository
-            .append(&mut first, message(Role::User, "first"))
+            .append(&mut first, message(MessageRole::User, "first"))
             .unwrap();
 
         let error = repository
-            .append(&mut stale, message(Role::User, "stale"))
+            .append(&mut stale, message(MessageRole::User, "stale"))
             .unwrap_err();
         assert!(error.to_string().contains("modified by another process"));
     }
@@ -624,14 +625,14 @@ mod tests {
         let mut recovered = repository.open(&session.metadata().id).unwrap();
         assert!(recovered.messages().is_empty());
         repository
-            .append(&mut recovered, message(Role::User, "recovered"))
+            .append(&mut recovered, message(MessageRole::User, "recovered"))
             .unwrap();
 
         let reopened = repository.open(&session.metadata().id).unwrap();
         assert_eq!(reopened.messages().len(), 1);
         assert_eq!(
-            reopened.messages()[0].message.content.as_deref(),
-            Some("recovered")
+            reopened.messages()[0].message.text_content().as_str(),
+            "recovered"
         );
     }
 
@@ -660,5 +661,110 @@ mod tests {
         repository.delete(&first.metadata().id).unwrap();
         assert!(repository.open(&first.metadata().id).is_err());
         assert!(repository.open(&second.metadata().id).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod compatibility_tests {
+    use super::*;
+    use crate::model::{ContentBlock, ImageSource};
+    use serde_json::json;
+
+    #[test]
+    fn v1_history_decodes_tool_pairs_and_continues_without_rewriting_the_file() {
+        let workspace = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let repository = JsonlSessionRepository::new(storage.path()).unwrap();
+        let id = Uuid::new_v4().to_string();
+        let path = storage.path().join("legacy.jsonl");
+        let records = [
+            json!({"type":"session","version":1,"id":id,"created_at":1,"cwd":workspace.path().canonicalize().unwrap()}),
+            json!({"type":"message","id":"user","created_at":2,"message":{"role":"user","content":"remember"}}),
+            json!({"type":"message","id":"call","created_at":3,"message":{"role":"assistant","content":null,"reasoning":"analysis","tool_calls":[{"id":"c","type":"function","function":{"name":"read_file","arguments":"{\"path\":\"a.rs\"}"}}]}}),
+            json!({"type":"message","id":"result","created_at":4,"message":{"role":"tool","tool_call_id":"c","name":"read_file","content":"{\"ok\":true,\"output\":\"text\"}"}}),
+        ];
+        let original = records
+            .iter()
+            .map(|record| format!("{record}\n"))
+            .collect::<String>();
+        fs::write(&path, &original).unwrap();
+        let mut session = repository.open(&id).unwrap();
+        assert_eq!(session.messages()[0].message.text_content(), "remember");
+        assert_eq!(
+            session.messages()[1]
+                .message
+                .tool_calls()
+                .next()
+                .unwrap()
+                .arguments["path"],
+            "a.rs"
+        );
+        assert_eq!(
+            session.messages()[2].message.tool_result().unwrap().1["ok"],
+            true
+        );
+        repository
+            .append(&mut session, Message::text(MessageRole::Assistant, "done"))
+            .unwrap();
+        let stored = fs::read_to_string(&path).unwrap();
+        assert!(stored.starts_with(&original));
+        let last: serde_json::Value = serde_json::from_str(stored.lines().last().unwrap()).unwrap();
+        assert_eq!(last["message"]["content"], "done");
+        assert_eq!(repository.open(&id).unwrap().messages().len(), 4);
+
+        let image = Message {
+            role: MessageRole::User,
+            content: vec![ContentBlock::Image {
+                source: ImageSource::Url {
+                    url: "https://example.com/a.png".into(),
+                },
+            }],
+        };
+        assert!(repository.append(&mut session, image).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), stored);
+    }
+
+    #[test]
+    fn v2_preserves_images_reasoning_and_scoped_provider_state() {
+        let workspace = tempfile::tempdir().unwrap();
+        let storage = tempfile::tempdir().unwrap();
+        let repository = JsonlSessionRepository::new(storage.path()).unwrap();
+        let mut session = repository.create(workspace.path()).unwrap();
+        assert_eq!(session.metadata().version, 2);
+        let user = Message {
+            role: MessageRole::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "inspect".into(),
+                },
+                ContentBlock::Image {
+                    source: ImageSource::Base64 {
+                        media_type: "image/png".into(),
+                        data: "fixture".into(),
+                    },
+                },
+            ],
+        };
+        let assistant = Message {
+            role: MessageRole::Assistant,
+            content: vec![
+                ContentBlock::Reasoning {
+                    text: "analysis".into(),
+                },
+                ContentBlock::Text {
+                    text: "answer".into(),
+                },
+                ContentBlock::ProviderData {
+                    provider: "custom".into(),
+                    data: json!({"signature":"opaque"}),
+                },
+            ],
+        };
+        repository
+            .append_all(&mut session, [user.clone(), assistant.clone()])
+            .unwrap();
+        let reopened = repository.open(&session.metadata().id).unwrap();
+        assert_eq!(reopened.messages()[0].message, user);
+        assert_eq!(reopened.messages()[1].message, assistant);
     }
 }

@@ -1,6 +1,6 @@
 use std::{path::PathBuf, time::Duration};
 
-use aicoder_core::{TurnExecutionResult, types::ChatCompletionRequest};
+use aicoder_core::{TurnExecutionResult, model::ModelRequest};
 use serde::{Deserialize, Serialize};
 
 use crate::{AgentTrace, WorkspaceDiff, WorkspaceSnapshot};
@@ -29,16 +29,12 @@ impl WorkspaceFixture {
 #[derive(Debug, Clone)]
 pub struct EvalCase {
     pub id: String,
-    pub request: ChatCompletionRequest,
+    pub request: ModelRequest,
     pub fixture: WorkspaceFixture,
 }
 
 impl EvalCase {
-    pub fn new(
-        id: impl Into<String>,
-        request: ChatCompletionRequest,
-        fixture: WorkspaceFixture,
-    ) -> Self {
+    pub fn new(id: impl Into<String>, request: ModelRequest, fixture: WorkspaceFixture) -> Self {
         Self {
             id: id.into(),
             request,

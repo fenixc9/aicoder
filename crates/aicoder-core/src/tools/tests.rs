@@ -11,7 +11,7 @@ use tempfile::tempdir;
 use super::*;
 use crate::{
     events::{AgentEventEmitter, AgentRawEvent, AgentRawEventEnvelope, ToolExecutionOutcome},
-    types::{FunctionCall, FunctionDefinition, ToolCall, ToolType},
+    model::{ModelToolCall, ToolDefinition},
 };
 
 struct DenyApproval;
@@ -34,11 +34,11 @@ struct LargeOutputTool;
 
 #[async_trait]
 impl ExecutableTool for LargeOutputTool {
-    fn definition(&self) -> FunctionDefinition {
-        FunctionDefinition {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
             name: "large_output".to_string(),
             description: None,
-            parameters: Some(json!({"type": "object"})),
+            parameters: json!({"type": "object"}),
         }
     }
 
@@ -57,11 +57,11 @@ impl ExecutableTool for LargeOutputTool {
 
 #[async_trait]
 impl ExecutableTool for RecordingTool {
-    fn definition(&self) -> FunctionDefinition {
-        FunctionDefinition {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
             name: self.name.to_string(),
             description: None,
-            parameters: Some(json!({"type": "object"})),
+            parameters: json!({"type": "object"}),
         }
     }
 
@@ -87,14 +87,11 @@ impl ExecutableTool for RecordingTool {
     }
 }
 
-fn tool_call(id: &str, name: &str, arguments: Value) -> ToolCall {
-    ToolCall {
+fn tool_call(id: &str, name: &str, arguments: Value) -> ModelToolCall {
+    ModelToolCall {
         id: id.to_string(),
-        tool_type: ToolType::Function,
-        function: FunctionCall {
-            name: name.to_string(),
-            arguments: arguments.to_string(),
-        },
+        name: name.to_string(),
+        arguments,
     }
 }
 
@@ -113,7 +110,7 @@ fn default_registry_includes_edit_file_in_stable_order() {
         .unwrap()
         .definitions()
         .into_iter()
-        .map(|tool| tool.function.name)
+        .map(|tool| tool.name)
         .collect::<Vec<_>>();
     assert_eq!(
         names,
@@ -356,7 +353,7 @@ async fn dispatcher_returns_approval_denied_as_tool_message() {
         .await
         .unwrap();
     events.shutdown().await;
-    let result: Value = serde_json::from_str(messages[0].content.as_ref().unwrap()).unwrap();
+    let result: Value = messages[0].tool_result().unwrap().1.clone();
     assert_eq!(result["ok"], false);
     assert_eq!(result["error"]["code"], "approval_denied");
     assert!(!directory.path().join("denied.txt").exists());
@@ -483,9 +480,12 @@ async fn dispatcher_preserves_order_and_places_write_barrier() {
 
     let messages = dispatcher.dispatch(&calls).await.unwrap();
 
-    assert_eq!(messages[0].tool_call_id.as_deref(), Some("one"));
-    assert_eq!(messages[1].tool_call_id.as_deref(), Some("two"));
-    assert_eq!(messages[2].tool_call_id.as_deref(), Some("three"));
+    assert_eq!(messages[0].tool_result().map(|(id, _, _)| id), Some("one"));
+    assert_eq!(messages[1].tool_result().map(|(id, _, _)| id), Some("two"));
+    assert_eq!(
+        messages[2].tool_result().map(|(id, _, _)| id),
+        Some("three")
+    );
     let events = events.lock().unwrap();
     let write_start = events
         .iter()
@@ -534,8 +534,8 @@ async fn dispatcher_reports_unknown_tool_and_timeout() {
         ])
         .await
         .unwrap();
-    let unknown: Value = serde_json::from_str(messages[0].content.as_ref().unwrap()).unwrap();
-    let timed_out: Value = serde_json::from_str(messages[1].content.as_ref().unwrap()).unwrap();
+    let unknown: Value = messages[0].tool_result().unwrap().1.clone();
+    let timed_out: Value = messages[1].tool_result().unwrap().1.clone();
     assert_eq!(unknown["error"]["code"], "unknown_tool");
     assert_eq!(timed_out["error"]["code"], "timeout");
 }
@@ -562,7 +562,7 @@ async fn dispatcher_enforces_call_and_output_limits() {
         .dispatch(std::slice::from_ref(&call))
         .await
         .unwrap();
-    let result: Value = serde_json::from_str(messages[0].content.as_ref().unwrap()).unwrap();
+    let result: Value = messages[0].tool_result().unwrap().1.clone();
     assert_eq!(result["truncated"], true);
     assert!(result["output"].as_str().unwrap().len() <= 32);
 

@@ -2,8 +2,8 @@
 
 状态：S0 已完成；S1 进行中。本文替代旧 TODO 的排期。
 基线和验证依据见 [S0 开发基线](development-baseline.md)。
-S1 已完成 HTTP adapter 的 crate 分离，并提供可调用的统一模型 API；执行器与旧会话
-仍待切换。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
+S1 的统一模型契约已贯穿执行器、工具、会话、CLI/TUI 和 bench，wire types 已移至
+providers；剩余重点是部分结果、任务预算与 provider 传输配置。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
 
 ## 1. 产品目标
 
@@ -25,13 +25,13 @@ S1 已完成 HTTP adapter 的 crate 分离，并提供可调用的统一模型 A
 编译时间、依赖树、每轮事件和消息复制量。S0 建立基线后给出可复现的预算，
 后续依赖引入及性能回退需要解释，不提前承诺未经测量的数字。
 
-## 2. 当前起点与主要约束
+## 2. S0 起点与主要约束
 
-已有四个 crate：core、cli、tui、eval。已有模型与工具循环、流式内容、工具审批、
+S0 起点有四个 crate：core、cli、tui、eval。已有模型与工具循环、流式内容、工具审批、
 取消、线性 JSONL 会话、确定性裁剪、可插拔 completion verifier 和评测链路。
 保留可复用实现，按阶段迁移，不重写整个项目。
 
-主要约束：
+当时识别的主要约束如下。S1 已解除协议/HTTP 耦合，默认工具及存储装配的分离仍按 S3 推进：
 
 - `ChatCompletionProvider` 仍暴露 OpenAI 风格 wire types，抽象尚未跨协议。
 - core 同时包含 HTTP adapter、内置工具和运行逻辑；嵌入方难以只选必要能力。
@@ -122,20 +122,19 @@ Web 目标是可接入且有可运行示例，不在此路线图中建设完整�
 
 ### S1：协议无关的 core 与 provider adapter
 
-已交付第一步：`aicoder-providers` 接管 HTTP/SSE、重试和模型客户端，三个应用已迁移；
-core 正常依赖树不含 reqwest/Hyper/TLS/UI 库。现有 wire types 暂保留，下面涉及
-统一模型契约及 OpenAI 转换层已提供，新 API 可直接调用；执行器尚未切换，不能据此
-认定整个 S1 已完成。
+已交付统一模型主路径：core 无 OpenAI wire types，所有入口使用同一 `ModelProvider`
+循环。新会话存储内容块，旧 v1 会话兼容读写，usage 未知值贯穿 UI 和评测。
+S1 尚未完成，部分执行结果、任务预算和传输配置仍待验收。
 
 - [x] 确定内部 Message、ContentBlock、ModelSpec、ProviderError、Usage 类型。
-- [ ] 将 OpenAI wire types、HTTP、重试和认证装配从执行循环移出。
+- [x] 将 OpenAI wire types、HTTP、重试和认证装配从执行循环移出。
 - [ ] 新增 providers crate，先完善 OpenAI-compatible adapter；配置 endpoint、
   代理、超时及 API key，明确服务兼容差异。
-- [ ] 支持模型注册、provider 注入与 capability 查询；预留 Responses/Anthropic 等 adapter。
-- [ ] 统一流与非流结果，覆盖碎片工具参数、异常 finish、空回复及连接中断。
+- [x] 支持模型注册、provider 注入与 capability 查询；预留 Responses/Anthropic 等 adapter。
+- [x] 统一流与非流结果，覆盖碎片工具参数、异常 finish、空回复及连接中断。
 - [ ] 统一有类型的运行错误与完整部分结果；设置轮次、工具、token、时长、输出预算。
   token 上限缺少精确计量时标明估计和请求中可能超出的边界。
-- [ ] 提供纯内存 mock provider/tool/store 的 SDK 示例和公开 API 契约测试。
+- [x] 提供纯内存 mock provider/tool/store 的 SDK 示例和公开 API 契约测试。
 
 验收：无网络 Agent 可只依赖 core；mock 与真实 adapter 使用相同循环；新增 provider
 只需实现 adapter。现有入口保持可运行；必要 API 变更附迁移说明，不长期保留两套模型。

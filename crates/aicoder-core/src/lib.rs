@@ -1,6 +1,6 @@
 //! Reusable core for building coding-agent frontends.
 //!
-//! The crate owns the model/tool loop and exposes its provider, event, tool, and wire types so a
+//! The crate owns the model/tool loop and exposes its provider, event, tool, and model types so a
 //! CLI, TUI, server, or embedded application can choose its own configuration and presentation.
 
 pub mod agent;
@@ -14,7 +14,6 @@ pub mod session;
 pub mod state;
 pub mod tools;
 pub mod turn_executor;
-pub mod types;
 
 pub use agent::{
     Agent, AgentConfig, AgentTurnOutcome, AgentTurnResult, InterruptedAgentTurn, SessionSelection,
@@ -36,6 +35,7 @@ pub use state::{
     AgentRunState, AgentRunStateMachine, AgentStateTransition, InvalidAgentStateTransition,
 };
 pub use turn_executor::{
-    ChatCompletionProvider, TurnExecutionConfig, TurnExecutionResult, TurnExecutor,
-    TurnExecutorBuilder,
+    TurnExecutionConfig, TurnExecutionResult, TurnExecutor, TurnExecutorBuilder,
 };
+
+pub use model::ModelProvider;

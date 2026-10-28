@@ -6,14 +6,14 @@ use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use tokio::{process::Command, time::timeout};
 
-use crate::types::{ChatMessage, Usage};
+use crate::model::{Message, ModelUsage};
 
 pub struct CompletionContext<'a> {
     pub workspace: &'a Path,
     pub round: usize,
-    pub candidate: &'a ChatMessage,
-    pub messages: &'a [ChatMessage],
-    pub usage: &'a Usage,
+    pub candidate: &'a Message,
+    pub messages: &'a [Message],
+    pub usage: &'a ModelUsage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,17 +112,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::types::Role;
+    use crate::model::MessageRole;
 
-    fn candidate() -> ChatMessage {
-        ChatMessage {
-            role: Role::Assistant,
-            content: Some("done".to_string()),
-            reasoning: None,
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        }
+    fn candidate() -> Message {
+        Message::text(MessageRole::Assistant, "done".to_string())
     }
 
     #[tokio::test]
@@ -136,7 +129,7 @@ mod tests {
             .unwrap();
         assert!(status.success());
         let message = candidate();
-        let usage = Usage::default();
+        let usage = ModelUsage::default();
         let verifier = WorkspaceChangeVerifier::new();
 
         let clean = verifier

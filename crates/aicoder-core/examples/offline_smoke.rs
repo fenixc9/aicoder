@@ -8,11 +8,14 @@ use std::{
 };
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentRawEventEnvelope, AgentTurnOutcome, ChatCompletionProvider,
-    SessionSelection, TurnExecutionContext, TurnExecutor,
+    Agent, AgentConfig, AgentRawEventEnvelope, AgentTurnOutcome, ModelProvider, SessionSelection,
+    TurnExecutionContext, TurnExecutor,
+    model::{
+        ContentBlock, Message, MessageRole, ModelRequest, ModelResponse, ModelToolCall, ModelUsage,
+        StopReason,
+    },
     session::{JsonlSessionRepository, SessionRepository},
     tools::AllowAllApproval,
-    types::{ChatCompletionRequest, ChatCompletionResponse, Role},
 };
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
@@ -33,17 +36,41 @@ struct ScriptedProvider {
 }
 
 #[async_trait]
-impl ChatCompletionProvider for ScriptedProvider {
-    async fn complete(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
+impl ModelProvider for ScriptedProvider {
+    fn model_spec(
+        &self,
+        model: &str,
+    ) -> std::result::Result<aicoder_core::model::ModelSpec, aicoder_core::model::ProviderError>
+    {
+        let mut spec = aicoder_core::model::ModelSpec::new("scripted", model);
+        spec.capabilities = aicoder_core::model::ModelCapabilities {
+            tools: true,
+            images: true,
+            reasoning_history: true,
+            temperature: true,
+            top_p: true,
+            seed: true,
+            stop_sequences: true,
+            structured_output: true,
+        };
+        Ok(spec)
+    }
+    async fn generate(
+        &self,
+        request: ModelRequest,
+        events: Arc<dyn aicoder_core::model::ModelEventSink>,
+        _context: aicoder_core::TurnExecutionContext,
+    ) -> std::result::Result<ModelResponse, aicoder_core::model::ProviderError> {
+        let result: anyhow::Result<ModelResponse> = async {
         let last = request.messages.last().expect("smoke sends a user message");
         if matches!(self.case, Case::Cancel) {
             self.cancellation.cancel("offline smoke cancellation");
             return std::future::pending().await;
         }
-        let mut message = json!({"role": "assistant", "content": "done"});
-        let mut finish_reason = "stop";
-        if matches!(last.role, Role::Tool) {
-            let output: Value = serde_json::from_str(last.content.as_deref().unwrap())?;
+        let mut message = Message::text(MessageRole::Assistant,"done");
+        let mut finish_reason = StopReason::Complete;
+        if matches!(last.role, MessageRole::Tool) {
+            let output = last.tool_result().unwrap().1;
             match self.case {
                 Case::Edit => ensure!(output["ok"] == true, "edit failed: {output}"),
                 Case::Search => ensure!(
@@ -61,19 +88,19 @@ impl ChatCompletionProvider for ScriptedProvider {
                 _ => unreachable!(),
             }
         } else if matches!(self.case, Case::SessionResume) {
-            if last.content.as_deref() == Some("resume") {
+            if last.text_content().as_str() == "resume" {
                 ensure!(
                     request
                         .messages
                         .iter()
-                        .any(|m| m.content.as_deref() == Some("remember fixture")),
+                        .any(|m| m.text_content().as_str() == "remember fixture"),
                     "resumed history missing"
                 );
                 ensure!(
                     request
                         .messages
                         .iter()
-                        .any(|m| matches!(m.role, Role::Assistant)),
+                        .any(|m| matches!(m.role, MessageRole::Assistant)),
                     "previous answer missing"
                 );
             }
@@ -87,16 +114,22 @@ impl ChatCompletionProvider for ScriptedProvider {
                 Case::ToolFailure => ("nonexistent_tool", json!({})),
                 _ => unreachable!(),
             };
-            message = json!({"role":"assistant", "tool_calls":[{
-                "id":"smoke-call", "type":"function",
-                "function":{"name":tool, "arguments":arguments.to_string()}
-            }]});
-            finish_reason = "tool_calls";
+            message = Message {role:MessageRole::Assistant,content:vec![ContentBlock::ToolCall {call:ModelToolCall {id:"smoke-call".into(),name:tool.into(),arguments}}]};
+            finish_reason = StopReason::ToolCalls;
         }
-        Ok(serde_json::from_value(json!({
-            "id":"smoke-response", "object":"chat.completion", "created":0,
-            "model":request.model, "choices":[{"index":0, "message":message, "finish_reason":finish_reason}]
-        }))?)
+        Ok(ModelResponse {id:Some("smoke-response".into()),model:request.model,message,stop_reason:finish_reason,usage:ModelUsage::default()})
+    }.await;
+        match result {
+            Ok(response) => {
+                aicoder_core::model::emit_response(&response, events.as_ref());
+                Ok(response)
+            }
+            Err(error) => Err(aicoder_core::model::ProviderError::new(
+                "scripted",
+                aicoder_core::model::ProviderErrorKind::Other,
+                error.to_string(),
+            )),
+        }
     }
 }
 
@@ -160,7 +193,7 @@ async fn run_case(case: Case) -> Result<Value> {
         }
     };
     ensure!(
-        result.final_message.content.as_deref() == Some("done"),
+        result.final_message.text_content().as_str() == "done",
         "final answer missing"
     );
     if matches!(case, Case::Edit) {

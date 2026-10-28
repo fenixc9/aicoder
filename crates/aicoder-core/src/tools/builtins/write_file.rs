@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::types::FunctionDefinition;
+use crate::model::ToolDefinition;
 
 use super::super::{
     ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess, util::parse_arguments,
@@ -21,14 +21,14 @@ struct WriteFileArguments {
 
 #[async_trait]
 impl ExecutableTool for WriteFileTool {
-    fn definition(&self) -> FunctionDefinition {
-        FunctionDefinition {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
             name: "write_file".to_string(),
             description: Some(
                 "Create or replace a UTF-8 file inside the workspace. Parent must exist."
                     .to_string(),
             ),
-            parameters: Some(json!({
+            parameters: json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
@@ -36,7 +36,7 @@ impl ExecutableTool for WriteFileTool {
                 },
                 "required": ["path", "content"],
                 "additionalProperties": false
-            })),
+            }),
         }
     }
 

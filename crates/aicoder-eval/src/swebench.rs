@@ -1,3 +1,4 @@
+use aicoder_core::model::{ModelOptions, ModelToolChoice};
 use std::{
     collections::HashSet,
     fs,
@@ -5,7 +6,7 @@ use std::{
     process::{Command, Output},
 };
 
-use aicoder_core::types::{ChatCompletionRequest, ChatMessage, Role};
+use aicoder_core::model::{Message, MessageRole, ModelRequest};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
@@ -152,7 +153,7 @@ pub struct SweBenchAdapter {
     include_hints: bool,
     system_prompt: String,
     temperature: Option<f32>,
-    max_tokens: Option<i32>,
+    max_tokens: Option<u32>,
 }
 
 impl SweBenchAdapter {
@@ -208,7 +209,7 @@ impl SweBenchAdapter {
         self
     }
 
-    pub fn max_tokens(mut self, max_tokens: Option<i32>) -> Self {
+    pub fn max_tokens(mut self, max_tokens: Option<u32>) -> Self {
         self.max_tokens = max_tokens;
         self
     }
@@ -216,22 +217,21 @@ impl SweBenchAdapter {
     pub fn adapt(&self, instance: &SweBenchInstance) -> Result<SweBenchCase> {
         validate_repo_name(&instance.repo)?;
         let repository = self.repository_location(&instance.repo);
-        let request = ChatCompletionRequest {
+        let request = ModelRequest {
             model: self.model.clone(),
             messages: vec![
-                chat_message(Role::System, self.system_prompt.clone()),
-                chat_message(Role::User, self.user_prompt(instance)),
+                chat_message(MessageRole::System, self.system_prompt.clone()),
+                chat_message(MessageRole::User, self.user_prompt(instance)),
             ],
-            temperature: self.temperature,
-            top_p: Some(1.0),
-            max_tokens: self.max_tokens,
-            seed: None,
-            tools: None,
-            tool_choice: None,
-            stream: None,
-            stream_options: None,
-            stop: None,
-            response_format: None,
+            options: ModelOptions {
+                temperature: self.temperature,
+                top_p: Some(1.0),
+                max_output_tokens: self.max_tokens,
+                ..Default::default()
+            },
+            tools: Vec::new(),
+            tool_choice: ModelToolChoice::Auto,
+            stream: false,
         };
         Ok(SweBenchCase {
             instance: instance.clone(),
@@ -427,15 +427,8 @@ pub fn write_swebench_predictions(
         .with_context(|| format!("Failed to write SWE-bench predictions {}", path.display()))
 }
 
-fn chat_message(role: Role, content: String) -> ChatMessage {
-    ChatMessage {
-        role,
-        content: Some(content),
-        reasoning: None,
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }
+fn chat_message(role: MessageRole, content: String) -> Message {
+    Message::text(role, content)
 }
 
 fn parse_instances(content: &str) -> Result<Vec<SweBenchInstance>> {

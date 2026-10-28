@@ -1,33 +1,59 @@
+use aicoder_core::model::{ModelOptions, ModelToolChoice};
 use std::sync::{Arc, Mutex};
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentRawEvent, AgentRunState, AgentTurnOutcome, ChatCompletionProvider,
-    ContextWindowConfig, PruningContextCompactor, SessionSelection, TurnCancelled,
-    TurnExecutionContext, TurnExecutor,
+    Agent, AgentConfig, AgentRawEvent, AgentRunState, AgentTurnOutcome, ContextWindowConfig,
+    ModelProvider, PruningContextCompactor, SessionSelection, TurnCancelled, TurnExecutionContext,
+    TurnExecutor,
+    model::{Message, MessageRole, ModelRequest, ModelResponse},
     session::{MemorySessionRepository, SessionRepository},
     tools::ToolRegistry,
-    types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role},
 };
-use anyhow::Result;
 use async_trait::async_trait;
 use tempfile::tempdir;
 
 struct StaticProvider;
 
 #[async_trait]
-impl ChatCompletionProvider for StaticProvider {
-    async fn complete(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
-        Ok(serde_json::from_value(serde_json::json!({
-            "id": "response-1",
-            "object": "chat.completion",
-            "created": 1,
-            "model": request.model,
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "done"},
-                "finish_reason": "stop"
-            }]
-        }))?)
+impl ModelProvider for StaticProvider {
+    fn model_spec(
+        &self,
+        model: &str,
+    ) -> std::result::Result<aicoder_core::model::ModelSpec, aicoder_core::model::ProviderError>
+    {
+        let mut spec = aicoder_core::model::ModelSpec::new("scripted", model);
+        spec.capabilities = aicoder_core::model::ModelCapabilities {
+            tools: true,
+            images: true,
+            reasoning_history: true,
+            temperature: true,
+            top_p: true,
+            seed: true,
+            stop_sequences: true,
+            structured_output: true,
+        };
+        Ok(spec)
+    }
+    async fn generate(
+        &self,
+        request: ModelRequest,
+        events: Arc<dyn aicoder_core::model::ModelEventSink>,
+        _context: aicoder_core::TurnExecutionContext,
+    ) -> std::result::Result<ModelResponse, aicoder_core::model::ProviderError> {
+        let result: anyhow::Result<ModelResponse> = async {
+        Ok(serde_json::from_value(serde_json::json!({"id":"response-1","model":request.model,"message":{"role":"assistant","content":[{"type":"text","text":"done"}]},"stop_reason":{"reason":"complete"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}}))?)
+    }.await;
+        match result {
+            Ok(response) => {
+                aicoder_core::model::emit_response(&response, events.as_ref());
+                Ok(response)
+            }
+            Err(error) => Err(aicoder_core::model::ProviderError::new(
+                "scripted",
+                aicoder_core::model::ProviderErrorKind::Other,
+                error.to_string(),
+            )),
+        }
     }
 }
 
@@ -52,26 +78,13 @@ async fn external_application_can_build_turn_executor_and_observe_raw_events() {
     let handler = Arc::new(move |event: &aicoder_core::events::AgentRawEventEnvelope| {
         target.lock().unwrap().push(event.event.clone());
     });
-    let request = ChatCompletionRequest {
+    let request = ModelRequest {
         model: "test-model".to_string(),
-        messages: vec![ChatMessage {
-            role: Role::User,
-            content: Some("hello".to_string()),
-            reasoning: None,
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        }],
-        temperature: None,
-        top_p: None,
-        max_tokens: None,
-        seed: None,
-        tools: None,
-        tool_choice: None,
-        stream: None,
-        stream_options: None,
-        stop: None,
-        response_format: None,
+        messages: vec![Message::text(MessageRole::User, "hello".to_string())],
+        options: ModelOptions::default(),
+        tools: Vec::new(),
+        tool_choice: ModelToolChoice::Auto,
+        stream: false,
     };
 
     let result = turn_executor
@@ -79,7 +92,7 @@ async fn external_application_can_build_turn_executor_and_observe_raw_events() {
         .await
         .unwrap();
 
-    assert_eq!(result.final_message.content.as_deref(), Some("done"));
+    assert_eq!(result.final_message.text_content().as_str(), "done");
     let observed = observed.lock().unwrap();
     assert!(matches!(
         observed.first(),
@@ -121,8 +134,12 @@ async fn external_application_can_run_a_persisted_turn() {
 
     let session = result.session.unwrap();
     assert_eq!(
-        result.execution_result.final_message.content.as_deref(),
-        Some("done")
+        result
+            .execution_result
+            .final_message
+            .text_content()
+            .as_str(),
+        "done"
     );
     assert_eq!(repository.open(&session.id).unwrap().messages().len(), 2);
 }
@@ -135,14 +152,7 @@ fn external_application_can_manage_conversation_sessions() {
     repository
         .append(
             &mut session,
-            ChatMessage {
-                role: Role::User,
-                content: Some("remember this".to_string()),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
+            Message::text(MessageRole::User, "remember this".to_string()),
         )
         .unwrap();
 
@@ -171,19 +181,13 @@ async fn external_application_can_cancel_a_turn() {
 
     let error = turn_executor
         .run_with_context(
-            ChatCompletionRequest {
+            ModelRequest {
                 model: "test-model".to_string(),
                 messages: Vec::new(),
-                temperature: None,
-                top_p: None,
-                max_tokens: None,
-                seed: None,
-                tools: None,
-                tool_choice: None,
-                stream: None,
-                stream_options: None,
-                stop: None,
-                response_format: None,
+                options: ModelOptions::default(),
+                tools: Vec::new(),
+                tool_choice: ModelToolChoice::Auto,
+                stream: false,
             },
             Arc::new(()),
             context,

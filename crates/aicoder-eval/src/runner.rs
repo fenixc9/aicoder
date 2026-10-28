@@ -1,7 +1,7 @@
 use std::{path::Path, sync::Arc, time::Instant};
 
 use aicoder_core::{
-    TurnExecutionResult, TurnExecutor, events::AgentEventHandler, types::FinishReason,
+    TurnExecutionResult, TurnExecutor, events::AgentEventHandler, model::StopReason,
 };
 use anyhow::{Context, Result, ensure};
 
@@ -131,12 +131,8 @@ fn infer_outcome(result: Option<&TurnExecutionResult>, run_error: Option<&str>) 
     if run_error.is_some() || result.is_none() {
         EvalRunOutcome::Failed
     } else if result.is_some_and(|result| {
-        result.finish_reason == Some(FinishReason::Stop)
-            && result
-                .final_message
-                .content
-                .as_deref()
-                .is_some_and(|content| !content.trim().is_empty())
+        result.finish_reason == Some(StopReason::Complete)
+            && !result.final_message.text_content().trim().is_empty()
     }) {
         EvalRunOutcome::Completed
     } else {
@@ -154,11 +150,11 @@ fn build_run_summary(
     let provider_reported = trace.events.iter().any(|event| {
         matches!(
             event.envelope.event,
-            aicoder_core::AgentRawEvent::UsageUpdated { .. }
+            aicoder_core::AgentRawEvent::UsageUpdated { ref usage } if usage.input_tokens.is_some() || usage.output_tokens.is_some() || usage.total_tokens.is_some()
         )
     });
     let traced_usage = if result.is_none() {
-        let mut usage = aicoder_core::types::Usage::default();
+        let mut usage = aicoder_core::model::ModelUsage::zero();
         for event in &trace.events {
             if let aicoder_core::AgentRawEvent::UsageUpdated { usage: update } =
                 &event.envelope.event
@@ -175,14 +171,14 @@ fn build_run_summary(
         outcome,
         duration_ms: duration.as_millis().try_into().unwrap_or(u64::MAX),
         rounds: result.map_or_else(|| trace.summary().rounds, |result| result.rounds),
-        final_content: result.and_then(|result| result.final_message.content.clone()),
+        final_content: result.map(|result| result.final_message.text_content()),
         error,
         usage: UsageSummary {
             provider_reported,
-            prompt_tokens: usage.map_or(0, |usage| usage.prompt_tokens),
-            completion_tokens: usage.map_or(0, |usage| usage.completion_tokens),
-            total_tokens: usage.map_or(0, |usage| usage.total_tokens),
-            cached_tokens: usage.map_or(0, |usage| usage.cached_tokens()),
+            prompt_tokens: usage.and_then(|usage| usage.input_tokens),
+            completion_tokens: usage.and_then(|usage| usage.output_tokens),
+            total_tokens: usage.and_then(|usage| usage.total_tokens),
+            cached_tokens: usage.and_then(|usage| usage.cached_input_tokens),
         },
     }
 }

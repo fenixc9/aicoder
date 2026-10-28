@@ -2,8 +2,9 @@
 
 use std::{path::PathBuf, sync::Arc};
 
+#[cfg(test)]
+use crate::model::{ModelOptions, ModelResponse};
 use anyhow::{Context, Result};
-use async_trait::async_trait;
 
 use crate::{
     cancellation::{TurnCancelled, TurnExecutionContext},
@@ -11,48 +12,14 @@ use crate::{
         AcceptAllCompletionVerifier, CompletionContext, CompletionVerdict, CompletionVerifier,
     },
     context::{ContextCompaction, ContextCompactionInput, ContextCompactor},
-    events::{
-        AgentEventEmitter, AgentEventHandler, AgentRawEvent, AgentStage, RoundOutcome,
-        emit_full_response_events,
-    },
+    events::{AgentEventEmitter, AgentEventHandler, AgentRawEvent, AgentStage, RoundOutcome},
+    model::{Message, ModelProvider, ModelRequest, ModelToolChoice, ModelUsage, StopReason},
     state::{AgentRunState, AgentRunStateMachine},
     tools::{
         ApprovalHandler, DenyAllApproval, DispatcherConfig, ToolDispatcher, ToolRegistry,
         default_registry,
     },
-    types::{
-        ChatCompletionRequest, ChatCompletionResponse, ChatMessage, FinishReason, ToolChoice,
-        ToolChoiceMode, Usage,
-    },
 };
-
-#[async_trait]
-pub trait ChatCompletionProvider: Send + Sync {
-    async fn complete(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse>;
-
-    async fn complete_with_events(
-        &self,
-        request: ChatCompletionRequest,
-        events: AgentEventEmitter,
-    ) -> Result<ChatCompletionResponse> {
-        let response = self.complete(request).await?;
-        emit_full_response_events(&events, &response);
-        Ok(response)
-    }
-
-    async fn complete_with_context(
-        &self,
-        request: ChatCompletionRequest,
-        events: AgentEventEmitter,
-        context: &TurnExecutionContext,
-    ) -> Result<ChatCompletionResponse> {
-        tokio::select! {
-            biased;
-            cancelled = context.cancelled() => Err(cancelled.into()),
-            response = self.complete_with_events(request, events) => response,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct TurnExecutionConfig {
@@ -71,15 +38,15 @@ impl Default for TurnExecutionConfig {
 
 #[derive(Debug, Clone)]
 pub struct TurnExecutionResult {
-    pub final_message: ChatMessage,
-    pub finish_reason: Option<FinishReason>,
-    pub messages: Vec<ChatMessage>,
-    pub usage: Usage,
+    pub final_message: Message,
+    pub finish_reason: Option<StopReason>,
+    pub messages: Vec<Message>,
+    pub usage: ModelUsage,
     pub rounds: usize,
 }
 
 pub struct TurnExecutor {
-    provider: Arc<dyn ChatCompletionProvider>,
+    provider: Arc<dyn ModelProvider>,
     dispatcher: Arc<ToolDispatcher>,
     completion_verifier: Arc<dyn CompletionVerifier>,
     context_compactor: Option<Arc<dyn ContextCompactor>>,
@@ -89,17 +56,17 @@ pub struct TurnExecutor {
 impl TurnExecutor {
     pub fn builder<P>(provider: P) -> TurnExecutorBuilder
     where
-        P: ChatCompletionProvider + 'static,
+        P: ModelProvider + 'static,
     {
         TurnExecutorBuilder::new(provider)
     }
 
-    pub fn builder_from_shared(provider: Arc<dyn ChatCompletionProvider>) -> TurnExecutorBuilder {
+    pub fn builder_from_shared(provider: Arc<dyn ModelProvider>) -> TurnExecutorBuilder {
         TurnExecutorBuilder::from_shared(provider)
     }
 
     pub fn new(
-        provider: Arc<dyn ChatCompletionProvider>,
+        provider: Arc<dyn ModelProvider>,
         dispatcher: Arc<ToolDispatcher>,
         config: TurnExecutionConfig,
     ) -> Self {
@@ -113,7 +80,7 @@ impl TurnExecutor {
     }
 
     fn new_with_verifier(
-        provider: Arc<dyn ChatCompletionProvider>,
+        provider: Arc<dyn ModelProvider>,
         dispatcher: Arc<ToolDispatcher>,
         completion_verifier: Arc<dyn CompletionVerifier>,
         context_compactor: Option<Arc<dyn ContextCompactor>>,
@@ -132,14 +99,14 @@ impl TurnExecutor {
         self.dispatcher.workspace_root()
     }
 
-    pub async fn run(&self, request: ChatCompletionRequest) -> Result<TurnExecutionResult> {
+    pub async fn run(&self, request: ModelRequest) -> Result<TurnExecutionResult> {
         self.run_with_context(request, Arc::new(()), TurnExecutionContext::new())
             .await
     }
 
     pub async fn run_with_handler(
         &self,
-        request: ChatCompletionRequest,
+        request: ModelRequest,
         handler: Arc<dyn AgentEventHandler>,
     ) -> Result<TurnExecutionResult> {
         self.run_with_context(request, handler, TurnExecutionContext::new())
@@ -148,7 +115,7 @@ impl TurnExecutor {
 
     pub async fn run_with_context(
         &self,
-        request: ChatCompletionRequest,
+        request: ModelRequest,
         handler: Arc<dyn AgentEventHandler>,
         context: TurnExecutionContext,
     ) -> Result<TurnExecutionResult> {
@@ -207,7 +174,7 @@ impl TurnExecutor {
 
     async fn run_inner(
         &self,
-        mut request: ChatCompletionRequest,
+        mut request: ModelRequest,
         events: &AgentEventEmitter,
         state: &mut AgentRunStateMachine,
         context: &TurnExecutionContext,
@@ -219,16 +186,20 @@ impl TurnExecutor {
             anyhow::bail!("Turn execution max_rounds must be greater than zero");
         }
 
-        request.stream = Some(self.config.stream);
+        request.stream = self.config.stream;
         let definitions = self.dispatcher.registry().definitions();
-        if !definitions.is_empty() {
-            request.tools = Some(definitions);
-            request.tool_choice = Some(ToolChoice::Mode(ToolChoiceMode::Auto));
+        if request.tools.is_empty() {
+            request.tools = definitions;
+        } else {
+            anyhow::ensure!(
+                request.tools.iter().all(|tool| definitions.contains(tool)),
+                "request tools must match registered tool definitions"
+            );
         }
 
         let mut transcript = request.messages.clone();
         let mut context_messages = transcript.clone();
-        let mut usage = Usage::default();
+        let mut usage = ModelUsage::zero();
 
         for round in 1..=self.config.max_rounds {
             let round_events = events.for_round(round);
@@ -238,8 +209,8 @@ impl TurnExecutor {
                 let input = ContextCompactionInput {
                     model: &request.model,
                     messages: &context_messages,
-                    tools: request.tools.as_deref(),
-                    max_output_tokens: request.max_tokens,
+                    tools: Some(request.tools.as_slice()),
+                    max_output_tokens: request.options.max_output_tokens,
                 };
                 let estimated_tokens = compactor.estimate_tokens(input);
                 let target_tokens = compactor.target_tokens(input);
@@ -282,7 +253,7 @@ impl TurnExecutor {
                             });
                         }
                     };
-                    if compacted.usage.total_tokens > 0 {
+                    if compacted.usage.total_tokens != Some(0) {
                         round_events.emit(AgentRawEvent::UsageUpdated {
                             usage: compacted.usage.clone().into(),
                         });
@@ -298,16 +269,43 @@ impl TurnExecutor {
                     transition_state(state, &round_events, AgentRunState::AwaitingModel { round })?;
                 }
             }
-            request.messages = context_messages.clone();
-            round_events.emit(AgentRawEvent::ModelRequestStarted);
-            let response = match self
+            let model_spec = self
                 .provider
-                .complete_with_context(request.clone(), round_events.clone(), context)
-                .await
-                .with_context(|| format!("Model request failed in agent round {round}"))
+                .model_spec(&request.model)
+                .map_err(anyhow::Error::from)?;
+            request.messages = context_messages
+                .iter()
+                .filter_map(|message| {
+                    let mut message = message.clone();
+                    if message.role == crate::model::MessageRole::Assistant
+                        && !model_spec.capabilities.reasoning_history
+                    {
+                        message.content.retain(|block| {
+                            !matches!(block, crate::model::ContentBlock::Reasoning { .. })
+                        });
+                        if message.content.is_empty() {
+                            return None;
+                        }
+                    }
+                    Some(message)
+                })
+                .collect();
+            request.validate(&model_spec).map_err(anyhow::Error::from)?;
+            round_events.emit(AgentRawEvent::ModelRequestStarted);
+            let sink = Arc::new(crate::events::RunModelEventSink::new(round_events.clone()));
+            let response = match tokio::select! {
+                biased;
+                cancelled = context.cancelled() => Err(anyhow::Error::from(cancelled)),
+                result = self.provider.generate(request.clone(), sink.clone(), context.clone()) =>
+                    result.map_err(|error| if error.kind == crate::model::ProviderErrorKind::Cancelled {
+                        context.cancel(error.message);
+                        anyhow::Error::from(context.error())
+                    } else { anyhow::Error::from(error) }),
+            }.with_context(|| format!("Model request failed in agent round {round}"))
             {
                 Ok(response) => response,
                 Err(error) if error.downcast_ref::<TurnCancelled>().is_some() => {
+                    sink.abort(&context.reason());
                     round_events.emit(AgentRawEvent::ModelResponseFailed {
                         message: context.reason(),
                     });
@@ -317,6 +315,7 @@ impl TurnExecutor {
                     return Err(error);
                 }
                 Err(error) => {
+                    sink.abort(&error.to_string());
                     round_events.emit(AgentRawEvent::ModelResponseFailed {
                         message: format!("{error:#}").into(),
                     });
@@ -326,22 +325,39 @@ impl TurnExecutor {
                     return Err(error);
                 }
             };
-            if let Some(round_usage) = response.usage {
-                usage.accumulate(&round_usage);
+            if let Err(error) = response.validate() {
+                sink.abort(&error.to_string());
+                return Err(error.into());
             }
-
-            let choice = response
-                .choices
-                .into_iter()
-                .next()
-                .context("Model response contains no choices")?;
-            let finish_reason = choice.finish_reason;
-            let assistant_message = choice.message;
-            let tool_calls = assistant_message.tool_calls.clone().unwrap_or_default();
+            sink.finish(&response);
+            usage.accumulate(&response.usage);
+            let finish_reason = Some(response.stop_reason.clone());
+            let assistant_message = response.message;
+            let tool_calls = assistant_message.tool_calls().cloned().collect::<Vec<_>>();
+            anyhow::ensure!(
+                tool_calls.is_empty()
+                    || (model_spec.capabilities.tools
+                        && request.tool_choice != ModelToolChoice::None),
+                "model returned forbidden tool calls"
+            );
+            if let ModelToolChoice::Named(name) = &request.tool_choice {
+                anyhow::ensure!(
+                    tool_calls.iter().all(|call| &call.name == name) && !tool_calls.is_empty(),
+                    "model did not call the requested tool"
+                );
+            }
+            anyhow::ensure!(
+                request.tool_choice != ModelToolChoice::Required || !tool_calls.is_empty(),
+                "model did not provide a required tool call"
+            );
             transcript.push(assistant_message.clone());
             context_messages.push(assistant_message.clone());
 
             if tool_calls.is_empty() {
+                anyhow::ensure!(
+                    finish_reason == Some(StopReason::Complete),
+                    "Model stopped without completing: {finish_reason:?}"
+                );
                 transition_state(
                     state,
                     &round_events,
@@ -488,7 +504,7 @@ fn ensure_valid_compaction(compaction: &ContextCompaction, target_tokens: usize)
 
 /// Convenience assembly for applications that want the built-in coding tools.
 pub struct TurnExecutorBuilder {
-    provider: Arc<dyn ChatCompletionProvider>,
+    provider: Arc<dyn ModelProvider>,
     registry: Option<Arc<ToolRegistry>>,
     workspace: PathBuf,
     approval: Arc<dyn ApprovalHandler>,
@@ -501,12 +517,12 @@ pub struct TurnExecutorBuilder {
 impl TurnExecutorBuilder {
     pub fn new<P>(provider: P) -> Self
     where
-        P: ChatCompletionProvider + 'static,
+        P: ModelProvider + 'static,
     {
         Self::from_shared(Arc::new(provider))
     }
 
-    pub fn from_shared(provider: Arc<dyn ChatCompletionProvider>) -> Self {
+    pub fn from_shared(provider: Arc<dyn ModelProvider>) -> Self {
         Self {
             provider,
             registry: None,
@@ -619,19 +635,13 @@ fn bounded_verifier_feedback(mut feedback: String) -> String {
     feedback
 }
 
-fn completion_feedback_message(feedback: String) -> ChatMessage {
-    ChatMessage {
-        // Keep the verifier observation in session history without treating it as a new
-        // application-owned system prompt.
-        role: crate::types::Role::User,
-        content: Some(format!(
+fn completion_feedback_message(feedback: String) -> Message {
+    Message::text(
+        crate::model::MessageRole::User,
+        format!(
             "Automated completion verification rejected the previous answer. Continue working and address this observation before answering again.\n\n{feedback}"
-        )),
-        reasoning: None,
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -653,16 +663,17 @@ mod tests {
     use crate::{
         ToolExecutionOutcome,
         context::{ContextWindowConfig, PruningContextCompactor},
+        model::ToolDefinition,
         tools::{
             AllowAllApproval, ApprovalHandler, DispatcherConfig, ExecutableTool, ToolCapability,
             ToolContext, ToolFailure, ToolInvocation, ToolRegistry, ToolSuccess,
         },
-        types::FunctionDefinition,
     };
 
     struct MockProvider {
-        responses: Mutex<VecDeque<ChatCompletionResponse>>,
-        requests: Mutex<Vec<ChatCompletionRequest>>,
+        responses: Mutex<VecDeque<ModelResponse>>,
+        requests: Mutex<Vec<ModelRequest>>,
+        reasoning_history: bool,
     }
 
     struct PendingProvider {
@@ -679,35 +690,105 @@ mod tests {
     }
 
     #[async_trait]
-    impl ChatCompletionProvider for PendingProvider {
-        async fn complete(
+    impl ModelProvider for PendingProvider {
+        fn model_spec(
             &self,
-            _request: ChatCompletionRequest,
-        ) -> Result<ChatCompletionResponse> {
-            let _marker = DropMarker(Arc::clone(&self.dropped));
-            self.started.notify_one();
-            std::future::pending().await
+            model: &str,
+        ) -> std::result::Result<crate::model::ModelSpec, crate::model::ProviderError> {
+            let mut spec = crate::model::ModelSpec::new("scripted", model);
+            spec.capabilities = crate::model::ModelCapabilities {
+                tools: true,
+                images: true,
+                reasoning_history: true,
+                temperature: true,
+                top_p: true,
+                seed: true,
+                stop_sequences: true,
+                structured_output: true,
+            };
+            Ok(spec)
+        }
+        async fn generate(
+            &self,
+            _request: ModelRequest,
+            events: Arc<dyn crate::model::ModelEventSink>,
+            _context: crate::TurnExecutionContext,
+        ) -> std::result::Result<ModelResponse, crate::model::ProviderError> {
+            let result: anyhow::Result<ModelResponse> = async {
+                let _marker = DropMarker(Arc::clone(&self.dropped));
+                self.started.notify_one();
+                std::future::pending().await
+            }
+            .await;
+            match result {
+                Ok(response) => {
+                    crate::model::emit_response(&response, events.as_ref());
+                    Ok(response)
+                }
+                Err(error) => Err(crate::model::ProviderError::new(
+                    "scripted",
+                    crate::model::ProviderErrorKind::Other,
+                    error.to_string(),
+                )),
+            }
         }
     }
 
     impl MockProvider {
-        fn new(responses: Vec<ChatCompletionResponse>) -> Self {
+        fn new(responses: Vec<ModelResponse>) -> Self {
             Self {
                 responses: Mutex::new(responses.into()),
+                reasoning_history: true,
                 requests: Mutex::new(Vec::new()),
             }
         }
     }
 
     #[async_trait]
-    impl ChatCompletionProvider for MockProvider {
-        async fn complete(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
-            self.requests.lock().unwrap().push(request);
-            self.responses
-                .lock()
-                .unwrap()
-                .pop_front()
-                .context("No mock response available")
+    impl ModelProvider for MockProvider {
+        fn model_spec(
+            &self,
+            model: &str,
+        ) -> std::result::Result<crate::model::ModelSpec, crate::model::ProviderError> {
+            let mut spec = crate::model::ModelSpec::new("scripted", model);
+            spec.capabilities = crate::model::ModelCapabilities {
+                tools: true,
+                images: true,
+                reasoning_history: self.reasoning_history,
+                temperature: true,
+                top_p: true,
+                seed: true,
+                stop_sequences: true,
+                structured_output: true,
+            };
+            Ok(spec)
+        }
+        async fn generate(
+            &self,
+            request: ModelRequest,
+            events: Arc<dyn crate::model::ModelEventSink>,
+            _context: crate::TurnExecutionContext,
+        ) -> std::result::Result<ModelResponse, crate::model::ProviderError> {
+            let result: anyhow::Result<ModelResponse> = async {
+                self.requests.lock().unwrap().push(request);
+                self.responses
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .context("No mock response available")
+            }
+            .await;
+            match result {
+                Ok(response) => {
+                    crate::model::emit_response(&response, events.as_ref());
+                    Ok(response)
+                }
+                Err(error) => Err(crate::model::ProviderError::new(
+                    "scripted",
+                    crate::model::ProviderErrorKind::Other,
+                    error.to_string(),
+                )),
+            }
         }
     }
 
@@ -758,11 +839,11 @@ mod tests {
 
     #[async_trait]
     impl ExecutableTool for EchoTool {
-        fn definition(&self) -> FunctionDefinition {
-            FunctionDefinition {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
                 name: "echo".to_string(),
                 description: Some("Echo a value".to_string()),
-                parameters: Some(json!({"type":"object"})),
+                parameters: json!({"type":"object"}),
             }
         }
 
@@ -784,11 +865,11 @@ mod tests {
 
     #[async_trait]
     impl ExecutableTool for CommandEchoTool {
-        fn definition(&self) -> FunctionDefinition {
-            FunctionDefinition {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
                 name: "command_echo".to_string(),
                 description: Some("Echo after approval".to_string()),
-                parameters: Some(json!({"type":"object"})),
+                parameters: json!({"type":"object"}),
             }
         }
 
@@ -810,11 +891,11 @@ mod tests {
 
     #[async_trait]
     impl ExecutableTool for PendingCommandTool {
-        fn definition(&self) -> FunctionDefinition {
-            FunctionDefinition {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
                 name: "pending_command".to_string(),
                 description: Some("Wait forever for cancellation testing".to_string()),
-                parameters: Some(json!({"type":"object"})),
+                parameters: json!({"type":"object"}),
             }
         }
 
@@ -833,51 +914,36 @@ mod tests {
         }
     }
 
-    fn response(value: Value) -> ChatCompletionResponse {
+    fn response(value: Value) -> ModelResponse {
         serde_json::from_value(value).unwrap()
     }
 
-    fn request() -> ChatCompletionRequest {
-        ChatCompletionRequest {
+    fn request() -> ModelRequest {
+        ModelRequest {
             model: "deepseek-chat".to_string(),
-            messages: vec![ChatMessage {
-                role: crate::types::Role::User,
-                content: Some("echo hello".to_string()),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            }],
-            temperature: None,
-            top_p: None,
-            max_tokens: Some(128),
-            seed: None,
-            tools: None,
-            tool_choice: None,
-            stream: Some(true),
-            stream_options: None,
-            stop: None,
-            response_format: None,
+            messages: vec![Message::text(
+                crate::model::MessageRole::User,
+                "echo hello".to_string(),
+            )],
+            options: ModelOptions {
+                max_output_tokens: (Some(128)).and_then(|v| u32::try_from(v).ok()),
+                ..Default::default()
+            },
+            tools: Vec::new(),
+            tool_choice: ModelToolChoice::Auto,
+            stream: true,
         }
     }
 
     #[tokio::test]
     async fn agent_executes_tool_and_returns_final_answer() {
         let provider = Arc::new(MockProvider::new(vec![
-            response(json!({
-                "id":"one","object":"chat.completion","created":1,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":null,
-                    "tool_calls":[{"id":"call-1","type":"function","function":{"name":"echo","arguments":"{\"value\":\"hello\"}"}}]},
-                    "finish_reason":"tool_calls"}],
-                "usage":{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,
-                    "prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":2}}
-            })),
-            response(json!({
-                "id":"two","object":"chat.completion","created":2,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],
-                "usage":{"prompt_tokens":15,"completion_tokens":1,"total_tokens":16,
-                    "prompt_tokens_details":{"cached_tokens":10}}
-            })),
+            response(
+                json!({"id":"one","model":"deepseek-chat","message":{"role":"assistant","content":[{"type":"tool_call","call":{"id":"call-1","name":"echo","arguments":{"value": "hello"}}}]},"stop_reason":{"reason":"tool_calls"},"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12,"cached_input_tokens":4,"cache_write_tokens":2}}),
+            ),
+            response(
+                json!({"id":"two","model":"deepseek-chat","message":{"role":"assistant","content":[{"type":"text","text":"done"}]},"stop_reason":{"reason":"complete"},"usage":{"input_tokens":15,"output_tokens":1,"total_tokens":16,"cached_input_tokens":10,"cache_write_tokens":null}}),
+            ),
         ]));
         let directory = tempdir().unwrap();
         let mut registry = ToolRegistry::default();
@@ -895,39 +961,38 @@ mod tests {
 
         let result = agent.run(request()).await.unwrap();
 
-        assert_eq!(result.final_message.content.as_deref(), Some("done"));
+        assert_eq!(result.final_message.text_content().as_str(), "done");
         assert_eq!(result.rounds, 2);
-        assert_eq!(result.usage.total_tokens, 28);
-        assert_eq!(result.usage.cached_tokens(), 14);
-        assert_eq!(result.usage.uncached_tokens(), 11);
+        assert_eq!(result.usage.total_tokens, Some(28));
+        assert_eq!(result.usage.cached_input_tokens, Some(14));
         assert_eq!(
             result
                 .usage
-                .prompt_tokens_details
-                .as_ref()
-                .unwrap()
-                .cache_write_tokens,
-            Some(2)
+                .input_tokens
+                .zip(result.usage.cached_input_tokens)
+                .map(|(input, cached)| input - cached),
+            Some(11)
         );
+        assert_eq!(result.usage.cache_write_tokens, None);
         assert_eq!(result.messages.len(), 4);
-        assert_eq!(result.messages[2].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(
+            result.messages[2].tool_result().map(|(id, _, _)| id),
+            Some("call-1")
+        );
 
         let requests = provider.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].stream, Some(true));
-        assert_eq!(requests[0].tools.as_ref().unwrap().len(), 1);
+        assert!(requests[0].stream);
+        assert_eq!(requests[0].tools.len(), 1);
         assert_eq!(requests[1].messages.len(), 3);
     }
 
     #[tokio::test]
     async fn agent_stops_at_round_limit() {
         let tool_response = || {
-            response(json!({
-                "id":"loop","object":"chat.completion","created":1,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":null,
-                    "tool_calls":[{"id":"call-loop","type":"function","function":{"name":"echo","arguments":"{}"}}]},
-                    "finish_reason":"tool_calls"}]
-            }))
+            response(
+                json!({"id":"loop","model":"deepseek-chat","message":{"role":"assistant","content":[{"type":"tool_call","call":{"id":"call-loop","name":"echo","arguments":{}}}]},"stop_reason":{"reason":"tool_calls"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}}),
+            )
         };
         let provider = Arc::new(MockProvider::new(vec![tool_response(), tool_response()]));
         let directory = tempdir().unwrap();
@@ -958,16 +1023,12 @@ mod tests {
     #[tokio::test]
     async fn agent_feeds_tool_error_back_to_model() {
         let provider = Arc::new(MockProvider::new(vec![
-            response(json!({
-                "id":"one","object":"chat.completion","created":1,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":null,
-                    "tool_calls":[{"id":"bad-call","type":"function","function":{"name":"missing","arguments":"{}"}}]},
-                    "finish_reason":"tool_calls"}]
-            })),
-            response(json!({
-                "id":"two","object":"chat.completion","created":2,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":"recovered"},"finish_reason":"stop"}]
-            })),
+            response(
+                json!({"id":"one","model":"deepseek-chat","message":{"role":"assistant","content":[{"type":"tool_call","call":{"id":"bad-call","name":"missing","arguments":{}}}]},"stop_reason":{"reason":"tool_calls"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}}),
+            ),
+            response(
+                json!({"id":"two","model":"deepseek-chat","message":{"role":"assistant","content":[{"type":"text","text":"recovered"}]},"stop_reason":{"reason":"complete"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}}),
+            ),
         ]));
         let directory = tempdir().unwrap();
         let dispatcher = Arc::new(
@@ -983,24 +1044,21 @@ mod tests {
 
         let result = agent.run(request()).await.unwrap();
 
-        assert_eq!(result.final_message.content.as_deref(), Some("recovered"));
+        assert_eq!(result.final_message.text_content().as_str(), "recovered");
         let requests = provider.requests.lock().unwrap();
-        let tool_result: Value =
-            serde_json::from_str(requests[1].messages[2].content.as_ref().unwrap()).unwrap();
+        let tool_result: Value = requests[1].messages[2].tool_result().unwrap().1.clone();
         assert_eq!(tool_result["error"]["code"], "unknown_tool");
     }
 
     #[tokio::test]
     async fn agent_continues_after_completion_rejection() {
         let provider = Arc::new(MockProvider::new(vec![
-            response(json!({
-                "id":"one","object":"chat.completion","created":1,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":"done too early"},"finish_reason":"stop"}]
-            })),
-            response(json!({
-                "id":"two","object":"chat.completion","created":2,"model":"deepseek-chat",
-                "choices":[{"index":0,"message":{"role":"assistant","content":"verified"},"finish_reason":"stop"}]
-            })),
+            response(
+                json!({"id":"one","model":"deepseek-chat","message":{"role":"assistant","content":[{"type":"text","text":"done too early"}]},"stop_reason":{"reason":"complete"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}}),
+            ),
+            response(
+                json!({"id":"two","model":"deepseek-chat","message":{"role":"assistant","content":[{"type":"text","text":"verified"}]},"stop_reason":{"reason":"complete"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}}),
+            ),
         ]));
         let directory = tempdir().unwrap();
         let handler = Arc::new(RecordingHandler::default());
@@ -1019,16 +1077,18 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.rounds, 2);
-        assert_eq!(result.final_message.content.as_deref(), Some("verified"));
+        assert_eq!(result.final_message.text_content().as_str(), "verified");
         let requests = provider.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[1].messages.len(), 3);
-        assert_eq!(requests[1].messages[2].role, crate::types::Role::User);
+        assert_eq!(
+            requests[1].messages[2].role,
+            crate::model::MessageRole::User
+        );
         assert!(
             requests[1].messages[2]
-                .content
-                .as_deref()
-                .unwrap()
+                .text_content()
+                .as_str()
                 .contains("tests have not passed")
         );
         drop(requests);
@@ -1070,10 +1130,9 @@ mod tests {
 
     #[tokio::test]
     async fn turn_executor_compacts_model_context_but_preserves_transcript() {
-        let provider = Arc::new(MockProvider::new(vec![response(json!({
-            "id":"compact","object":"chat.completion","created":1,"model":"deepseek-chat",
-            "choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]
-        }))]));
+        let provider = Arc::new(MockProvider::new(vec![response(
+            json!({"id":"compact","model":"deepseek-chat","message":{"role":"assistant","content":[{"type":"text","text":"done"}]},"stop_reason":{"reason":"complete"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}}),
+        )]));
         let directory = tempdir().unwrap();
         let handler = Arc::new(RecordingHandler::default());
         let compactor = PruningContextCompactor::new(ContextWindowConfig {
@@ -1089,33 +1148,15 @@ mod tests {
             .build()
             .unwrap();
         let mut request = request();
-        request.max_tokens = Some(40);
+        request.options.max_output_tokens = Some(40);
         let old_context = "old context ".repeat(100);
         request.messages = vec![
-            ChatMessage {
-                role: crate::types::Role::System,
-                content: Some("system".to_string()),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
-            ChatMessage {
-                role: crate::types::Role::User,
-                content: Some(old_context.clone()),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
-            ChatMessage {
-                role: crate::types::Role::User,
-                content: Some("latest request".to_string()),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
+            Message::text(crate::model::MessageRole::System, "system".to_string()),
+            Message::text(crate::model::MessageRole::User, old_context.clone()),
+            Message::text(
+                crate::model::MessageRole::User,
+                "latest request".to_string(),
+            ),
         ];
 
         let result = executor
@@ -1125,23 +1166,22 @@ mod tests {
 
         assert_eq!(result.messages.len(), 4);
         assert_eq!(
-            result.messages[1].content.as_deref(),
-            Some(old_context.as_str())
+            result.messages[1].text_content().as_str(),
+            old_context.as_str()
         );
         let requests = provider.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].messages.len(), 3);
         assert!(requests[0].messages.iter().any(|message| {
             message
-                .content
-                .as_deref()
-                .is_some_and(|content| content.contains("Context compaction removed"))
+                .text_content()
+                .contains("Context compaction removed")
         }));
         assert!(
             !requests[0]
                 .messages
                 .iter()
-                .any(|message| message.content.as_deref() == Some(old_context.as_str()))
+                .any(|message| message.text_content().as_str() == old_context.as_str())
         );
         drop(requests);
 
@@ -1234,12 +1274,9 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_interrupts_pending_tool_approval_and_closes_events() {
-        let provider = Arc::new(MockProvider::new(vec![response(json!({
-            "id":"approval","object":"chat.completion","created":1,"model":"deepseek-chat",
-            "choices":[{"index":0,"message":{"role":"assistant","content":null,
-                "tool_calls":[{"id":"call-approval","type":"function","function":{"name":"command_echo","arguments":"{}"}}]},
-                "finish_reason":"tool_calls"}]
-        }))]));
+        let provider = Arc::new(MockProvider::new(vec![response(
+            json!({"id":"approval","model":"deepseek-chat","message":{"role":"assistant","content":[{"type":"tool_call","call":{"id":"call-approval","name":"command_echo","arguments":{}}}]},"stop_reason":{"reason":"tool_calls"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}}),
+        )]));
         let approval_started = Arc::new(tokio::sync::Notify::new());
         let directory = tempdir().unwrap();
         let handler = Arc::new(RecordingHandler::default());
@@ -1291,12 +1328,9 @@ mod tests {
 
     #[tokio::test]
     async fn cancellation_drops_inflight_tool_execution() {
-        let provider = Arc::new(MockProvider::new(vec![response(json!({
-            "id":"tool","object":"chat.completion","created":1,"model":"deepseek-chat",
-            "choices":[{"index":0,"message":{"role":"assistant","content":null,
-                "tool_calls":[{"id":"call-tool","type":"function","function":{"name":"pending_command","arguments":"{}"}}]},
-                "finish_reason":"tool_calls"}]
-        }))]));
+        let provider = Arc::new(MockProvider::new(vec![response(
+            json!({"id":"tool","model":"deepseek-chat","message":{"role":"assistant","content":[{"type":"tool_call","call":{"id":"call-tool","name":"pending_command","arguments":{}}}]},"stop_reason":{"reason":"tool_calls"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}}),
+        )]));
         let tool_started = Arc::new(tokio::sync::Notify::new());
         let dropped = Arc::new(AtomicBool::new(false));
         let directory = tempdir().unwrap();
@@ -1338,5 +1372,59 @@ mod tests {
                 if call_id.as_ref() == "call-tool"
                     && matches!(outcome.as_ref(), ToolExecutionOutcome::Cancelled)
         )));
+    }
+    #[tokio::test]
+    async fn reasoning_is_preserved_in_transcript_but_projected_by_model_capability() {
+        use crate::model::{ContentBlock, MessageRole, ModelToolCall};
+        let first = ModelResponse {
+            id: None,
+            model: "deepseek-chat".into(),
+            message: Message {
+                role: MessageRole::Assistant,
+                content: vec![
+                    ContentBlock::Reasoning {
+                        text: "private analysis".into(),
+                    },
+                    ContentBlock::ToolCall {
+                        call: ModelToolCall {
+                            id: "c".into(),
+                            name: "echo".into(),
+                            arguments: json!({}),
+                        },
+                    },
+                ],
+            },
+            stop_reason: StopReason::ToolCalls,
+            usage: ModelUsage::default(),
+        };
+        let mut second = first.clone();
+        second.message = Message::text(MessageRole::Assistant, "done");
+        second.stop_reason = StopReason::Complete;
+        let mut provider = MockProvider::new(vec![first, second]);
+        provider.reasoning_history = false;
+        let provider = Arc::new(provider);
+        let workspace = tempdir().unwrap();
+        let mut registry = ToolRegistry::default();
+        registry.register(EchoTool).unwrap();
+        let executor = TurnExecutor::builder_from_shared(provider.clone())
+            .workspace(workspace.path())
+            .registry(registry)
+            .build()
+            .unwrap();
+        let result = executor.run(request()).await.unwrap();
+        assert_eq!(result.usage.total_tokens, None);
+        assert!(
+            result.messages[1]
+                .content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Reasoning { .. }))
+        );
+        let requests = provider.requests.lock().unwrap();
+        assert!(requests[1].messages.iter().all(|m| {
+            m.content
+                .iter()
+                .all(|b| !matches!(b, ContentBlock::Reasoning { .. }))
+        }));
+        assert!(requests[1].messages[1].tool_calls().next().is_some());
     }
 }

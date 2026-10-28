@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Result;
 
-use crate::types::{Tool as ApiTool, ToolType};
+use crate::model::ToolDefinition;
 
 use super::ExecutableTool;
 
@@ -33,13 +33,7 @@ impl ToolRegistry {
             .cloned()
     }
 
-    pub fn definitions(&self) -> Vec<ApiTool> {
-        self.tools
-            .iter()
-            .map(|tool| ApiTool {
-                tool_type: ToolType::Function,
-                function: tool.definition(),
-            })
-            .collect()
+    pub fn definitions(&self) -> Vec<ToolDefinition> {
+        self.tools.iter().map(|tool| tool.definition()).collect()
     }
 }

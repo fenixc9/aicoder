@@ -4,10 +4,10 @@
 terminal UI, and any provider's request format. `ChatClient` implements its
 `ModelProvider` trait in `aicoder-providers`.
 
-This is the first part of the model migration. `TurnExecutor`, sessions and
-existing applications still use `ChatCompletionProvider` and the legacy
-`types` module. Their migration is the next S1 step; there is one agent loop,
-not a second implementation for the new model contract. S1 is not complete.
+`TurnExecutor`, tools, sessions, CLI, TUI and evaluation use this contract.
+OpenAI protocol types live only in `aicoder-providers::wire`; core retains a
+private v1 session storage codec for compatibility. S1 still needs unified
+partial outcomes, run budgets and provider transport configuration.
 
 ## Types and ownership
 
@@ -67,11 +67,13 @@ before HTTP can emit `Aborted` without `Started`. Streaming calls deliver
 partial text, reasoning and tool arguments; non-streaming calls emit their
 assembled content before `Finished`. Tool indices are local to a response.
 
-Usage is emitted at most once per invocation. On success an unknown usage
-snapshot is still emitted if the server omitted usage; this is not evidence
-that the provider reported counts. On failure, any previously reported usage
-is emitted before `Aborted`. Consumers must not sum this event and the returned
-response as two separate usages.
+Usage events are cumulative snapshots for one invocation, published as the
+server reports them; replace the previous snapshot instead of adding snapshots
+together. A final unknown snapshot is emitted if no usage was reported. The
+executor aggregates one final response usage, or the latest failure snapshot,
+per request. It never counts both events and the returned response as separate
+usage. Publishing early also preserves reported counts if a host drops a
+cancelled provider future.
 
 Cancellation covers HTTP requests, retry waits and response streams. Errors
 retain a structured kind, HTTP status when available, retryability and a
@@ -84,12 +86,20 @@ filtered answers retain distinct stop reasons. Unrecognized wire finish
 reasons are rejected by the current codec. The neutral `Other` variant is
 available to adapters that can preserve additional stop reasons.
 
-## Next migration step
+## Execution and next steps
 
-Move the legacy wire codec into providers, switch the execution/session/tool
-interfaces to the canonical messages and use `ModelProvider` throughout the
-same loop. Preserve v1 session compatibility through a storage codec, not
-through a permanent second public message model. Then add unified run outcomes
-and budgets. The current legacy run results still have their old usage
-semantics until that migration; the optional counts described above belong to
-the new model API.
+`TurnExecutor::builder(provider)` injects any `ModelProvider` into the same
+loop. The executor injects registered tools when a request has no tool list;
+explicit tool definitions must match the registry. Tool-choice policy is
+preserved and enforced before dispatch. Provider capability and response
+validation protect custom providers as well as the built-in HTTP adapter.
+
+Full transcripts preserve reasoning. For assistant history that the selected
+model cannot replay, the executor projects display-only reasoning out of the
+model-facing context. It retains opaque state and rejects incompatible state.
+See [API migrations](migrations.md) for session v1/v2 compatibility and result
+changes, and [the embedded example](../crates/aicoder-core/examples/embedded_agent.rs)
+for a full turn with a custom in-memory model, tool and store.
+
+The next S1 task is unified partial run outcomes and budgets, followed by
+provider proxy/credential configuration. Tree sessions and steering remain S2.

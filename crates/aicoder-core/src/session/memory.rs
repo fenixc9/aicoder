@@ -8,11 +8,11 @@ use std::{
 use anyhow::{Context, Result, bail};
 use uuid::Uuid;
 
-use crate::types::{ChatMessage, Role};
+use crate::model::{Message, MessageRole};
 
 use super::{Session, SessionInfo, SessionMessage, SessionMetadata, SessionRepository};
 
-const SESSION_VERSION: u32 = 1;
+use super::SESSION_VERSION;
 
 /// In-process repository intended for tests and ephemeral frontends.
 #[derive(Debug, Default)]
@@ -35,13 +35,12 @@ fn now_millis() -> Result<u64> {
         .context("Current timestamp does not fit in u64")
 }
 
-fn title_from_message(message: &ChatMessage) -> Option<String> {
-    if message.role != Role::User {
+fn title_from_message(message: &Message) -> Option<String> {
+    if message.role != MessageRole::User {
         return None;
     }
     let title = message
-        .content
-        .as_deref()?
+        .text_content()
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
@@ -110,8 +109,8 @@ impl SessionRepository for MemorySessionRepository {
         Ok(sessions)
     }
 
-    fn append(&self, session: &mut Session, message: ChatMessage) -> Result<()> {
-        if message.role == Role::System {
+    fn append(&self, session: &mut Session, message: Message) -> Result<()> {
+        if message.role == MessageRole::System {
             bail!("System messages are runtime context and cannot be stored in a session");
         }
         let timestamp = now_millis()?;
@@ -151,15 +150,8 @@ mod tests {
 
     use super::*;
 
-    fn user_message(content: &str) -> ChatMessage {
-        ChatMessage {
-            role: Role::User,
-            content: Some(content.to_string()),
-            reasoning: None,
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        }
+    fn user_message(content: &str) -> Message {
+        Message::text(MessageRole::User, content.to_string())
     }
 
     #[test]
@@ -189,7 +181,7 @@ mod tests {
         let repository = MemorySessionRepository::new();
         let mut session = repository.create(cwd.path()).unwrap();
         let mut message = user_message("system");
-        message.role = Role::System;
+        message.role = MessageRole::System;
 
         let error = repository.append(&mut session, message).unwrap_err();
         assert!(error.to_string().contains("System messages"));

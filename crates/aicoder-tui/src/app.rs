@@ -6,9 +6,9 @@ use std::{
 use aicoder_core::{
     AgentRawEvent, AgentRawEventEnvelope, AgentRunState, AgentTurnOutcome, SessionSelection,
     ToolExecutionOutcome, TurnExecutionContext,
+    model::{Message, MessageRole, ModelUsage},
     session::{Session, SessionInfo},
     tools::ToolInvocation,
-    types::{ChatMessage, Role, Usage},
 };
 use tokio::sync::oneshot;
 use unicode_width::UnicodeWidthStr;
@@ -144,7 +144,7 @@ pub struct App {
     pub input: InputBuffer,
     pub focus: Focus,
     pub state: AgentRunState,
-    pub usage: Usage,
+    pub usage: ModelUsage,
     pub round: usize,
     pub active_context: Option<TurnExecutionContext>,
     pub started_at: Option<Instant>,
@@ -168,7 +168,7 @@ impl App {
             input: InputBuffer::default(),
             focus: Focus::Input,
             state: AgentRunState::Idle,
-            usage: Usage::default(),
+            usage: ModelUsage::zero(),
             round: 0,
             active_context: None,
             started_at: None,
@@ -247,7 +247,7 @@ impl App {
         self.started_at = Some(Instant::now());
         self.elapsed = Duration::ZERO;
         self.state = AgentRunState::Preparing;
-        self.usage = Usage::default();
+        self.usage = ModelUsage::zero();
         self.round = 0;
         self.scroll_back = 0;
     }
@@ -493,27 +493,46 @@ fn tool_output(outcome: &ToolExecutionOutcome) -> Option<String> {
     }
 }
 
-fn push_message(timeline: &mut Vec<TimelineItem>, message: &ChatMessage) {
-    if let Some(reasoning) = message.reasoning.as_deref().filter(|text| !text.is_empty()) {
-        timeline.push(TimelineItem::Reasoning {
-            text: reasoning.into(),
-            open: false,
-        });
-    }
-    let content = message.content.clone().unwrap_or_default();
-    match message.role {
-        Role::User => timeline.push(TimelineItem::User(content)),
-        Role::Assistant if !content.is_empty() => timeline.push(TimelineItem::Assistant {
-            text: content,
-            open: false,
-        }),
-        Role::Tool => timeline.push(TimelineItem::Tool {
-            name: message.name.clone().unwrap_or_else(|| "tool".into()),
-            arguments: String::new(),
-            status: "recorded".into(),
-            output: Some(content),
-        }),
-        _ => {}
+fn push_message(timeline: &mut Vec<TimelineItem>, message: &Message) {
+    for block in &message.content {
+        match block {
+            aicoder_core::model::ContentBlock::Reasoning { text } => {
+                timeline.push(TimelineItem::Reasoning {
+                    text: text.clone(),
+                    open: false,
+                })
+            }
+            aicoder_core::model::ContentBlock::Text { text }
+                if message.role == MessageRole::User =>
+            {
+                timeline.push(TimelineItem::User(text.clone()))
+            }
+            aicoder_core::model::ContentBlock::Text { text }
+                if message.role == MessageRole::Assistant =>
+            {
+                timeline.push(TimelineItem::Assistant {
+                    text: text.clone(),
+                    open: false,
+                })
+            }
+            aicoder_core::model::ContentBlock::ToolCall { call } => {
+                timeline.push(TimelineItem::Tool {
+                    name: call.name.clone(),
+                    arguments: call.arguments.to_string(),
+                    status: "recorded".into(),
+                    output: None,
+                })
+            }
+            aicoder_core::model::ContentBlock::ToolResult { content, .. } => {
+                timeline.push(TimelineItem::Tool {
+                    name: "tool".into(),
+                    arguments: String::new(),
+                    status: "recorded".into(),
+                    output: Some(content.to_string()),
+                })
+            }
+            _ => {}
+        }
     }
 }
 
@@ -569,18 +588,21 @@ mod tests {
     #[test]
     fn reducer_aggregates_streams_and_tool_outcomes() {
         let mut app = App::new(Vec::new());
-        app.apply(event(1, AgentRawEvent::ContentStarted { choice_index: 0 }));
+        app.apply(event(
+            1,
+            AgentRawEvent::ContentStarted { response_index: 0 },
+        ));
         app.apply(event(
             2,
             AgentRawEvent::ContentChunk {
-                choice_index: 0,
+                response_index: 0,
                 delta: Arc::from("hello"),
             },
         ));
         app.apply(event(
             3,
             AgentRawEvent::ContentEnded {
-                choice_index: 0,
+                response_index: 0,
                 outcome: StreamEnd::Completed,
             },
         ));

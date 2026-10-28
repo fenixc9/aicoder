@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "source_sha256": "15cba4cf9a53fe12eba21092de7521ca46de2ebf12b6204622a2b76868f91199",
+  "runtime_samples_ms": [
+    627.9421234503388,
+    292.8639044985175,
+    300.92743784189224
+  ],
+  "runtime_median_ms": 300.92743784189224,
+  "peak_rss_samples_kib": [
+    4736,
+    4480,
+    4608
+  ],
+  "idle_rss_samples_kib": [
+    3792,
+    3724,
+    3768
+  ],
+  "iterations": 25,
+  "cases_per_iteration": 5,
+  "limitations": [
+    "These three repeat runs use existing-target builds; clean compilation timing is in s1-execution-report.json.",
+    "Compare runtime values only; wall time includes process creation and GNU time wrapper.",
+    "One historical S0 sample is a review reference, not a statistical confidence interval."
+  ]
+}

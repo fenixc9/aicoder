@@ -8,20 +8,15 @@ use crate::{
     AgentEventHandler, AgentRawEvent, AgentRawEventEnvelope, TurnCancelled, TurnExecutionContext,
     TurnExecutionResult, TurnExecutor,
     events::dispatch_event,
+    model::{Message, MessageRole, ModelRequest, ModelUsage},
     session::{Session, SessionMetadata, SessionRepository},
-    types::{ChatCompletionRequest, ChatMessage, ResponseType, Role, Usage},
 };
 
 #[derive(Debug, Clone)]
 pub struct AgentConfig {
     pub model: String,
     pub system_prompt: Option<String>,
-    pub temperature: Option<f32>,
-    pub top_p: Option<f32>,
-    pub max_tokens: Option<i32>,
-    pub seed: Option<i32>,
-    pub stop: Option<Vec<String>>,
-    pub response_format: Option<ResponseType>,
+    pub options: crate::model::ModelOptions,
 }
 
 impl AgentConfig {
@@ -29,12 +24,7 @@ impl AgentConfig {
         Self {
             model: model.into(),
             system_prompt: None,
-            temperature: None,
-            top_p: None,
-            max_tokens: None,
-            seed: None,
-            stop: None,
-            response_format: None,
+            options: crate::model::ModelOptions::default(),
         }
     }
 
@@ -60,7 +50,7 @@ pub struct AgentTurnResult {
 #[derive(Debug)]
 pub struct InterruptedAgentTurn {
     pub session: Option<SessionMetadata>,
-    pub usage: Usage,
+    pub usage: ModelUsage,
     pub rounds: usize,
     pub error: anyhow::Error,
 }
@@ -88,10 +78,19 @@ impl AgentTurnOutcome {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 struct TurnProgress {
-    usage: Usage,
+    usage: ModelUsage,
     rounds: usize,
+}
+
+impl Default for TurnProgress {
+    fn default() -> Self {
+        Self {
+            usage: ModelUsage::zero(),
+            rounds: 0,
+        }
+    }
 }
 
 struct ProgressTrackingHandler {
@@ -254,7 +253,7 @@ impl Agent {
             Err(error) => {
                 return AgentTurnOutcome::Failed(InterruptedAgentTurn {
                     session: None,
-                    usage: Usage::default(),
+                    usage: ModelUsage::zero(),
                     rounds: 0,
                     error,
                 });
@@ -324,38 +323,20 @@ impl Agent {
         })
     }
 
-    fn system_messages(&self) -> Vec<ChatMessage> {
+    fn system_messages(&self) -> Vec<Message> {
         self.config
             .system_prompt
             .as_ref()
             .filter(|prompt| !prompt.is_empty())
-            .map(|prompt| ChatMessage {
-                role: Role::System,
-                content: Some(prompt.clone()),
-                reasoning: None,
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            })
+            .map(|prompt| Message::text(MessageRole::System, prompt.clone()))
             .into_iter()
             .collect()
     }
 
-    fn completion_request(&self, messages: Vec<ChatMessage>) -> ChatCompletionRequest {
-        ChatCompletionRequest {
-            model: self.config.model.clone(),
-            messages,
-            temperature: self.config.temperature,
-            top_p: self.config.top_p,
-            max_tokens: self.config.max_tokens,
-            seed: self.config.seed,
-            tools: None,
-            tool_choice: None,
-            stream: None,
-            stream_options: None,
-            stop: self.config.stop.clone(),
-            response_format: self.config.response_format.clone(),
-        }
+    fn completion_request(&self, messages: Vec<Message>) -> ModelRequest {
+        let mut request = ModelRequest::new(self.config.model.clone(), messages);
+        request.options = self.config.options.clone();
+        request
     }
 }
 
@@ -423,15 +404,8 @@ where
     }
 }
 
-fn user_message(content: String) -> ChatMessage {
-    ChatMessage {
-        role: Role::User,
-        content: Some(content),
-        reasoning: None,
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }
+fn user_message(content: String) -> Message {
+    Message::text(MessageRole::User, content)
 }
 
 #[cfg(test)]
@@ -447,13 +421,12 @@ mod tests {
 
     use super::*;
     use crate::{
-        ChatCompletionProvider, session::MemorySessionRepository, tools::ToolRegistry,
-        types::ChatCompletionResponse,
+        ModelProvider, model::ModelResponse, session::MemorySessionRepository, tools::ToolRegistry,
     };
 
     struct RecordingProvider {
-        responses: Mutex<VecDeque<ChatCompletionResponse>>,
-        requests: Mutex<Vec<ChatCompletionRequest>>,
+        responses: Mutex<VecDeque<ModelResponse>>,
+        requests: Mutex<Vec<ModelRequest>>,
     }
 
     struct PendingProvider {
@@ -461,46 +434,105 @@ mod tests {
     }
 
     #[async_trait]
-    impl ChatCompletionProvider for PendingProvider {
-        async fn complete(
+    impl ModelProvider for PendingProvider {
+        fn model_spec(
             &self,
-            _request: ChatCompletionRequest,
-        ) -> Result<ChatCompletionResponse> {
-            self.started.notify_one();
-            std::future::pending().await
+            model: &str,
+        ) -> std::result::Result<crate::model::ModelSpec, crate::model::ProviderError> {
+            let mut spec = crate::model::ModelSpec::new("scripted", model);
+            spec.capabilities = crate::model::ModelCapabilities {
+                tools: true,
+                images: true,
+                reasoning_history: true,
+                temperature: true,
+                top_p: true,
+                seed: true,
+                stop_sequences: true,
+                structured_output: true,
+            };
+            Ok(spec)
+        }
+        async fn generate(
+            &self,
+            _request: ModelRequest,
+            events: Arc<dyn crate::model::ModelEventSink>,
+            _context: crate::TurnExecutionContext,
+        ) -> std::result::Result<ModelResponse, crate::model::ProviderError> {
+            let result: anyhow::Result<ModelResponse> = async {
+                self.started.notify_one();
+                std::future::pending().await
+            }
+            .await;
+            match result {
+                Ok(response) => {
+                    crate::model::emit_response(&response, events.as_ref());
+                    Ok(response)
+                }
+                Err(error) => Err(crate::model::ProviderError::new(
+                    "scripted",
+                    crate::model::ProviderErrorKind::Other,
+                    error.to_string(),
+                )),
+            }
         }
     }
 
     #[async_trait]
-    impl ChatCompletionProvider for RecordingProvider {
-        async fn complete(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
-            self.requests.lock().unwrap().push(request);
-            self.responses
-                .lock()
-                .unwrap()
-                .pop_front()
-                .context("No turn runner test response")
+    impl ModelProvider for RecordingProvider {
+        fn model_spec(
+            &self,
+            model: &str,
+        ) -> std::result::Result<crate::model::ModelSpec, crate::model::ProviderError> {
+            let mut spec = crate::model::ModelSpec::new("scripted", model);
+            spec.capabilities = crate::model::ModelCapabilities {
+                tools: true,
+                images: true,
+                reasoning_history: true,
+                temperature: true,
+                top_p: true,
+                seed: true,
+                stop_sequences: true,
+                structured_output: true,
+            };
+            Ok(spec)
+        }
+        async fn generate(
+            &self,
+            request: ModelRequest,
+            events: Arc<dyn crate::model::ModelEventSink>,
+            _context: crate::TurnExecutionContext,
+        ) -> std::result::Result<ModelResponse, crate::model::ProviderError> {
+            let result: anyhow::Result<ModelResponse> = async {
+                self.requests.lock().unwrap().push(request);
+                self.responses
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .context("No turn runner test response")
+            }
+            .await;
+            match result {
+                Ok(response) => {
+                    crate::model::emit_response(&response, events.as_ref());
+                    Ok(response)
+                }
+                Err(error) => Err(crate::model::ProviderError::new(
+                    "scripted",
+                    crate::model::ProviderErrorKind::Other,
+                    error.to_string(),
+                )),
+            }
         }
     }
 
-    fn response(content: &str) -> ChatCompletionResponse {
-        serde_json::from_value(json!({
-            "id": "response",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "test-model",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": content},
-                "finish_reason": "stop"
-            }]
-        }))
+    fn response(content: &str) -> ModelResponse {
+        serde_json::from_value(json!({"id":"response","model":"test-model","message":{"role":"assistant","content":[{"type":"text","text":content}]},"stop_reason":{"reason":"complete"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}}))
         .unwrap()
     }
 
     fn agent(
         workspace: &std::path::Path,
-        responses: Vec<ChatCompletionResponse>,
+        responses: Vec<ModelResponse>,
     ) -> (Agent, Arc<RecordingProvider>) {
         let provider = Arc::new(RecordingProvider {
             responses: Mutex::new(responses.into()),
@@ -550,10 +582,10 @@ mod tests {
         let requests = provider.requests.lock().unwrap();
         assert_eq!(requests[0].messages.len(), 2);
         assert_eq!(requests[1].messages.len(), 4);
-        assert_eq!(requests[1].messages[0].role, Role::System);
+        assert_eq!(requests[1].messages[0].role, MessageRole::System);
         assert_eq!(
-            requests[1].messages[3].content.as_deref(),
-            Some("second question")
+            requests[1].messages[3].text_content().as_str(),
+            "second question"
         );
     }
 
@@ -566,8 +598,12 @@ mod tests {
 
         assert!(result.session.is_none());
         assert_eq!(
-            result.execution_result.final_message.content.as_deref(),
-            Some("answer")
+            result
+                .execution_result
+                .final_message
+                .text_content()
+                .as_str(),
+            "answer"
         );
     }
 
@@ -632,7 +668,7 @@ mod tests {
         assert_eq!(sessions.len(), 1);
         let stored = repository.open(&sessions[0].id).unwrap();
         assert_eq!(stored.messages().len(), 1);
-        assert_eq!(stored.messages()[0].message.role, Role::User);
+        assert_eq!(stored.messages()[0].message.role, MessageRole::User);
     }
 
     #[tokio::test]

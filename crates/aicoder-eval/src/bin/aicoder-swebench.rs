@@ -64,7 +64,7 @@ struct RunArgs {
     #[arg(long, default_value_t = 8)]
     max_rounds: usize,
     #[arg(long, default_value_t = 4096)]
-    max_tokens: i32,
+    max_tokens: u32,
     #[arg(long, default_value_t = 0.0)]
     temperature: f32,
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]

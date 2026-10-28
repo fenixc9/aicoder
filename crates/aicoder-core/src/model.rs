@@ -47,6 +47,18 @@ impl Message {
             _ => None,
         })
     }
+
+    /// Returns the first tool result's identity, output and error flag.
+    pub fn tool_result(&self) -> Option<(&str, &Value, bool)> {
+        self.content.iter().find_map(|block| match block {
+            ContentBlock::ToolResult {
+                call_id,
+                content,
+                is_error,
+            } => Some((call_id.as_str(), content, *is_error)),
+            _ => None,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -379,6 +391,69 @@ pub struct ModelResponse {
     pub message: Message,
     pub stop_reason: StopReason,
     pub usage: ModelUsage,
+}
+
+impl ModelResponse {
+    pub fn validate(&self) -> Result<(), ProviderError> {
+        let invalid = |message: &str| {
+            ProviderError::new("model", ProviderErrorKind::InvalidResponse, message)
+        };
+        if self.message.role != MessageRole::Assistant {
+            return Err(invalid("model response must be an assistant message"));
+        }
+        let mut ids = std::collections::HashSet::new();
+        for call in self.message.tool_calls() {
+            if call.id.is_empty()
+                || call.name.is_empty()
+                || !call.arguments.is_object()
+                || !ids.insert(&call.id)
+            {
+                return Err(invalid("invalid or duplicate tool call"));
+            }
+        }
+        if (self.stop_reason == StopReason::ToolCalls) == ids.is_empty() {
+            return Err(invalid("stop reason and tool calls disagree"));
+        }
+        if self.stop_reason == StopReason::Complete
+            && !self.message.content.iter().any(|block| {
+                matches!(block, ContentBlock::Text {text} if !text.trim().is_empty())
+                    || matches!(block, ContentBlock::Image { .. })
+            })
+        {
+            return Err(invalid("empty completed response"));
+        }
+        Ok(())
+    }
+}
+
+/// Emits a complete response for providers that do not produce incremental events.
+pub fn emit_response(response: &ModelResponse, sink: &dyn ModelEventSink) {
+    sink.emit(ModelEvent::Started);
+    let mut index = 0;
+    for block in &response.message.content {
+        match block {
+            ContentBlock::Text { text } => sink.emit(ModelEvent::TextDelta {
+                delta: text.clone(),
+            }),
+            ContentBlock::Reasoning { text } => sink.emit(ModelEvent::ReasoningDelta {
+                delta: text.clone(),
+            }),
+            ContentBlock::ToolCall { call } => {
+                sink.emit(ModelEvent::ToolCallCompleted {
+                    index,
+                    call: call.clone(),
+                });
+                index += 1;
+            }
+            _ => {}
+        }
+    }
+    sink.emit(ModelEvent::Usage {
+        usage: response.usage.clone(),
+    });
+    sink.emit(ModelEvent::Finished {
+        stop_reason: response.stop_reason.clone(),
+    });
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

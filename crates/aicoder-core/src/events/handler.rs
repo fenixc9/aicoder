@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::{
+    model::{ModelToolCall, ModelUsage, StopReason},
     state::AgentStateTransition,
     tools::ToolCapability,
-    types::{FinishReason, ToolCall, Usage},
 };
 
 use super::{
@@ -48,7 +48,7 @@ pub struct AgentStartedEvent {
 pub struct AgentCompletedEvent {
     pub meta: AgentEventMeta,
     pub rounds: usize,
-    pub usage: Arc<Usage>,
+    pub usage: Arc<ModelUsage>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,7 +92,7 @@ pub struct ModelRetryScheduledEvent {
 #[derive(Debug, Clone)]
 pub struct ModelResponseCompletedEvent {
     pub meta: AgentEventMeta,
-    pub finish_reason: Option<FinishReason>,
+    pub finish_reason: Option<StopReason>,
 }
 
 #[derive(Debug, Clone)]
@@ -137,40 +137,40 @@ pub struct ContextCompactionFailedEvent {
 #[derive(Debug, Clone, Copy)]
 pub struct ReasoningStartedEvent {
     pub meta: AgentEventMeta,
-    pub choice_index: i32,
+    pub response_index: i32,
 }
 
 #[derive(Debug, Clone)]
 pub struct ReasoningChunkEvent {
     pub meta: AgentEventMeta,
-    pub choice_index: i32,
+    pub response_index: i32,
     pub delta: Arc<str>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ReasoningEndedEvent {
     pub meta: AgentEventMeta,
-    pub choice_index: i32,
+    pub response_index: i32,
     pub outcome: StreamEnd,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ContentStartedEvent {
     pub meta: AgentEventMeta,
-    pub choice_index: i32,
+    pub response_index: i32,
 }
 
 #[derive(Debug, Clone)]
 pub struct ContentChunkEvent {
     pub meta: AgentEventMeta,
-    pub choice_index: i32,
+    pub response_index: i32,
     pub delta: Arc<str>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ContentEndedEvent {
     pub meta: AgentEventMeta,
-    pub choice_index: i32,
+    pub response_index: i32,
     pub outcome: StreamEnd,
 }
 
@@ -194,7 +194,7 @@ pub struct ToolCallEndedEvent {
     pub meta: AgentEventMeta,
     pub key: ToolCallKey,
     pub outcome: StreamEnd,
-    pub tool_call: Option<Arc<ToolCall>>,
+    pub tool_call: Option<Arc<ModelToolCall>>,
 }
 
 #[derive(Debug, Clone)]
@@ -231,7 +231,7 @@ pub struct ToolExecutionEndedEvent {
 #[derive(Debug, Clone)]
 pub struct UsageUpdatedEvent {
     pub meta: AgentEventMeta,
-    pub usage: Arc<Usage>,
+    pub usage: Arc<ModelUsage>,
 }
 
 /// The single event interface for agent applications.
@@ -401,48 +401,48 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
                 strategy: Arc::clone(strategy),
                 message: Arc::clone(message),
             }),
-        AgentRawEvent::ReasoningStarted { choice_index } => {
+        AgentRawEvent::ReasoningStarted { response_index } => {
             handler.on_reasoning_started(ReasoningStartedEvent {
                 meta,
-                choice_index: *choice_index,
+                response_index: *response_index,
             })
         }
         AgentRawEvent::ReasoningChunk {
-            choice_index,
+            response_index,
             delta,
         } => handler.on_reasoning_chunk(ReasoningChunkEvent {
             meta,
-            choice_index: *choice_index,
+            response_index: *response_index,
             delta: Arc::clone(delta),
         }),
         AgentRawEvent::ReasoningEnded {
-            choice_index,
+            response_index,
             outcome,
         } => handler.on_reasoning_ended(ReasoningEndedEvent {
             meta,
-            choice_index: *choice_index,
+            response_index: *response_index,
             outcome: outcome.clone(),
         }),
-        AgentRawEvent::ContentStarted { choice_index } => {
+        AgentRawEvent::ContentStarted { response_index } => {
             handler.on_content_started(ContentStartedEvent {
                 meta,
-                choice_index: *choice_index,
+                response_index: *response_index,
             });
         }
         AgentRawEvent::ContentChunk {
-            choice_index,
+            response_index,
             delta,
         } => handler.on_content_chunk(ContentChunkEvent {
             meta,
-            choice_index: *choice_index,
+            response_index: *response_index,
             delta: Arc::clone(delta),
         }),
         AgentRawEvent::ContentEnded {
-            choice_index,
+            response_index,
             outcome,
         } => handler.on_content_ended(ContentEndedEvent {
             meta,
-            choice_index: *choice_index,
+            response_index: *response_index,
             outcome: outcome.clone(),
         }),
         AgentRawEvent::ToolCallStarted { key } => {
@@ -563,7 +563,12 @@ mod tests {
         fn on_usage_updated(&self, event: UsageUpdatedEvent) {
             self.received.lock().unwrap().push(format!(
                 "usage:{}:{}",
-                event.meta.sequence, event.usage.total_tokens
+                event.meta.sequence,
+                event
+                    .usage
+                    .total_tokens
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "unknown".into())
             ));
         }
     }
@@ -586,7 +591,7 @@ mod tests {
             &envelope(
                 2,
                 AgentRawEvent::ReasoningChunk {
-                    choice_index: 0,
+                    response_index: 0,
                     delta: Arc::from("thinking"),
                 },
             ),
@@ -596,7 +601,7 @@ mod tests {
             &envelope(
                 3,
                 AgentRawEvent::ContentChunk {
-                    choice_index: 0,
+                    response_index: 0,
                     delta: Arc::from("hello"),
                 },
             ),
@@ -606,9 +611,9 @@ mod tests {
             &envelope(
                 4,
                 AgentRawEvent::UsageUpdated {
-                    usage: Arc::new(Usage {
-                        total_tokens: 12,
-                        ..Usage::default()
+                    usage: Arc::new(ModelUsage {
+                        total_tokens: Some(12),
+                        ..ModelUsage::default()
                     }),
                 },
             ),

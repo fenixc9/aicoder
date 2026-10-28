@@ -38,10 +38,10 @@ pub struct TrajectorySummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UsageSummary {
     pub provider_reported: bool,
-    pub prompt_tokens: i32,
-    pub completion_tokens: i32,
-    pub total_tokens: i32,
-    pub cached_tokens: i32,
+    pub prompt_tokens: Option<u64>,
+    pub completion_tokens: Option<u64>,
+    pub total_tokens: Option<u64>,
+    pub cached_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

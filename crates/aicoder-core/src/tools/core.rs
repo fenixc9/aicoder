@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::types::FunctionDefinition;
+use crate::model::ToolDefinition;
 
 use super::ToolContext;
 
@@ -51,7 +51,7 @@ impl ToolFailure {
 
 #[async_trait]
 pub trait ExecutableTool: Send + Sync {
-    fn definition(&self) -> FunctionDefinition;
+    fn definition(&self) -> ToolDefinition;
     fn capability(&self) -> ToolCapability;
     async fn execute(
         &self,

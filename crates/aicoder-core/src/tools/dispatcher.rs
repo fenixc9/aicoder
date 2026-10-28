@@ -8,8 +8,8 @@ use tokio::time::timeout;
 use crate::{
     cancellation::{TurnCancelled, TurnExecutionContext},
     events::{AgentEventEmitter, AgentRawEvent, ToolExecutionOutcome},
+    model::{ContentBlock, Message, MessageRole, ModelToolCall},
     redaction::sanitize_text,
-    types::{ChatMessage, Role, ToolCall},
 };
 
 use super::{
@@ -67,25 +67,25 @@ impl ToolDispatcher {
     }
 
     #[allow(dead_code)]
-    pub async fn dispatch(&self, calls: &[ToolCall]) -> Result<Vec<ChatMessage>> {
+    pub async fn dispatch(&self, calls: &[ModelToolCall]) -> Result<Vec<Message>> {
         self.dispatch_inner(calls, None).await
     }
 
     #[cfg(test)]
     pub(crate) async fn dispatch_with_events(
         &self,
-        calls: &[ToolCall],
+        calls: &[ModelToolCall],
         events: &AgentEventEmitter,
-    ) -> Result<Vec<ChatMessage>> {
+    ) -> Result<Vec<Message>> {
         self.dispatch_inner(calls, Some(events)).await
     }
 
     pub(crate) async fn dispatch_with_context(
         &self,
-        calls: &[ToolCall],
+        calls: &[ModelToolCall],
         events: &AgentEventEmitter,
         context: &TurnExecutionContext,
-    ) -> Result<Vec<ChatMessage>> {
+    ) -> Result<Vec<Message>> {
         if context.is_cancelled() {
             return Err(context.error().into());
         }
@@ -95,18 +95,18 @@ impl ToolDispatcher {
 
     async fn dispatch_inner(
         &self,
-        calls: &[ToolCall],
+        calls: &[ModelToolCall],
         events: Option<&AgentEventEmitter>,
-    ) -> Result<Vec<ChatMessage>> {
+    ) -> Result<Vec<Message>> {
         self.dispatch_inner_with_context(calls, events, None).await
     }
 
     async fn dispatch_inner_with_context(
         &self,
-        calls: &[ToolCall],
+        calls: &[ModelToolCall],
         events: Option<&AgentEventEmitter>,
         context: Option<&TurnExecutionContext>,
-    ) -> Result<Vec<ChatMessage>> {
+    ) -> Result<Vec<Message>> {
         if calls.len() > self.config.max_calls_per_round {
             anyhow::bail!(
                 "Tool call limit exceeded: {} > {}",
@@ -141,55 +141,40 @@ impl ToolDispatcher {
         Ok(results.into_iter().flatten().collect())
     }
 
-    fn capability_for(&self, call: &ToolCall) -> ToolCapability {
+    fn capability_for(&self, call: &ModelToolCall) -> ToolCapability {
         self.registry
-            .get(&call.function.name)
+            .get(&call.name)
             .map(|tool| tool.capability())
             .unwrap_or(ToolCapability::Command)
     }
 
     async fn execute_call(
         &self,
-        call: &ToolCall,
+        call: &ModelToolCall,
         events: Option<&AgentEventEmitter>,
         context: Option<&TurnExecutionContext>,
-    ) -> Result<ChatMessage> {
+    ) -> Result<Message> {
         emit_event(
             events,
             AgentRawEvent::ToolExecutionStarted {
                 call_id: call.id.clone().into(),
-                name: call.function.name.clone().into(),
-                arguments: call.function.arguments.clone().into(),
+                name: call.name.clone().into(),
+                arguments: call.arguments.to_string().into(),
             },
         );
-        let arguments = match serde_json::from_str::<Value>(&call.function.arguments) {
-            Ok(arguments) => arguments,
-            Err(error) => {
-                return Ok(failed_tool_message(
-                    events,
-                    call,
-                    ToolFailure::new(
-                        "invalid_arguments",
-                        format!("Arguments are not valid JSON: {error}"),
-                    ),
-                ));
-            }
-        };
+        let arguments = call.arguments.clone();
 
-        let Some(tool) = self.registry.get(&call.function.name) else {
+        let Some(tool) = self.registry.get(&call.name) else {
             return Ok(failed_tool_message(
                 events,
                 call,
-                ToolFailure::new(
-                    "unknown_tool",
-                    format!("Unknown tool: {}", call.function.name),
-                ),
+                ToolFailure::new("unknown_tool", format!("Unknown tool: {}", call.name)),
             ));
         };
 
         let invocation = ToolInvocation {
             call_id: call.id.clone(),
-            name: call.function.name.clone(),
+            name: call.name.clone(),
             arguments: arguments.clone(),
             capability: tool.capability(),
         };
@@ -246,7 +231,7 @@ impl ToolDispatcher {
                         events,
                         AgentRawEvent::ToolExecutionEnded {
                             call_id: call.id.clone().into(),
-                            name: call.function.name.clone().into(),
+                            name: call.name.clone().into(),
                             outcome: ToolExecutionOutcome::Cancelled.into(),
                         },
                     );
@@ -287,7 +272,7 @@ impl ToolDispatcher {
                         events,
                         AgentRawEvent::ToolExecutionEnded {
                             call_id: call.id.clone().into(),
-                            name: call.function.name.clone().into(),
+                            name: call.name.clone().into(),
                             outcome: ToolExecutionOutcome::Cancelled.into(),
                         },
                     );
@@ -318,7 +303,7 @@ impl ToolDispatcher {
             events,
             AgentRawEvent::ToolExecutionEnded {
                 call_id: call.id.clone().into(),
-                name: call.function.name.clone().into(),
+                name: call.name.clone().into(),
                 outcome: outcome.into(),
             },
         );
@@ -334,15 +319,15 @@ fn emit_event(events: Option<&AgentEventEmitter>, event: AgentRawEvent) {
 
 fn failed_tool_message(
     events: Option<&AgentEventEmitter>,
-    call: &ToolCall,
+    call: &ModelToolCall,
     error: ToolFailure,
-) -> ChatMessage {
+) -> Message {
     let outcome = failure_outcome(&error);
     emit_event(
         events,
         AgentRawEvent::ToolExecutionEnded {
             call_id: call.id.clone().into(),
-            name: call.function.name.clone().into(),
+            name: call.name.clone().into(),
             outcome: outcome.into(),
         },
     );
@@ -360,14 +345,14 @@ fn failure_outcome(error: &ToolFailure) -> ToolExecutionOutcome {
     }
 }
 
-fn tool_message(call: &ToolCall, envelope: Value) -> ChatMessage {
-    ChatMessage {
-        role: Role::Tool,
-        content: Some(envelope.to_string()),
-        reasoning: None,
-        tool_calls: None,
-        tool_call_id: Some(call.id.clone()),
-        name: Some(call.function.name.clone()),
+fn tool_message(call: &ModelToolCall, envelope: Value) -> Message {
+    Message {
+        role: MessageRole::Tool,
+        content: vec![ContentBlock::ToolResult {
+            call_id: call.id.clone(),
+            is_error: envelope["ok"] == false,
+            content: envelope,
+        }],
     }
 }
 

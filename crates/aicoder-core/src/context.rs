@@ -4,24 +4,24 @@ use anyhow::{Result, bail, ensure};
 use async_trait::async_trait;
 use serde::Serialize;
 
-use crate::types::{ChatMessage, Role, Tool, Usage};
+use crate::model::{Message, MessageRole, ModelUsage, ToolDefinition};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ContextCompactionInput<'a> {
     pub model: &'a str,
-    pub messages: &'a [ChatMessage],
-    pub tools: Option<&'a [Tool]>,
-    pub max_output_tokens: Option<i32>,
+    pub messages: &'a [Message],
+    pub tools: Option<&'a [ToolDefinition]>,
+    pub max_output_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ContextCompaction {
-    pub messages: Vec<ChatMessage>,
+    pub messages: Vec<Message>,
     pub estimated_tokens_before: usize,
     pub estimated_tokens_after: usize,
     pub removed_messages: usize,
-    /// Usage consumed by semantic/model-backed compactors. Deterministic compactors leave this at zero.
-    pub usage: Usage,
+    /// ModelUsage consumed by semantic/model-backed compactors. Deterministic compactors leave this at zero.
+    pub usage: ModelUsage,
 }
 
 #[async_trait]
@@ -83,7 +83,7 @@ impl PruningContextCompactor {
         self.config
     }
 
-    fn input_budget(&self, max_output_tokens: Option<i32>) -> usize {
+    fn input_budget(&self, max_output_tokens: Option<u32>) -> usize {
         let requested_output = max_output_tokens
             .and_then(|tokens| usize::try_from(tokens).ok())
             .unwrap_or_default();
@@ -120,7 +120,7 @@ impl ContextCompactor for PruningContextCompactor {
                 estimated_tokens_before,
                 estimated_tokens_after: estimated_tokens_before,
                 removed_messages: 0,
-                usage: Usage::default(),
+                usage: ModelUsage::zero(),
             });
         }
 
@@ -162,7 +162,7 @@ impl ContextCompactor for PruningContextCompactor {
                     messages,
                     estimated_tokens_before,
                     estimated_tokens_after,
-                    usage: Usage::default(),
+                    usage: ModelUsage::zero(),
                 });
             }
         }
@@ -182,20 +182,17 @@ struct MessageUnit {
     removable: bool,
 }
 
-fn message_units(messages: &[ChatMessage]) -> Vec<MessageUnit> {
+fn message_units(messages: &[Message]) -> Vec<MessageUnit> {
     let mut units = Vec::new();
     let mut index = 0;
     while index < messages.len() {
         let start = index;
-        let removable = messages[index].role != Role::System;
+        let removable = messages[index].role != MessageRole::System;
         index += 1;
-        if messages[start].role == Role::Assistant
-            && messages[start]
-                .tool_calls
-                .as_ref()
-                .is_some_and(|calls| !calls.is_empty())
+        if messages[start].role == MessageRole::Assistant
+            && messages[start].tool_calls().next().is_some()
         {
-            while index < messages.len() && messages[index].role == Role::Tool {
+            while index < messages.len() && messages[index].role == MessageRole::Tool {
                 index += 1;
             }
         }
@@ -208,11 +205,7 @@ fn message_units(messages: &[ChatMessage]) -> Vec<MessageUnit> {
     units
 }
 
-fn rebuild_messages(
-    original: &[ChatMessage],
-    units: &[MessageUnit],
-    removed: &[bool],
-) -> Vec<ChatMessage> {
+fn rebuild_messages(original: &[Message], units: &[MessageUnit], removed: &[bool]) -> Vec<Message> {
     let removed_messages = removed_message_count(units, removed);
     let mut messages = Vec::with_capacity(original.len() - removed_messages + 1);
     let mut marker_inserted = false;
@@ -238,26 +231,22 @@ fn removed_message_count(units: &[MessageUnit], removed: &[bool]) -> usize {
         .sum()
 }
 
-fn compaction_marker(removed_messages: usize) -> ChatMessage {
-    ChatMessage {
-        role: Role::System,
-        content: Some(format!(
+fn compaction_marker(removed_messages: usize) -> Message {
+    Message::text(
+        MessageRole::System,
+        format!(
             "[Context compaction removed {removed_messages} older messages. Reinspect the workspace when earlier details are needed.]"
-        )),
-        reasoning: None,
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }
+        ),
+    )
 }
 
 /// Conservative model-independent estimate. Provider-specific compactors can replace it with an
 /// exact tokenizer while preserving the same executor contract.
-pub fn estimate_context_tokens(messages: &[ChatMessage], tools: Option<&[Tool]>) -> usize {
+pub fn estimate_context_tokens(messages: &[Message], tools: Option<&[ToolDefinition]>) -> usize {
     estimate_messages(messages) + tools.map_or(0, estimate_serialized) + 16
 }
 
-fn estimate_messages(messages: &[ChatMessage]) -> usize {
+fn estimate_messages(messages: &[Message]) -> usize {
     messages.iter().map(estimate_serialized).sum::<usize>() + messages.len() * 4
 }
 
@@ -279,36 +268,30 @@ fn estimate_serialized<T: Serialize + ?Sized>(value: &T) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{FunctionCall, ToolCall, ToolType};
+    use crate::model::ModelToolCall;
 
-    fn message(role: Role, content: &str) -> ChatMessage {
-        ChatMessage {
-            role,
-            content: Some(content.to_string()),
-            reasoning: None,
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        }
+    fn message(role: MessageRole, content: &str) -> Message {
+        Message::text(role, content.to_string())
     }
 
     #[tokio::test]
     async fn pruning_preserves_system_recent_context_and_tool_units() {
-        let mut assistant = message(Role::Assistant, "calling tool");
-        assistant.tool_calls = Some(vec![ToolCall {
-            id: "call-1".to_string(),
-            tool_type: ToolType::Function,
-            function: FunctionCall {
-                name: "read_file".to_string(),
-                arguments: "{}".to_string(),
-            },
-        }]);
+        let mut assistant = message(MessageRole::Assistant, "calling tool");
+        assistant
+            .content
+            .push(crate::model::ContentBlock::ToolCall {
+                call: ModelToolCall {
+                    id: "call-1".into(),
+                    name: "read_file".into(),
+                    arguments: serde_json::json!({}),
+                },
+            });
         let messages = vec![
-            message(Role::System, "system"),
-            message(Role::User, &"old request ".repeat(80)),
+            message(MessageRole::System, "system"),
+            message(MessageRole::User, &"old request ".repeat(80)),
             assistant,
-            message(Role::Tool, &"old output ".repeat(80)),
-            message(Role::User, "latest request"),
+            message(MessageRole::Tool, &"old output ".repeat(80)),
+            message(MessageRole::User, "latest request"),
         ];
         let compactor = PruningContextCompactor::new(ContextWindowConfig {
             max_context_tokens: 180,
@@ -326,31 +309,31 @@ mod tests {
         let compacted = compactor.compact(input).await.unwrap();
 
         assert!(compacted.removed_messages >= 3);
-        assert_eq!(compacted.messages[0].role, Role::System);
+        assert_eq!(compacted.messages[0].role, MessageRole::System);
         assert!(
             compacted
                 .messages
                 .iter()
-                .any(|message| message.content.as_deref() == Some("latest request"))
+                .any(|message| message.text_content().as_str() == "latest request")
         );
-        assert!(!compacted.messages.iter().any(|message| {
-            message
-                .tool_calls
-                .as_ref()
-                .is_some_and(|calls| !calls.is_empty())
-        }));
         assert!(
             !compacted
                 .messages
                 .iter()
-                .any(|message| message.role == Role::Tool)
+                .any(|message| { message.tool_calls().next().is_some() })
+        );
+        assert!(
+            !compacted
+                .messages
+                .iter()
+                .any(|message| message.role == MessageRole::Tool)
         );
         assert!(compacted.estimated_tokens_after <= compactor.target_tokens(input));
     }
 
     #[tokio::test]
     async fn pruning_refuses_to_remove_oversized_recent_context() {
-        let messages = vec![message(Role::User, &"current request ".repeat(200))];
+        let messages = vec![message(MessageRole::User, &"current request ".repeat(200))];
         let compactor = PruningContextCompactor::new(ContextWindowConfig {
             max_context_tokens: 100,
             reserved_output_tokens: 20,

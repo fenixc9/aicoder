@@ -1,12 +1,8 @@
 //! Conversion boundary for the provider-neutral API. No second execution loop lives here.
+use crate::wire::{ChatCompletionResponse, FinishReason, ToolCall, Usage};
 use std::sync::{Arc, Mutex};
 
-use aicoder_core::{
-    TurnCancelled, TurnExecutionContext,
-    events::AgentRawEvent,
-    model::*,
-    types::{ChatCompletionResponse, FinishReason, ToolCall, Usage},
-};
+use aicoder_core::{TurnCancelled, TurnExecutionContext, events::AgentRawEvent, model::*};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -90,25 +86,18 @@ impl ModelProvider for ChatClient {
                 if let Some(usage) = &response.usage
                     && let Ok(usage) = decode_usage(usage)
                 {
-                    *sink.usage.lock().expect("usage lock poisoned") = Some(usage);
+                    sink.publish_usage(usage);
                 }
                 decode_response(response).map_err(anyhow::Error::from)
             });
             let response = match raw {
                 Ok(response) => response,
-                Err(cause) => {
-                    if let Some(usage) = sink.usage.lock().expect("usage lock poisoned").take() {
-                        events.emit(ModelEvent::Usage { usage });
-                    }
-                    return Err(classify_error(cause));
-                }
+                Err(cause) => return Err(classify_error(cause)),
             };
             if !stream {
                 emit_content(&response, events.as_ref());
             }
-            events.emit(ModelEvent::Usage {
-                usage: response.usage.clone(),
-            });
+            sink.publish_usage(response.usage.clone());
             events.emit(ModelEvent::Finished {
                 stop_reason: response.stop_reason.clone(),
             });
@@ -285,7 +274,7 @@ fn encode_request(request: ModelRequest) -> Result<Value, ProviderError> {
     Ok(body)
 }
 
-fn decode_call(call: &ToolCall) -> Result<ModelToolCall, ProviderError> {
+pub(crate) fn decode_call(call: &ToolCall) -> Result<ModelToolCall, ProviderError> {
     let arguments: Value = serde_json::from_str(&call.function.arguments).map_err(|_| {
         error(
             ProviderErrorKind::InvalidResponse,
@@ -305,7 +294,7 @@ fn decode_call(call: &ToolCall) -> Result<ModelToolCall, ProviderError> {
     })
 }
 
-fn decode_usage(usage: &Usage) -> Result<ModelUsage, ProviderError> {
+pub(crate) fn decode_usage(usage: &Usage) -> Result<ModelUsage, ProviderError> {
     let count = |v: i32| {
         u64::try_from(v)
             .map_err(|_| error(ProviderErrorKind::InvalidResponse, "negative token count"))
@@ -328,7 +317,7 @@ fn decode_usage(usage: &Usage) -> Result<ModelUsage, ProviderError> {
     })
 }
 
-fn stop_reason(reason: &FinishReason) -> StopReason {
+pub(crate) fn stop_reason(reason: &FinishReason) -> StopReason {
     match reason {
         FinishReason::Stop => StopReason::Complete,
         FinishReason::ToolCalls => StopReason::ToolCalls,
@@ -345,7 +334,7 @@ fn decode_response(response: ChatCompletionResponse) -> Result<ModelResponse, Pr
         ));
     }
     let choice = response.choices.into_iter().next().unwrap();
-    if choice.index != 0 || choice.message.role != aicoder_core::types::Role::Assistant {
+    if choice.index != 0 || choice.message.role != crate::wire::Role::Assistant {
         return Err(error(
             ProviderErrorKind::InvalidResponse,
             "expected assistant choice zero",
@@ -390,7 +379,7 @@ fn decode_response(response: ChatCompletionResponse) -> Result<ModelResponse, Pr
             "empty completed assistant response",
         ));
     }
-    Ok(ModelResponse {
+    let response = ModelResponse {
         id: Some(response.id),
         model: response.model,
         message: Message {
@@ -404,7 +393,12 @@ fn decode_response(response: ChatCompletionResponse) -> Result<ModelResponse, Pr
             .map(decode_usage)
             .transpose()?
             .unwrap_or_default(),
-    })
+    };
+    response.validate().map_err(|mut cause| {
+        cause.provider = PROVIDER.into();
+        cause
+    })?;
+    Ok(response)
 }
 
 fn emit_content(response: &ModelResponse, sink: &dyn ModelEventSink) {
@@ -433,17 +427,26 @@ struct NormalizedSink {
     events: Arc<dyn ModelEventSink>,
     usage: Mutex<Option<ModelUsage>>,
 }
+impl NormalizedSink {
+    fn publish_usage(&self, usage: ModelUsage) {
+        let mut previous = self.usage.lock().expect("usage lock poisoned");
+        if previous.as_ref() != Some(&usage) {
+            *previous = Some(usage.clone());
+            self.events.emit(ModelEvent::Usage { usage });
+        }
+    }
+}
 impl ProviderEventSink for NormalizedSink {
     fn emit(&self, event: AgentRawEvent) {
         let normalized = match event {
             AgentRawEvent::ContentChunk {
-                choice_index: 0,
+                response_index: 0,
                 delta,
             } => Some(ModelEvent::TextDelta {
                 delta: delta.to_string(),
             }),
             AgentRawEvent::ReasoningChunk {
-                choice_index: 0,
+                response_index: 0,
                 delta,
             } => Some(ModelEvent::ReasoningDelta {
                 delta: delta.to_string(),
@@ -453,7 +456,7 @@ impl ProviderEventSink for NormalizedSink {
                 id_delta,
                 name_delta,
                 arguments_delta,
-            } if key.choice_index == 0 => Some(ModelEvent::ToolCallDelta {
+            } if key.response_index == 0 => Some(ModelEvent::ToolCallDelta {
                 index: key.tool_index as u32,
                 id_delta: id_delta.map(|v| v.to_string()),
                 name_delta: name_delta.map(|v| v.to_string()),
@@ -463,18 +466,12 @@ impl ProviderEventSink for NormalizedSink {
                 key,
                 tool_call: Some(call),
                 ..
-            } if key.choice_index == 0 => {
-                decode_call(&call)
-                    .ok()
-                    .map(|call| ModelEvent::ToolCallCompleted {
-                        index: key.tool_index as u32,
-                        call,
-                    })
-            }
+            } if key.response_index == 0 => Some(ModelEvent::ToolCallCompleted {
+                index: key.tool_index as u32,
+                call: (*call).clone(),
+            }),
             AgentRawEvent::UsageUpdated { usage } => {
-                if let Ok(usage) = decode_usage(&usage) {
-                    *self.usage.lock().expect("usage lock poisoned") = Some(usage);
-                }
+                self.publish_usage((*usage).clone());
                 None
             }
             AgentRawEvent::ModelRetryScheduled {
@@ -541,6 +538,11 @@ mod tests {
     fn malformed_tool_responses_and_empty_success_are_not_valid_completions() {
         for raw in [
             response(json!({"role":"assistant","content":""}), "stop"),
+            response(json!({"role":"assistant","content":"   "}), "stop"),
+            response(
+                json!({"role":"assistant","reasoning":"analysis only"}),
+                "stop",
+            ),
             response(json!({"role":"assistant","content":"hello"}), "tool_calls"),
             response(
                 json!({"role":"assistant","tool_calls":[{"id":"c","type":"function","function":{"name":"read","arguments":"broken"}}]}),

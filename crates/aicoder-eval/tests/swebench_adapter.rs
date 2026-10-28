@@ -1,21 +1,22 @@
+use std::sync::Arc;
 use std::{collections::VecDeque, fs, path::Path, process::Command, sync::Mutex};
 
 use aicoder_core::{
-    ChatCompletionProvider, TurnExecutor,
+    ModelProvider, TurnExecutor,
+    model::{ModelRequest, ModelResponse},
     tools::AllowAllApproval,
-    types::{ChatCompletionRequest, ChatCompletionResponse},
 };
 use aicoder_eval::{
     EvalRunner, SweBenchAdapter, SweBenchBatchCaseStatus, SweBenchBatchOptions,
     SweBenchBatchRunner, SweBenchDataset, SweBenchFilter, SweBenchRepositorySource,
     write_swebench_predictions,
 };
-use anyhow::{Context, Result};
+use anyhow::Context;
 use async_trait::async_trait;
 use serde_json::json;
 
 struct PatchProvider {
-    responses: Mutex<VecDeque<ChatCompletionResponse>>,
+    responses: Mutex<VecDeque<ModelResponse>>,
 }
 
 impl PatchProvider {
@@ -25,36 +26,8 @@ impl PatchProvider {
             "content": "implemented\n"
         }))
         .unwrap();
-        let tool_response = json!({
-            "id": "tool-response",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "test-model",
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call-1",
-                        "type": "function",
-                        "function": {"name": "write_file", "arguments": tool_arguments}
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }]
-        });
-        let final_response = json!({
-            "id": "final-response",
-            "object": "chat.completion",
-            "created": 2,
-            "model": "test-model",
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "implemented"},
-                "finish_reason": "stop"
-            }]
-        });
+        let tool_response = json!({"id":"tool-response","model":"test-model","message":{"role":"assistant","content":[{"type":"tool_call","call":{"id":"call-1","name":"write_file","arguments":serde_json::from_str::<serde_json::Value>(&(tool_arguments)).unwrap()}}]},"stop_reason":{"reason":"tool_calls"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}});
+        let final_response = json!({"id":"final-response","model":"test-model","message":{"role":"assistant","content":[{"type":"text","text":"implemented"}]},"stop_reason":{"reason":"complete"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}});
         Self {
             responses: Mutex::new(
                 vec![
@@ -68,13 +41,50 @@ impl PatchProvider {
 }
 
 #[async_trait]
-impl ChatCompletionProvider for PatchProvider {
-    async fn complete(&self, _request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
-        self.responses
-            .lock()
-            .unwrap()
-            .pop_front()
-            .context("No SWE-bench test response")
+impl ModelProvider for PatchProvider {
+    fn model_spec(
+        &self,
+        model: &str,
+    ) -> std::result::Result<aicoder_core::model::ModelSpec, aicoder_core::model::ProviderError>
+    {
+        let mut spec = aicoder_core::model::ModelSpec::new("scripted", model);
+        spec.capabilities = aicoder_core::model::ModelCapabilities {
+            tools: true,
+            images: true,
+            reasoning_history: true,
+            temperature: true,
+            top_p: true,
+            seed: true,
+            stop_sequences: true,
+            structured_output: true,
+        };
+        Ok(spec)
+    }
+    async fn generate(
+        &self,
+        _request: ModelRequest,
+        events: Arc<dyn aicoder_core::model::ModelEventSink>,
+        _context: aicoder_core::TurnExecutionContext,
+    ) -> std::result::Result<ModelResponse, aicoder_core::model::ProviderError> {
+        let result: anyhow::Result<ModelResponse> = async {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .context("No SWE-bench test response")
+        }
+        .await;
+        match result {
+            Ok(response) => {
+                aicoder_core::model::emit_response(&response, events.as_ref());
+                Ok(response)
+            }
+            Err(error) => Err(aicoder_core::model::ProviderError::new(
+                "scripted",
+                aicoder_core::model::ProviderErrorKind::Other,
+                error.to_string(),
+            )),
+        }
     }
 }
 
@@ -127,10 +137,7 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
             root.path().to_path_buf(),
         ));
     let case = adapter.adapt(&dataset.instances[0]).unwrap();
-    let prompt = case.eval_case.request.messages[1]
-        .content
-        .as_deref()
-        .unwrap();
+    let prompt = case.eval_case.request.messages[1].text_content();
     assert!(prompt.contains("Create the required implementation."));
     assert!(prompt.contains("Add a focused file."));
     assert!(!prompt.contains("SECRET_GOLD_PATCH"));

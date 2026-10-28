@@ -6,7 +6,7 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
 };
 
-use crate::types::FunctionDefinition;
+use crate::model::ToolDefinition;
 
 use super::super::{
     ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess,
@@ -35,14 +35,14 @@ fn default_limit_lines() -> usize {
 
 #[async_trait]
 impl ExecutableTool for ReadFileTool {
-    fn definition(&self) -> FunctionDefinition {
-        FunctionDefinition {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
             name: "read_file".to_string(),
             description: Some(
                 "Read a bounded page of UTF-8 text inside the workspace. Continue from next_offset_line while has_more is true."
                     .to_string(),
             ),
-            parameters: Some(json!({
+            parameters: json!({
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
@@ -51,7 +51,7 @@ impl ExecutableTool for ReadFileTool {
                 },
                 "required": ["path"],
                 "additionalProperties": false
-            })),
+            }),
         }
     }
 

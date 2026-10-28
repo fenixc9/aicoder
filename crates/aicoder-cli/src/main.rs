@@ -97,7 +97,7 @@ impl ApprovalHandler for ConsoleApproval {
 
 impl AgentEventHandler for ConsoleEvents {
     fn on_agent_completed(&self, _event: AgentCompletedEvent) {
-        // println!("[Finish] Usage {:?}", _event.usage)
+        // println!("[Finish] ModelUsage {:?}", _event.usage)
     }
 
     fn on_tool_call_ended(&self, event: ToolCallEndedEvent) {
@@ -252,12 +252,12 @@ async fn main() -> Result<()> {
             "You are a helpful coding assistant. Reply in Chinese. Use tools when needed."
                 .to_string(),
         ),
-        temperature: Some(0.7),
-        top_p: Some(1.0),
-        max_tokens: Some(2048),
-        seed: None,
-        stop: None,
-        response_format: None,
+        options: aicoder_core::model::ModelOptions {
+            temperature: Some(0.7),
+            top_p: Some(1.0),
+            max_output_tokens: Some(2048),
+            ..Default::default()
+        },
     };
     let agent = Agent::new(turn_executor, agent_config);
     let handler = Arc::new(ConsoleEvents);
@@ -279,7 +279,7 @@ async fn main() -> Result<()> {
     if let Some(session) = &result.session {
         eprintln!("Session: {}", session.id);
     }
-    println!("Usage :{:?}", result.execution_result.usage);
+    println!("ModelUsage :{:?}", result.execution_result.usage);
     Ok(())
 }
 

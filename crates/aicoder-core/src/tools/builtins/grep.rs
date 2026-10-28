@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use crate::types::FunctionDefinition;
+use crate::model::ToolDefinition;
 
 use super::super::{
     ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess,
@@ -33,13 +33,13 @@ fn default_max_results() -> usize {
 
 #[async_trait]
 impl ExecutableTool for GrepTool {
-    fn definition(&self) -> FunctionDefinition {
-        FunctionDefinition {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
             name: "grep".to_string(),
             description: Some(
                 "Search workspace text using ripgrep regular expressions".to_string(),
             ),
-            parameters: Some(json!({
+            parameters: json!({
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string"},
@@ -49,7 +49,7 @@ impl ExecutableTool for GrepTool {
                 },
                 "required": ["pattern"],
                 "additionalProperties": false
-            })),
+            }),
         }
     }
 

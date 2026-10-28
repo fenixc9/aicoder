@@ -273,7 +273,10 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, model: &str, area: Rect) {
         model,
         app.state.name(),
         app.round,
-        app.usage.total_tokens,
+        app.usage
+            .total_tokens
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "unknown".into()),
         elapsed.as_secs_f32(),
     );
     frame.render_widget(

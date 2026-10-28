@@ -1,9 +1,11 @@
+use aicoder_core::model::{ModelOptions, ModelToolChoice};
+use std::sync::Arc;
 use std::{fs, path::Path};
 
 use aicoder_core::{
-    ChatCompletionProvider, TurnExecutionConfig, TurnExecutor,
+    ModelProvider, TurnExecutionConfig, TurnExecutor,
+    model::{Message, MessageRole, ModelRequest, ModelResponse},
     tools::ToolRegistry,
-    types::{ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role},
 };
 use aicoder_eval::{
     CommandEvaluator, EvalCase, EvalRunOutcome, EvalRunner, EvalVerdict, EvaluationContext,
@@ -30,78 +32,102 @@ impl Evaluator for BrokenEvaluator {
 }
 
 #[async_trait]
-impl ChatCompletionProvider for StaticProvider {
-    async fn complete(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
-        Ok(serde_json::from_value(serde_json::json!({
-            "id": "eval-response",
-            "object": "chat.completion",
-            "created": 1,
-            "model": request.model,
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": "done"},
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": 4,
-                "completion_tokens": 1,
-                "total_tokens": 5
+impl ModelProvider for StaticProvider {
+    fn model_spec(
+        &self,
+        model: &str,
+    ) -> std::result::Result<aicoder_core::model::ModelSpec, aicoder_core::model::ProviderError>
+    {
+        let mut spec = aicoder_core::model::ModelSpec::new("scripted", model);
+        spec.capabilities = aicoder_core::model::ModelCapabilities {
+            tools: true,
+            images: true,
+            reasoning_history: true,
+            temperature: true,
+            top_p: true,
+            seed: true,
+            stop_sequences: true,
+            structured_output: true,
+        };
+        Ok(spec)
+    }
+    async fn generate(
+        &self,
+        request: ModelRequest,
+        events: Arc<dyn aicoder_core::model::ModelEventSink>,
+        _context: aicoder_core::TurnExecutionContext,
+    ) -> std::result::Result<ModelResponse, aicoder_core::model::ProviderError> {
+        let result: anyhow::Result<ModelResponse> = async {
+        Ok(serde_json::from_value(serde_json::json!({"id":"eval-response","model":request.model,"message":{"role":"assistant","content":[{"type":"text","text":"done"}]},"stop_reason":{"reason":"complete"},"usage":{"input_tokens":4,"output_tokens":1,"total_tokens":5,"cached_input_tokens":null,"cache_write_tokens":null}}))?)
+    }.await;
+        match result {
+            Ok(response) => {
+                aicoder_core::model::emit_response(&response, events.as_ref());
+                Ok(response)
             }
-        }))?)
+            Err(error) => Err(aicoder_core::model::ProviderError::new(
+                "scripted",
+                aicoder_core::model::ProviderErrorKind::Other,
+                error.to_string(),
+            )),
+        }
     }
 }
 
 #[async_trait]
-impl ChatCompletionProvider for ToolOnlyProvider {
-    async fn complete(&self, request: ChatCompletionRequest) -> Result<ChatCompletionResponse> {
-        Ok(serde_json::from_value(serde_json::json!({
-            "id": "tool-response",
-            "object": "chat.completion",
-            "created": 1,
-            "model": request.model,
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": null,
-                    "tool_calls": [{
-                        "id": "call-1",
-                        "type": "function",
-                        "function": {"name": "read_file", "arguments": "{\"path\":\"missing\"}"}
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }],
-            "usage": {
-                "prompt_tokens": 6,
-                "completion_tokens": 1,
-                "total_tokens": 7
+impl ModelProvider for ToolOnlyProvider {
+    fn model_spec(
+        &self,
+        model: &str,
+    ) -> std::result::Result<aicoder_core::model::ModelSpec, aicoder_core::model::ProviderError>
+    {
+        let mut spec = aicoder_core::model::ModelSpec::new("scripted", model);
+        spec.capabilities = aicoder_core::model::ModelCapabilities {
+            tools: true,
+            images: true,
+            reasoning_history: true,
+            temperature: true,
+            top_p: true,
+            seed: true,
+            stop_sequences: true,
+            structured_output: true,
+        };
+        Ok(spec)
+    }
+    async fn generate(
+        &self,
+        request: ModelRequest,
+        events: Arc<dyn aicoder_core::model::ModelEventSink>,
+        _context: aicoder_core::TurnExecutionContext,
+    ) -> std::result::Result<ModelResponse, aicoder_core::model::ProviderError> {
+        let result: anyhow::Result<ModelResponse> = async {
+        Ok(serde_json::from_value(serde_json::json!({"id":"tool-response","model":request.model,"message":{"role":"assistant","content":[{"type":"tool_call","call":{"id":"call-1","name":"read_file","arguments":{"path": "missing"}}}]},"stop_reason":{"reason":"tool_calls"},"usage":{"input_tokens":6,"output_tokens":1,"total_tokens":7,"cached_input_tokens":null,"cache_write_tokens":null}}))?)
+    }.await;
+        match result {
+            Ok(response) => {
+                aicoder_core::model::emit_response(&response, events.as_ref());
+                Ok(response)
             }
-        }))?)
+            Err(error) => Err(aicoder_core::model::ProviderError::new(
+                "scripted",
+                aicoder_core::model::ProviderErrorKind::Other,
+                error.to_string(),
+            )),
+        }
     }
 }
 
-fn request() -> ChatCompletionRequest {
-    ChatCompletionRequest {
+fn request() -> ModelRequest {
+    ModelRequest {
         model: "eval-model".to_string(),
-        messages: vec![ChatMessage {
-            role: Role::User,
-            content: Some("inspect the fixture".to_string()),
-            reasoning: None,
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        }],
-        temperature: None,
-        top_p: None,
-        max_tokens: None,
-        seed: None,
-        tools: None,
-        tool_choice: None,
-        stream: None,
-        stream_options: None,
-        stop: None,
-        response_format: None,
+        messages: vec![Message::text(
+            MessageRole::User,
+            "inspect the fixture".to_string(),
+        )],
+        options: ModelOptions::default(),
+        tools: Vec::new(),
+        tool_choice: ModelToolChoice::Auto,
+        stream: false,
     }
 }
 
@@ -130,7 +156,7 @@ async fn runner_captures_trace_and_applies_evaluators() {
 
     assert_eq!(report.verdict, EvalVerdict::Passed);
     assert_eq!(report.run.outcome, EvalRunOutcome::Completed);
-    assert_eq!(report.run.usage.total_tokens, 5);
+    assert_eq!(report.run.usage.total_tokens, Some(5));
     assert!(report.run.usage.provider_reported);
     assert_eq!(report.trajectory.rounds, 1);
     assert_eq!(report.trajectory.state_transitions, 4);
@@ -202,7 +228,7 @@ async fn failed_agent_run_retains_provider_usage_from_trace() {
         .unwrap();
 
     assert_eq!(report.run.outcome, EvalRunOutcome::Failed);
-    assert_eq!(report.run.usage.total_tokens, 7);
+    assert_eq!(report.run.usage.total_tokens, Some(7));
     assert!(report.run.usage.provider_reported);
     assert!(
         report
