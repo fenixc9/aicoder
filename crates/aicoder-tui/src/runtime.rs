@@ -1,7 +1,8 @@
+use aicoder_providers::ChatClient;
 use std::{path::PathBuf, sync::Arc};
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentEventHandler, AgentRawEventEnvelope, ChatClient, ContextWindowConfig,
+    Agent, AgentConfig, AgentEventHandler, AgentRawEventEnvelope, ContextWindowConfig,
     PruningContextCompactor, SessionSelection, TurnExecutionConfig, TurnExecutionContext,
     TurnExecutor,
     session::{JsonlSessionRepository, Session, SessionInfo, SessionRepository},

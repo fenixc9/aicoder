@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "iterations": 25,
+  "total_cases": 125,
+  "elapsed_us": 304050,
+  "first_iteration": [
+    {
+      "case": "Edit",
+      "elapsed_us": 446,
+      "events": 30,
+      "messages": 4,
+      "outcome": "completed",
+      "rounds": 2,
+      "transcript_json_bytes": 508
+    },
+    {
+      "case": "Search",
+      "elapsed_us": 2537,
+      "events": 28,
+      "messages": 4,
+      "outcome": "completed",
+      "rounds": 2,
+      "transcript_json_bytes": 433
+    },
+    {
+      "case": "ToolFailure",
+      "elapsed_us": 95,
+      "events": 28,
+      "messages": 4,
+      "outcome": "completed",
+      "rounds": 2,
+      "transcript_json_bytes": 423
+    },
+    {
+      "case": "Cancel",
+      "elapsed_us": 106,
+      "events": 9,
+      "outcome": "aborted"
+    },
+    {
+      "case": "SessionResume",
+      "elapsed_us": 8514,
+      "events": 32,
+      "messages": 4,
+      "outcome": "completed",
+      "rounds": 1,
+      "transcript_json_bytes": 157
+    }
+  ]
+}

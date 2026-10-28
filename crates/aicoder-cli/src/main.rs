@@ -1,3 +1,4 @@
+use aicoder_providers::ChatClient;
 use std::{
     io::{self, Write},
     path::PathBuf,
@@ -5,8 +6,8 @@ use std::{
 };
 
 use aicoder_core::{
-    Agent, AgentConfig, AgentEventHandler, ChatClient, ContextWindowConfig,
-    PruningContextCompactor, SessionSelection, TurnExecutionConfig, TurnExecutor,
+    Agent, AgentConfig, AgentEventHandler, ContextWindowConfig, PruningContextCompactor,
+    SessionSelection, TurnExecutionConfig, TurnExecutor,
     events::{
         AgentCompletedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
         ContextCompactionCompletedEvent, ReasoningChunkEvent, ReasoningEndedEvent,

@@ -10,7 +10,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::{
+use aicoder_core::{
     cancellation::TurnExecutionContext,
     events::{AgentEventEmitter, AgentRawEvent},
     redaction::{sanitize_text, sanitize_url},
@@ -93,7 +93,7 @@ fn emit_retry(
 /// API 客户端配置
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
-    /// API 基础 URL（如 https://api.openai.com/v1）
+    /// API 基础 URL（如 <https://api.openai.com/v1>）
     pub base_url: String,
     /// API 密钥
     #[serde(skip_serializing)]
@@ -665,7 +665,7 @@ impl ChatClient {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::AgentRawEventEnvelope;
+    use aicoder_core::events::AgentRawEventEnvelope;
     use futures::StreamExt;
     use std::{
         io::{self, Write},
@@ -908,8 +908,8 @@ mod tests {
     fn test_request(stream: bool) -> ChatCompletionRequest {
         ChatCompletionRequest {
             model: "deepseek-chat".to_string(),
-            messages: vec![crate::types::ChatMessage {
-                role: crate::types::Role::User,
+            messages: vec![aicoder_core::types::ChatMessage {
+                role: aicoder_core::types::Role::User,
                 content: Some("hello".to_string()),
                 reasoning: None,
                 tool_calls: None,
@@ -1248,7 +1248,7 @@ mod tests {
         assert_eq!(chunk.choices[0].delta.content.as_deref(), Some(" world"));
         assert_eq!(
             chunk.choices[0].finish_reason,
-            Some(crate::types::FinishReason::Stop)
+            Some(aicoder_core::types::FinishReason::Stop)
         );
         assert!(stream.next().await.is_none());
 
@@ -1357,7 +1357,11 @@ mod tests {
             .await;
         cancel_task.await.unwrap();
         let error = result.unwrap_err();
-        assert!(error.downcast_ref::<crate::TurnCancelled>().is_some());
+        assert!(
+            error
+                .downcast_ref::<aicoder_core::TurnCancelled>()
+                .is_some()
+        );
         events.shutdown().await;
         server.abort();
 
@@ -1365,7 +1369,7 @@ mod tests {
         assert!(delivered.iter().any(|event| matches!(
             &event.event,
             AgentRawEvent::ContentEnded {
-                outcome: crate::events::StreamEnd::Aborted { reason },
+                outcome: aicoder_core::events::StreamEnd::Aborted { reason },
                 ..
             } if reason.as_ref() == "stop streaming response"
         )));

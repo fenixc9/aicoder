@@ -22,4 +22,4 @@ pub use types::{
     RunId, StreamEnd, ToolCallKey, ToolExecutionOutcome,
 };
 
-pub(crate) use types::emit_full_response_events;
+pub use types::emit_full_response_events;

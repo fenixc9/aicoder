@@ -202,7 +202,7 @@ pub enum AgentRawEvent {
     },
 }
 
-pub(crate) fn emit_full_response_events(
+pub fn emit_full_response_events(
     events: &super::AgentEventEmitter,
     response: &ChatCompletionResponse,
 ) {

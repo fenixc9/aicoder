@@ -1,44 +1,31 @@
-[package]
-name = "aicoder-core"
-version = "0.1.0"
-edition = "2024"
-
 [workspace]
-members = ["crates/aicoder-cli", "crates/aicoder-eval", "crates/aicoder-tui"]
+members = ["crates/aicoder-core", "crates/aicoder-providers", "crates/aicoder-cli", "crates/aicoder-eval", "crates/aicoder-tui"]
 resolver = "3"
 
-[dependencies]
-# 异步运行时
-tokio = { version = "1", features = ["full"] }
-tokio-util = "0.7"
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.92"
 
-# HTTP 客户端（用于调用 LLM API）
-reqwest = { version = "0.12", features = ["json", "stream", "hickory-dns"] }
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
 
-# JSON 序列化/反序列化
+[workspace.lints.clippy]
+dbg_macro = "deny"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+
+[workspace.dependencies]
+aicoder-core = { path = "crates/aicoder-core" }
+aicoder-providers = { path = "crates/aicoder-providers" }
+anyhow = "1"
+async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }
+dotenvy = "0.15"
+futures = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-regex = "1"
-httpdate = "1"
-fs2 = "0.4"
-libc = "0.2"
-
-# 异常处理
-anyhow = "1"
-
-# 日志框架
-tracing = "0.1"
-
-# 异步工具集
-futures = "0.3"
-async-stream = "0.3"
-
-# 异步工具和模型接口
-async-trait = "0.1"
-
-# UUID
-uuid = { version = "1", features = ["v4"] }
-
-[dev-dependencies]
 tempfile = "3"
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["tracing-log"] }

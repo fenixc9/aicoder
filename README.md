@@ -7,12 +7,22 @@ are separate crates.
 ## Workspace
 
 - aicoder-core: the low-level TurnExecutor plus the session-aware Agent API,
-  model client, events, tools, and session repositories.
+  model interfaces, events, tools, and session repositories.
+- aicoder-providers: model-service clients, HTTP transport, retries, and
+  OpenAI-compatible response streaming.
 - aicoder-cli: current command-line application.
 - aicoder-tui: interactive Ratatui frontend with sessions, streaming output,
   tool approvals, execution status, and cooperative cancellation.
 - aicoder-eval: isolated evaluation runner, deterministic evaluators,
   SWE-bench adapter, batch runner, and official harness integration.
+
+Each package lives under `crates/`; the root manifest defines the Cargo
+workspace and shared dependency versions. See [contributing](CONTRIBUTING.md)
+and [project instructions](AGENTS.md) for development conventions.
+
+The [development roadmap](docs/roadmap.md) defines the plan for a lightweight,
+extensible core and Pi feature parity across SDK, CLI, TUI, and Web integrations.
+See [API migrations](docs/migrations.md) when updating an embedded application.
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs
 request construction or session persistence. Both layers consume the single
@@ -59,9 +69,13 @@ are written to `$AICODER_HOME/tui.log` or `~/.aicoder/tui.log`.
 
 ~~~bash
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked --workspace
+cargo run --locked -p aicoder-core --example offline_smoke
+RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
 ~~~
 
 See [the evaluation README](crates/aicoder-eval/README.md) for evaluation and
 SWE-bench usage.
+See [the development baseline](docs/development-baseline.md) for toolchain and
+platform support, API/session format snapshots, and performance measurements.

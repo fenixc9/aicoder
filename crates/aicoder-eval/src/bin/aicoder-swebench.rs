@@ -1,7 +1,8 @@
+use aicoder_providers::ChatClient;
 use std::path::PathBuf;
 
 use aicoder_core::{
-    ChatClient, TurnExecutionConfig, TurnExecutor, WorkspaceChangeVerifier, tools::AllowAllApproval,
+    TurnExecutionConfig, TurnExecutor, WorkspaceChangeVerifier, tools::AllowAllApproval,
 };
 use aicoder_eval::{
     SweBenchAdapter, SweBenchBatchOptions, SweBenchBatchRunner, SweBenchDataset, SweBenchFilter,

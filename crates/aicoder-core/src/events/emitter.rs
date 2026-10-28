@@ -25,7 +25,8 @@ pub struct AgentEventEmitter {
 }
 
 impl AgentEventEmitter {
-    pub(crate) fn new(handler: Arc<dyn AgentEventHandler>) -> Self {
+    /// Starts an ordered event dispatcher. The owner must call `shutdown` after producers finish.
+    pub fn new(handler: Arc<dyn AgentEventHandler>) -> Self {
         let (sender, mut receiver) = mpsc::unbounded_channel::<EventCommand>();
         let run_id = RunId::new();
         let run_id_text = run_id.to_string();
@@ -84,7 +85,7 @@ impl AgentEventEmitter {
 
     /// Waits asynchronously until every previously enqueued event was delivered, then stops the
     /// dedicated dispatcher thread. No callback runs on a Tokio worker thread.
-    pub(crate) async fn shutdown(&self) {
+    pub async fn shutdown(&self) {
         let (acknowledge, received) = oneshot::channel();
         if self
             .sender

@@ -88,7 +88,7 @@ fn truncate_utf8(input: &str, max_bytes: usize) -> String {
 }
 
 /// Redacts known credentials, recursively sanitizes JSON, and bounds output size.
-pub(crate) fn sanitize_text(input: &str, max_bytes: usize) -> String {
+pub fn sanitize_text(input: &str, max_bytes: usize) -> String {
     let redacted = match serde_json::from_str::<Value>(input) {
         Ok(mut value) => {
             redact_json_value(&mut value);
@@ -100,8 +100,8 @@ pub(crate) fn sanitize_text(input: &str, max_bytes: usize) -> String {
 }
 
 /// Removes credentials from URL userinfo and sensitive query parameters.
-pub(crate) fn sanitize_url(input: &str) -> String {
-    let Ok(mut url) = reqwest::Url::parse(input) else {
+pub fn sanitize_url(input: &str) -> String {
+    let Ok(mut url) = url::Url::parse(input) else {
         return sanitize_text(input, 2048);
     };
 

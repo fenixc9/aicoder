@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{Context, Result};
 
-use crate::{
+use aicoder_core::{
     events::{AgentEventEmitter, AgentRawEvent, StreamEnd, ToolCallKey},
     types::{
         ChatCompletionResponse, ChatMessage, Choice, FunctionCall, LogProbs, Role, StreamChunk,
@@ -160,7 +160,7 @@ struct ChoiceAccumulator {
     reasoning_event_open: bool,
     content_event_open: bool,
     tool_calls: BTreeMap<i32, ToolCallAccumulator>,
-    finish_reason: Option<crate::types::FinishReason>,
+    finish_reason: Option<aicoder_core::types::FinishReason>,
     events_ended: bool,
     logprobs: Option<LogProbs>,
 }
@@ -573,7 +573,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::events::AgentRawEventEnvelope;
+    use aicoder_core::events::AgentRawEventEnvelope;
 
     fn chunk(value: serde_json::Value) -> StreamChunk {
         serde_json::from_value(value).unwrap()
