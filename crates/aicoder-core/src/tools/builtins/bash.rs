@@ -1,4 +1,4 @@
-use std::{os::unix::process::CommandExt, time::Duration};
+use std::{os::unix::process::CommandExt, process::Stdio, time::Duration};
 
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -65,19 +65,18 @@ impl ExecutableTool for BashTool {
 
         let mut command = Command::new("/bin/bash");
         command
-            .arg("-lc")
+            .arg("-c")
             .arg(&arguments.command)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .current_dir(context.workspace_root())
             .kill_on_drop(true);
         command.as_std_mut().process_group(0);
-        for secret in [
-            "OPENAI_API_KEY",
-            "ANTHROPIC_API_KEY",
-            "DASHSCOPE_API_KEY",
-            "ZHIPU_API_KEY",
-        ] {
-            command.env_remove(secret);
-        }
+        scrub_credentials(
+            &mut command,
+            std::env::var("AICODER_API_KEY_ENV").ok().as_deref(),
+        );
 
         let child = command
             .spawn()
@@ -153,6 +152,64 @@ impl Drop for ProcessGroupGuard {
             unsafe {
                 libc::kill(-process_group, libc::SIGKILL);
             }
+        }
+    }
+}
+
+fn scrub_credentials(command: &mut Command, referenced: Option<&str>) {
+    for name in [
+        "OPENAI_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "AICODER_API_KEY",
+        "AICODER_API_KEY_ENV",
+        "AICODER_PROXY",
+        "ANTHROPIC_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "ZHIPU_API_KEY",
+        "BASH_ENV",
+    ] {
+        command.env_remove(name);
+    }
+    if let Some(name) = referenced
+        && !name.is_empty()
+        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        command.env_remove(name);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn command_output_is_captured_and_stdin_is_closed() {
+        let workspace = tempfile::tempdir().unwrap();
+        let context = ToolContext::new(workspace.path(), Duration::from_secs(2), 4096).unwrap();
+        let result=BashTool.execute(&context,json!({"command":"printf 'captured stdout'; printf 'captured stderr' >&2; if read -r line; then exit 9; fi"})).await.unwrap();
+        assert_eq!(result.output["stdout"], "captured stdout");
+        assert_eq!(result.output["stderr"], "captured stderr");
+        assert_eq!(result.output["exit_code"], 0);
+    }
+    #[test]
+    fn managed_and_referenced_credentials_are_removed_from_the_child_environment() {
+        let mut command = Command::new("/bin/bash");
+        command
+            .env("AICODER_API_KEY", "fake-secret")
+            .env("SERVICE_TOKEN", "fake-secret");
+        scrub_credentials(&mut command, Some("SERVICE_TOKEN"));
+        for name in [
+            "OPENAI_API_KEY",
+            "DEEPSEEK_API_KEY",
+            "AICODER_API_KEY",
+            "SERVICE_TOKEN",
+            "BASH_ENV",
+        ] {
+            assert!(
+                command
+                    .as_std()
+                    .get_envs()
+                    .any(|(key, value)| key == name && value.is_none())
+            );
         }
     }
 }
