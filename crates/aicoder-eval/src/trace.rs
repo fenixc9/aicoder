@@ -39,6 +39,7 @@ impl AgentTrace {
                     summary.final_state = Some(transition.current.name().to_string());
                 }
                 AgentRawEvent::ModelRequestStarted => summary.model_requests += 1,
+                AgentRawEvent::AgentStopped { .. } => summary.agent_stops += 1,
                 AgentRawEvent::ModelRetryScheduled { .. } => summary.model_retries += 1,
                 AgentRawEvent::CompletionVerificationStarted => {
                     summary.completion_candidates += 1;
@@ -140,6 +141,7 @@ fn event_kind(event: &AgentRawEvent) -> &'static str {
         AgentRawEvent::AgentCompleted { .. } => "agent_completed",
         AgentRawEvent::AgentFailed { .. } => "agent_failed",
         AgentRawEvent::AgentAborted { .. } => "agent_aborted",
+        AgentRawEvent::AgentStopped { .. } => "agent_stopped",
         AgentRawEvent::StateChanged { .. } => "state_changed",
         AgentRawEvent::RoundStarted => "round_started",
         AgentRawEvent::RoundCompleted { .. } => "round_completed",

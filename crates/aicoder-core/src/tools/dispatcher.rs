@@ -1,4 +1,9 @@
-use std::{path::Path, sync::Arc, time::Duration};
+use crate::run::RunLimiter;
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::Result;
 use futures::future::join_all;
@@ -16,6 +21,21 @@ use super::{
     ApprovalHandler, ToolCapability, ToolContext, ToolFailure, ToolInvocation, ToolRegistry,
     ToolSuccess, util::truncate_utf8,
 };
+
+pub(crate) struct DispatchCapture(Mutex<Vec<Option<Message>>>);
+impl DispatchCapture {
+    pub fn new(count: usize) -> Self {
+        Self(Mutex::new(vec![None; count]))
+    }
+    pub fn messages(&self) -> Vec<Message> {
+        self.0
+            .lock()
+            .expect("tool progress poisoned")
+            .iter_mut()
+            .filter_map(Option::take)
+            .collect()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct DispatcherConfig {
@@ -80,32 +100,61 @@ impl ToolDispatcher {
         self.dispatch_inner(calls, Some(events)).await
     }
 
-    pub(crate) async fn dispatch_with_context(
-        &self,
-        calls: &[ModelToolCall],
-        events: &AgentEventEmitter,
-        context: &TurnExecutionContext,
-    ) -> Result<Vec<Message>> {
-        if context.is_cancelled() {
-            return Err(context.error().into());
-        }
-        self.dispatch_inner_with_context(calls, Some(events), Some(context))
-            .await
-    }
-
     async fn dispatch_inner(
         &self,
         calls: &[ModelToolCall],
         events: Option<&AgentEventEmitter>,
     ) -> Result<Vec<Message>> {
-        self.dispatch_inner_with_context(calls, events, None).await
+        self.dispatch_inner_with_context(calls, events, None, None)
+            .await
     }
 
+    pub fn max_calls_per_round(&self) -> usize {
+        self.config.max_calls_per_round
+    }
+    pub(crate) async fn dispatch_captured(
+        &self,
+        calls: &[ModelToolCall],
+        events: &AgentEventEmitter,
+        context: &TurnExecutionContext,
+        limits: &Arc<RunLimiter>,
+        capture: &DispatchCapture,
+    ) -> Result<Vec<Message>> {
+        self.dispatch_inner_with_context(
+            calls,
+            Some(events),
+            Some(context),
+            Some((limits, capture)),
+        )
+        .await
+    }
+    async fn execute_recorded(
+        &self,
+        index: usize,
+        call: &ModelToolCall,
+        events: Option<&AgentEventEmitter>,
+        context: Option<&TurnExecutionContext>,
+        control: Option<(&Arc<RunLimiter>, &DispatchCapture)>,
+    ) -> Result<Message> {
+        let result = self
+            .execute_call(
+                call,
+                events,
+                context,
+                control.map(|(limits, _)| limits.as_ref()),
+            )
+            .await;
+        if let (Some((_, capture)), Ok(message)) = (control, &result) {
+            capture.0.lock().expect("tool progress poisoned")[index] = Some(message.clone());
+        }
+        result
+    }
     async fn dispatch_inner_with_context(
         &self,
         calls: &[ModelToolCall],
         events: Option<&AgentEventEmitter>,
         context: Option<&TurnExecutionContext>,
+        control: Option<(&Arc<RunLimiter>, &DispatchCapture)>,
     ) -> Result<Vec<Message>> {
         if calls.len() > self.config.max_calls_per_round {
             anyhow::bail!(
@@ -128,12 +177,18 @@ impl ToolDispatcher {
                 }
                 let futures = calls[start..index]
                     .iter()
-                    .map(|call| self.execute_call(call, events, context));
+                    .enumerate()
+                    .map(|(offset, call)| {
+                        self.execute_recorded(start + offset, call, events, context, control)
+                    });
                 for (offset, message) in join_all(futures).await.into_iter().enumerate() {
                     results[start + offset] = Some(message?);
                 }
             } else {
-                results[index] = Some(self.execute_call(&calls[index], events, context).await?);
+                results[index] = Some(
+                    self.execute_recorded(index, &calls[index], events, context, control)
+                        .await?,
+                );
                 index += 1;
             }
         }
@@ -153,7 +208,16 @@ impl ToolDispatcher {
         call: &ModelToolCall,
         events: Option<&AgentEventEmitter>,
         context: Option<&TurnExecutionContext>,
+        limits: Option<&RunLimiter>,
     ) -> Result<Message> {
+        if let Some(context) = context
+            && context.is_cancelled()
+        {
+            return Err(context.error().into());
+        }
+        if let Some(limits) = limits {
+            limits.tool_started();
+        }
         emit_event(
             events,
             AgentRawEvent::ToolExecutionStarted {
@@ -168,6 +232,7 @@ impl ToolDispatcher {
             return Ok(failed_tool_message(
                 events,
                 call,
+                limits,
                 ToolFailure::new("unknown_tool", format!("Unknown tool: {}", call.name)),
             ));
         };
@@ -216,6 +281,7 @@ impl ToolDispatcher {
                     return Ok(failed_tool_message(
                         events,
                         call,
+                        limits,
                         ToolFailure::new("approval_denied", "User denied tool execution"),
                     ));
                 }
@@ -248,6 +314,7 @@ impl ToolDispatcher {
                     return Ok(failed_tool_message(
                         events,
                         call,
+                        limits,
                         ToolFailure::new("approval_failed", error.to_string()),
                     ));
                 }
@@ -299,6 +366,7 @@ impl ToolDispatcher {
                 (failure_envelope(error), ToolExecutionOutcome::TimedOut)
             }
         };
+        let (envelope, outcome) = limit_payload(envelope, outcome, limits);
         emit_event(
             events,
             AgentRawEvent::ToolExecutionEnded {
@@ -320,9 +388,11 @@ fn emit_event(events: Option<&AgentEventEmitter>, event: AgentRawEvent) {
 fn failed_tool_message(
     events: Option<&AgentEventEmitter>,
     call: &ModelToolCall,
+    limits: Option<&RunLimiter>,
     error: ToolFailure,
 ) -> Message {
     let outcome = failure_outcome(&error);
+    let (envelope, outcome) = limit_payload(failure_envelope(error), outcome, limits);
     emit_event(
         events,
         AgentRawEvent::ToolExecutionEnded {
@@ -331,7 +401,7 @@ fn failed_tool_message(
             outcome: outcome.into(),
         },
     );
-    tool_message(call, failure_envelope(error))
+    tool_message(call, envelope)
 }
 
 fn failure_outcome(error: &ToolFailure) -> ToolExecutionOutcome {
@@ -384,4 +454,38 @@ fn failure_envelope(error: ToolFailure) -> Value {
             "details": error.details,
         }
     })
+}
+
+fn limit_payload(
+    mut envelope: Value,
+    mut outcome: ToolExecutionOutcome,
+    limits: Option<&RunLimiter>,
+) -> (Value, ToolExecutionOutcome) {
+    if let Some(limits) = limits {
+        let is_success = envelope["ok"] == true;
+        let payload = if is_success {
+            &envelope["output"]
+        } else {
+            &envelope["error"]
+        };
+        let encoded = payload.to_string();
+        let retained = limits.retain_text(&encoded);
+        if retained.len() != encoded.len() {
+            if is_success {
+                envelope["output"] = json!(retained);
+                envelope["truncated"] = json!(true);
+                outcome = ToolExecutionOutcome::Succeeded {
+                    output: envelope["output"].clone(),
+                    truncated: true,
+                };
+            } else {
+                envelope["error"]["message"] = json!(retained);
+                envelope["error"]["details"] = Value::Null;
+                if let ToolExecutionOutcome::Failed { message, .. } = &mut outcome {
+                    *message = envelope["error"]["message"].as_str().unwrap().into();
+                }
+            }
+        }
+    }
+    (envelope, outcome)
 }

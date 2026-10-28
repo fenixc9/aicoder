@@ -55,3 +55,11 @@ The initial real-provider pipeline smoke is recorded in
 not a resolved-rate claim: the provider stream ended during round five. The
 record is retained because it verified failure classification and usage
 recovery, and gives the next baseline run an explicit point of comparison.
+
+## Interrupted runs and quotas
+
+The runner reads the core outcome directly. `report.json` contains full retained
+`progress` and `run.stop`, including earlier tool results on interruption.
+Round/tool/token/time/output limits are incomplete runs rather than generic
+agent failures. CLI quota flags and accounting boundaries are documented in
+[run outcomes](run-outcomes.md); batch manifests include these settings.

@@ -212,7 +212,7 @@ async fn evaluator_errors_are_reported_without_losing_the_run() {
 }
 
 #[tokio::test]
-async fn failed_agent_run_retains_provider_usage_from_trace() {
+async fn limited_agent_run_retains_progress_and_usage_from_outcome() {
     let case = EvalCase::new("round-limit", request(), WorkspaceFixture::Empty);
     let report = EvalRunner::new()
         .run(&case, &|workspace| {
@@ -221,14 +221,20 @@ async fn failed_agent_run_retains_provider_usage_from_trace() {
                 .config(TurnExecutionConfig {
                     max_rounds: 1,
                     stream: false,
+                    ..Default::default()
                 })
                 .build()
         })
         .await
         .unwrap();
 
-    assert_eq!(report.run.outcome, EvalRunOutcome::Failed);
+    assert_eq!(report.run.outcome, EvalRunOutcome::Incomplete);
     assert_eq!(report.run.usage.total_tokens, Some(7));
+    assert!(matches!(
+        report.run.stop,
+        Some(aicoder_core::RunStop::Budget(_))
+    ));
+    assert_eq!(report.progress.messages.len(), 3);
     assert!(report.run.usage.provider_reported);
     assert!(
         report

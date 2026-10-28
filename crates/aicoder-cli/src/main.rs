@@ -51,6 +51,22 @@ struct Cli {
     #[arg(long, value_name = "TOKENS")]
     context_window: Option<usize>,
 
+    /// Maximum model rounds in one turn.
+    #[arg(long, default_value_t = 8)]
+    max_rounds: usize,
+    /// Maximum total tool invocations in one turn.
+    #[arg(long)]
+    max_tool_calls: Option<usize>,
+    /// Total token budget, using estimates when usage is unavailable.
+    #[arg(long)]
+    token_budget: Option<u64>,
+    /// Execution time budget in milliseconds, including approvals.
+    #[arg(long)]
+    time_budget_ms: Option<u64>,
+    /// Maximum cumulative generated payload bytes.
+    #[arg(long)]
+    output_budget_bytes: Option<usize>,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -74,24 +90,30 @@ struct ConsoleApproval;
 impl ApprovalHandler for ConsoleApproval {
     async fn approve(&self, invocation: &ToolInvocation) -> Result<bool> {
         let invocation = invocation.clone();
-        tokio::task::spawn_blocking(move || {
-            eprintln!(
-                "\n工具 {} 将以当前用户权限执行（不是沙箱）\n参数: {}",
-                invocation.name,
-                serde_json::to_string_pretty(&invocation.arguments)?
-            );
-            eprint!("允许执行? [y/N] ");
-            io::stderr().flush()?;
+        let (sent, received) = tokio::sync::oneshot::channel();
+        std::thread::Builder::new()
+            .name("aicoder-approval".into())
+            .spawn(move || {
+                let result = (|| -> Result<bool> {
+                    eprintln!(
+                        "\n工具 {} 将以当前用户权限执行（不是沙箱）\n参数: {}",
+                        invocation.name,
+                        serde_json::to_string_pretty(&invocation.arguments)?
+                    );
+                    eprint!("允许执行? [y/N] ");
+                    io::stderr().flush()?;
 
-            let mut input = String::new();
-            io::stdin().read_line(&mut input)?;
-            Ok(matches!(
-                input.trim().to_ascii_lowercase().as_str(),
-                "y" | "yes"
-            ))
-        })
-        .await
-        .context("Approval prompt task failed")?
+                    let mut input = String::new();
+                    io::stdin().read_line(&mut input)?;
+                    Ok(matches!(
+                        input.trim().to_ascii_lowercase().as_str(),
+                        "y" | "yes"
+                    ))
+                })();
+                let _ = sent.send(result);
+            })
+            .context("Failed to start approval reader")?;
+        received.await.context("Approval prompt closed")?
     }
 }
 
@@ -230,7 +252,16 @@ async fn main() -> Result<()> {
     let client = ChatClient::from_env(&model)?;
     let builder = TurnExecutor::builder(client)
         .workspace(&cli.workspace)
-        .config(TurnExecutionConfig::default());
+        .config(TurnExecutionConfig {
+            max_rounds: cli.max_rounds,
+            stream: true,
+            budget: aicoder_core::RunBudget {
+                max_tool_calls: cli.max_tool_calls,
+                max_tokens: cli.token_budget,
+                max_duration: cli.time_budget_ms.map(std::time::Duration::from_millis),
+                max_output_bytes: cli.output_budget_bytes,
+            },
+        });
     let builder = match cli.context_window {
         Some(max_context_tokens) => {
             builder.context_compactor(PruningContextCompactor::new(ContextWindowConfig {
@@ -261,8 +292,16 @@ async fn main() -> Result<()> {
     };
     let agent = Agent::new(turn_executor, agent_config);
     let handler = Arc::new(ConsoleEvents);
-    let result = match &repository {
-        None => agent.run(cli.prompt, handler).await?,
+    let outcome = match &repository {
+        None => {
+            agent
+                .run_outcome(
+                    cli.prompt,
+                    handler,
+                    aicoder_core::TurnExecutionContext::new(),
+                )
+                .await
+        }
         Some(repository) => {
             let selection = if cli.continue_session {
                 SessionSelection::ContinueMostRecent
@@ -272,15 +311,43 @@ async fn main() -> Result<()> {
                 SessionSelection::New
             };
             agent
-                .run_with_session(repository, selection, cli.prompt, handler)
-                .await?
+                .run_with_session_outcome(
+                    repository,
+                    selection,
+                    cli.prompt,
+                    handler,
+                    aicoder_core::TurnExecutionContext::new(),
+                )
+                .await
         }
     };
-    if let Some(session) = &result.session {
+    if let Some(session) = outcome.session() {
         eprintln!("Session: {}", session.id);
     }
-    println!("ModelUsage :{:?}", result.execution_result.usage);
-    Ok(())
+    let progress = outcome.progress();
+    let count = |value: Option<u64>| {
+        value
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "unknown".into())
+    };
+    println!(
+        "Tokens: input={}, output={}, total={}",
+        count(progress.usage.input_tokens),
+        count(progress.usage.output_tokens),
+        count(progress.usage.total_tokens)
+    );
+    if let Some(limit) = cli.token_budget {
+        println!(
+            "Token budget: {}/{limit}{}",
+            progress.tokens.used,
+            if progress.tokens.estimated {
+                " (estimated)"
+            } else {
+                ""
+            }
+        );
+    }
+    outcome.into_result().map(|_| ())
 }
 
 #[cfg(test)]

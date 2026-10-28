@@ -63,6 +63,14 @@ struct RunArgs {
     no_hints: bool,
     #[arg(long, default_value_t = 8)]
     max_rounds: usize,
+    #[arg(long)]
+    max_tool_calls: Option<usize>,
+    #[arg(long)]
+    token_budget: Option<u64>,
+    #[arg(long)]
+    time_budget_ms: Option<u64>,
+    #[arg(long)]
+    output_budget_bytes: Option<usize>,
     #[arg(long, default_value_t = 4096)]
     max_tokens: u32,
     #[arg(long, default_value_t = 0.0)]
@@ -140,6 +148,14 @@ async fn run(arguments: RunArgs) -> Result<()> {
         .include_hints(!arguments.no_hints)
         .temperature(Some(arguments.temperature))
         .max_tokens(Some(arguments.max_tokens));
+    let budget = aicoder_core::RunBudget {
+        max_tool_calls: arguments.max_tool_calls,
+        max_tokens: arguments.token_budget,
+        max_duration: arguments
+            .time_budget_ms
+            .map(std::time::Duration::from_millis),
+        max_output_bytes: arguments.output_budget_bytes,
+    };
     let options = SweBenchBatchOptions::new(&arguments.output, &arguments.run_id)
         .dataset(selected.name.clone())
         .concurrency(arguments.workers)
@@ -151,6 +167,7 @@ async fn run(arguments: RunArgs) -> Result<()> {
             "temperature": arguments.temperature,
             "max_tokens": arguments.max_tokens,
             "max_rounds": arguments.max_rounds,
+            "budget": budget,
             "stream": arguments.stream,
             "require_workspace_change": !arguments.allow_empty_patch,
         }));
@@ -165,7 +182,11 @@ async fn run(arguments: RunArgs) -> Result<()> {
             let builder = TurnExecutor::builder(client)
                 .workspace(workspace)
                 .approval(AllowAllApproval)
-                .config(TurnExecutionConfig { max_rounds, stream });
+                .config(TurnExecutionConfig {
+                    max_rounds,
+                    stream,
+                    budget: budget.clone(),
+                });
             if allow_empty_patch {
                 builder.build()
             } else {

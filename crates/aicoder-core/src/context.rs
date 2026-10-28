@@ -27,6 +27,10 @@ pub struct ContextCompaction {
 #[async_trait]
 pub trait ContextCompactor: Send + Sync {
     fn name(&self) -> &'static str;
+    /// Whether compaction may consume model tokens. Unknown implementations are accounted conservatively.
+    fn uses_model(&self) -> bool {
+        true
+    }
 
     fn estimate_tokens(&self, input: ContextCompactionInput<'_>) -> usize;
 
@@ -95,6 +99,9 @@ impl PruningContextCompactor {
 
 #[async_trait]
 impl ContextCompactor for PruningContextCompactor {
+    fn uses_model(&self) -> bool {
+        false
+    }
     fn name(&self) -> &'static str {
         "prune_oldest"
     }

@@ -21,3 +21,5 @@ pub use registry::ToolRegistry;
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) use dispatcher::DispatchCapture;

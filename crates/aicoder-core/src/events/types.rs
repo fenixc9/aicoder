@@ -102,6 +102,9 @@ pub enum AgentRawEvent {
     AgentAborted {
         reason: Arc<str>,
     },
+    AgentStopped {
+        stop: Arc<crate::run::RunStop>,
+    },
     StateChanged {
         transition: AgentStateTransition,
     },

@@ -136,7 +136,7 @@ impl AgentRuntime {
             let outcome = agent
                 .run_with_session_outcome(repository.as_ref(), selection, prompt, handler, context)
                 .await;
-            let _ = sender.send(AppEvent::TurnFinished(outcome));
+            let _ = sender.send(AppEvent::TurnFinished(Box::new(outcome)));
         });
     }
 }

@@ -21,7 +21,7 @@ pub enum AppEvent {
         invocation: ToolInvocation,
         respond_to: oneshot::Sender<bool>,
     },
-    TurnFinished(AgentTurnOutcome),
+    TurnFinished(Box<AgentTurnOutcome>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -279,7 +279,7 @@ impl App {
                     respond_to,
                 });
             }
-            AppEvent::TurnFinished(outcome) => self.finish_turn(outcome),
+            AppEvent::TurnFinished(outcome) => self.finish_turn(*outcome),
         }
     }
 
@@ -365,43 +365,26 @@ impl App {
                 if let Some(session) = result.session {
                     self.session_selection = SessionSelection::Existing(session.id);
                 }
-                self.usage = result.execution_result.usage;
+                self.usage = result.execution_result.progress.usage;
             }
-            AgentTurnOutcome::Aborted(turn) => {
-                self.round = turn.rounds;
-                self.state = AgentRunState::Aborted {
-                    round: (turn.rounds > 0).then_some(turn.rounds),
+            AgentTurnOutcome::Aborted(turn)
+            | AgentTurnOutcome::Limited(turn)
+            | AgentTurnOutcome::Stopped(turn)
+            | AgentTurnOutcome::Failed(turn) => {
+                self.round = turn.progress.rounds;
+                let round = (self.round > 0).then_some(self.round);
+                self.state = match &turn.stop {
+                    aicoder_core::RunStop::Cancelled { .. } => AgentRunState::Aborted { round },
+                    aicoder_core::RunStop::Failed(_) => AgentRunState::Failed { round },
+                    _ => AgentRunState::Stopped { round },
                 };
-                let reason = turn.error.to_string();
+                let message = turn.stop.to_string();
+                self.usage = turn.progress.usage;
                 if let Some(session) = turn.session {
                     self.session_selection = SessionSelection::Existing(session.id);
                 }
-                self.usage = turn.usage;
-                if !self.timeline.iter().rev().take(2).any(
-                    |item| matches!(item, TimelineItem::Notice(text) if text.contains(&reason)),
-                ) {
-                    self.timeline
-                        .push(TimelineItem::Notice(format!("Turn cancelled: {reason}")));
-                }
-            }
-            AgentTurnOutcome::Failed(turn) => {
-                self.round = turn.rounds;
-                self.state = AgentRunState::Failed {
-                    round: (turn.rounds > 0).then_some(turn.rounds),
-                };
-                let message = format!("{:#}", turn.error);
-                if let Some(session) = turn.session {
-                    self.session_selection = SessionSelection::Existing(session.id);
-                }
-                self.usage = turn.usage;
-                if !self
-                    .timeline
-                    .iter()
-                    .rev()
-                    .take(2)
-                    .any(|item| matches!(item, TimelineItem::Error(text) if text == &message))
-                {
-                    self.timeline.push(TimelineItem::Error(message));
+                if !self.timeline.iter().rev().take(2).any(|item|matches!(item,TimelineItem::Error(text)|TimelineItem::Notice(text) if text.contains(&message))) {
+                    self.timeline.push(if matches!(turn.stop,aicoder_core::RunStop::Failed(_)) {TimelineItem::Error(message)} else {TimelineItem::Notice(format!("Turn stopped: {message}"))});
                 }
             }
         }

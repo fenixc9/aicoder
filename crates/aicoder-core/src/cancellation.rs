@@ -14,6 +14,7 @@ const DEFAULT_REASON: &str = "Turn execution was cancelled";
 pub struct TurnExecutionContext {
     token: CancellationToken,
     reason: Arc<Mutex<Option<Arc<str>>>>,
+    parent: Option<Arc<TurnExecutionContext>>,
 }
 
 impl TurnExecutionContext {
@@ -21,6 +22,7 @@ impl TurnExecutionContext {
         Self {
             token: CancellationToken::new(),
             reason: Arc::new(Mutex::new(None)),
+            parent: None,
         }
     }
 
@@ -29,7 +31,7 @@ impl TurnExecutionContext {
             .reason
             .lock()
             .expect("cancellation reason lock poisoned");
-        if stored.is_none() {
+        if stored.is_none() && !self.token.is_cancelled() {
             *stored = Some(reason.into());
         }
         drop(stored);
@@ -45,7 +47,20 @@ impl TurnExecutionContext {
             .lock()
             .expect("cancellation reason lock poisoned")
             .clone()
-            .unwrap_or_else(|| Arc::from(DEFAULT_REASON))
+            .unwrap_or_else(|| {
+                self.parent
+                    .as_ref()
+                    .map_or_else(|| Arc::from(DEFAULT_REASON), |parent| parent.reason())
+            })
+    }
+
+    /// Parent cancellation propagates down; stopping a child does not cancel its caller.
+    pub fn child(&self) -> Self {
+        Self {
+            token: self.token.child_token(),
+            reason: Arc::new(Mutex::new(None)),
+            parent: Some(Arc::new(self.clone())),
+        }
     }
 
     pub async fn cancelled(&self) -> TurnCancelled {
@@ -72,6 +87,11 @@ pub struct TurnCancelled {
 }
 
 impl TurnCancelled {
+    pub(crate) fn new(reason: String) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
     pub fn reason(&self) -> &str {
         &self.reason
     }
@@ -99,5 +119,19 @@ mod tests {
 
         assert!(observer.is_cancelled());
         assert_eq!(observer.cancelled().await.reason(), "user requested stop");
+    }
+
+    #[tokio::test]
+    async fn child_cleanup_cannot_replace_an_inherited_cancellation_reason() {
+        let parent = TurnExecutionContext::new();
+        let child = parent.child();
+        parent.cancel("caller stop");
+        child.cancel("later cleanup");
+        assert_eq!(child.reason().as_ref(), "caller stop");
+        let parent = TurnExecutionContext::new();
+        let child = parent.child();
+        child.cancel("child stop");
+        assert!(!parent.is_cancelled());
+        assert_eq!(child.reason().as_ref(), "child stop");
     }
 }

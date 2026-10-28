@@ -3,7 +3,7 @@
 状态：S0 已完成；S1 进行中。本文替代旧 TODO 的排期。
 基线和验证依据见 [S0 开发基线](development-baseline.md)。
 S1 的统一模型契约已贯穿执行器、工具、会话、CLI/TUI 和 bench，wire types 已移至
-providers；剩余重点是部分结果、任务预算与 provider 传输配置。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
+providers；部分结果与任务预算也已接通，剩余重点是 provider 传输配置。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
 
 ## 1. 产品目标
 
@@ -124,7 +124,8 @@ Web 目标是可接入且有可运行示例，不在此路线图中建设完整�
 
 已交付统一模型主路径：core 无 OpenAI wire types，所有入口使用同一 `ModelProvider`
 循环。新会话存储内容块，旧 v1 会话兼容读写，usage 未知值贯穿 UI 和评测。
-S1 尚未完成，部分执行结果、任务预算和传输配置仍待验收。
+结构化运行结果与轮次/工具/token/时长/输出预算已接通所有入口，验证说明见
+[运行结果与预算](run-outcomes.md)。S1 尚未完成，provider 传输配置仍待验收。
 
 - [x] 确定内部 Message、ContentBlock、ModelSpec、ProviderError、Usage 类型。
 - [x] 将 OpenAI wire types、HTTP、重试和认证装配从执行循环移出。
@@ -132,7 +133,7 @@ S1 尚未完成，部分执行结果、任务预算和传输配置仍待验收�
   代理、超时及 API key，明确服务兼容差异。
 - [x] 支持模型注册、provider 注入与 capability 查询；预留 Responses/Anthropic 等 adapter。
 - [x] 统一流与非流结果，覆盖碎片工具参数、异常 finish、空回复及连接中断。
-- [ ] 统一有类型的运行错误与完整部分结果；设置轮次、工具、token、时长、输出预算。
+- [x] 统一有类型的运行错误与完整部分结果；设置轮次、工具、token、时长、输出预算。
   token 上限缺少精确计量时标明估计和请求中可能超出的边界。
 - [x] 提供纯内存 mock provider/tool/store 的 SDK 示例和公开 API 契约测试。
 

@@ -29,6 +29,9 @@ pub enum AgentRunState {
     Aborted {
         round: Option<usize>,
     },
+    Stopped {
+        round: Option<usize>,
+    },
 }
 
 impl AgentRunState {
@@ -43,6 +46,7 @@ impl AgentRunState {
             Self::Completed { .. } => "completed",
             Self::Failed { .. } => "failed",
             Self::Aborted { .. } => "aborted",
+            Self::Stopped { .. } => "stopped",
         }
     }
 
@@ -53,7 +57,7 @@ impl AgentRunState {
             | Self::ExecutingTools { round, .. }
             | Self::Compacting { round } => Some(round),
             Self::Completed { rounds } => Some(rounds),
-            Self::Failed { round } | Self::Aborted { round } => round,
+            Self::Failed { round } | Self::Aborted { round } | Self::Stopped { round } => round,
             Self::Idle | Self::Preparing => None,
         }
     }
@@ -61,7 +65,10 @@ impl AgentRunState {
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            Self::Completed { .. } | Self::Failed { .. } | Self::Aborted { .. }
+            Self::Completed { .. }
+                | Self::Failed { .. }
+                | Self::Aborted { .. }
+                | Self::Stopped { .. }
         )
     }
 }
@@ -137,7 +144,9 @@ fn valid_transition(previous: AgentRunState, current: AgentRunState) -> bool {
     match (previous, current) {
         (Idle, Preparing) => true,
         (Preparing, AwaitingModel { round: 1 }) => true,
-        (Preparing, Failed { round: None } | Aborted { round: None }) => true,
+        (Preparing, Failed { round: None } | Aborted { round: None } | Stopped { round: None }) => {
+            true
+        }
         (AwaitingModel { round }, VerifyingCompletion { round: next }) => round == next,
         (AwaitingModel { round }, ExecutingTools { round: next, count }) => {
             round == next && count > 0
@@ -158,6 +167,9 @@ fn valid_transition(previous: AgentRunState, current: AgentRunState) -> bool {
                 round: Some(failed_round),
             }
             | Aborted {
+                round: Some(failed_round),
+            }
+            | Stopped {
                 round: Some(failed_round),
             },
         ) => round == failed_round,

@@ -10,6 +10,7 @@ pub mod context;
 pub mod events;
 pub mod model;
 pub mod redaction;
+pub mod run;
 pub mod session;
 pub mod state;
 pub mod tools;
@@ -34,8 +35,10 @@ pub use events::{
 pub use state::{
     AgentRunState, AgentRunStateMachine, AgentStateTransition, InvalidAgentStateTransition,
 };
-pub use turn_executor::{
-    TurnExecutionConfig, TurnExecutionResult, TurnExecutor, TurnExecutorBuilder,
-};
+pub use turn_executor::{TurnExecutionConfig, TurnExecutor, TurnExecutorBuilder};
 
 pub use model::ModelProvider;
+pub use run::{
+    BudgetExceeded, BudgetResource, InterruptedTurn, RunBudget, RunFailure, RunOutcome,
+    RunProgress, RunStage, RunStop, TurnExecutionResult,
+};

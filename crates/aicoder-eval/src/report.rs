@@ -31,6 +31,7 @@ pub struct TrajectorySummary {
     pub truncated_tool_outputs: usize,
     pub agent_failures: usize,
     pub agent_aborts: usize,
+    pub agent_stops: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finish_reason: Option<String>,
 }
@@ -46,6 +47,7 @@ pub struct UsageSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EvalRunSummary {
+    pub stop: Option<aicoder_core::RunStop>,
     pub outcome: EvalRunOutcome,
     pub duration_ms: u64,
     pub rounds: usize,
@@ -58,6 +60,7 @@ pub struct EvalRunSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalReport {
+    pub progress: aicoder_core::RunProgress,
     pub case: EvalCaseMetadata,
     pub run: EvalRunSummary,
     pub trajectory: TrajectorySummary,

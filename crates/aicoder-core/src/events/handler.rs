@@ -63,6 +63,11 @@ pub struct AgentAbortedEvent {
     pub meta: AgentEventMeta,
     pub reason: Arc<str>,
 }
+#[derive(Debug, Clone)]
+pub struct AgentStoppedEvent {
+    pub meta: AgentEventMeta,
+    pub stop: Arc<crate::RunStop>,
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct AgentStateChangedEvent {
@@ -247,6 +252,7 @@ pub trait AgentEventHandler: Send + Sync + 'static {
     fn on_agent_completed(&self, _event: AgentCompletedEvent) {}
     fn on_agent_failed(&self, _event: AgentFailedEvent) {}
     fn on_agent_aborted(&self, _event: AgentAbortedEvent) {}
+    fn on_agent_stopped(&self, _event: AgentStoppedEvent) {}
     fn on_agent_state_changed(&self, _event: AgentStateChangedEvent) {}
     fn on_round_started(&self, _event: RoundStartedEvent) {}
     fn on_round_completed(&self, _event: RoundCompletedEvent) {}
@@ -315,6 +321,10 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
                 message: Arc::clone(message),
             });
         }
+        AgentRawEvent::AgentStopped { stop } => handler.on_agent_stopped(AgentStoppedEvent {
+            meta,
+            stop: stop.clone(),
+        }),
         AgentRawEvent::AgentAborted { reason } => {
             handler.on_agent_aborted(AgentAbortedEvent {
                 meta,

@@ -1,14 +1,13 @@
 use std::{path::Path, sync::Arc, time::Instant};
 
 use aicoder_core::{
-    TurnExecutionResult, TurnExecutor, events::AgentEventHandler, model::StopReason,
+    RunOutcome, RunStop, TurnExecutionContext, TurnExecutor, events::AgentEventHandler,
 };
 use anyhow::{Context, Result, ensure};
 
 use crate::{
-    AgentTrace, AgentTraceRecorder, EvalCase, EvalReport, EvalRunOutcome, EvalRunSummary,
-    EvalSuiteReport, EvaluationContext, EvaluationResult, Evaluator, UsageSummary, WorkspaceDiff,
-    WorkspaceSnapshot,
+    AgentTraceRecorder, EvalCase, EvalReport, EvalRunOutcome, EvalRunSummary, EvalSuiteReport,
+    EvaluationContext, EvaluationResult, Evaluator, UsageSummary, WorkspaceDiff, WorkspaceSnapshot,
     report::aggregate_verdict,
     workspace::{git_patch, prepare_fixture},
 };
@@ -53,24 +52,33 @@ impl EvalRunner {
         let event_handler: Arc<dyn AgentEventHandler> = recorder.clone();
         let started_at = Instant::now();
         let execution = executor
-            .run_with_handler(case.request.clone(), event_handler)
+            .run_outcome(
+                case.request.clone(),
+                event_handler,
+                TurnExecutionContext::new(),
+            )
             .await;
         let duration = started_at.elapsed();
         let trace = recorder.trace();
         let after = WorkspaceSnapshot::capture(temporary.path())?;
         let workspace_diff = WorkspaceDiff::between(&before, &after);
         let workspace_patch = git_patch(temporary.path())?;
-        let (result, run_error) = match execution {
-            Ok(result) => (Some(result), None),
-            Err(error) => (None, Some(format!("{error:#}"))),
+        let result = match &execution {
+            RunOutcome::Completed(result) => Some(result),
+            _ => None,
         };
+        let run_error = execution.stop().map(ToString::to_string);
         let trajectory = trace.summary();
-        let outcome = infer_outcome(result.as_ref(), run_error.as_deref());
+        let outcome = match execution.stop() {
+            None => EvalRunOutcome::Completed,
+            Some(RunStop::Budget(_) | RunStop::Model(_)) => EvalRunOutcome::Incomplete,
+            Some(_) => EvalRunOutcome::Failed,
+        };
         let metadata = case.metadata();
         let context = EvaluationContext {
             case: &metadata,
             workspace: temporary.path(),
-            result: result.as_ref(),
+            result,
             run_error: run_error.as_deref(),
             outcome,
             duration,
@@ -81,7 +89,27 @@ impl EvalRunner {
         };
         let evaluations = self.evaluate_all(&context).await;
         let verdict = aggregate_verdict(&evaluations);
-        let run = build_run_summary(result.as_ref(), run_error, outcome, duration, &trace);
+        let progress = execution.progress();
+        let usage = &progress.usage;
+        let run = EvalRunSummary {
+            outcome,
+            duration_ms: duration.as_millis().try_into().unwrap_or(u64::MAX),
+            rounds: progress.rounds,
+            final_content: result.map(|result| result.final_message.text_content()),
+            error: run_error,
+            stop: execution.stop().cloned(),
+            usage: UsageSummary {
+                provider_reported: progress.reported_usage,
+                prompt_tokens: usage.input_tokens,
+                completion_tokens: usage.output_tokens,
+                total_tokens: usage.total_tokens,
+                cached_tokens: usage.cached_input_tokens,
+            },
+        };
+        let progress = match execution {
+            RunOutcome::Completed(result) => result.progress,
+            RunOutcome::Interrupted(turn) => turn.progress,
+        };
         Ok(EvalReport {
             case: metadata,
             run,
@@ -91,6 +119,7 @@ impl EvalRunner {
             evaluations,
             verdict,
             trace,
+            progress,
         })
     }
 
@@ -124,61 +153,5 @@ impl EvalRunner {
             }
         }
         results
-    }
-}
-
-fn infer_outcome(result: Option<&TurnExecutionResult>, run_error: Option<&str>) -> EvalRunOutcome {
-    if run_error.is_some() || result.is_none() {
-        EvalRunOutcome::Failed
-    } else if result.is_some_and(|result| {
-        result.finish_reason == Some(StopReason::Complete)
-            && !result.final_message.text_content().trim().is_empty()
-    }) {
-        EvalRunOutcome::Completed
-    } else {
-        EvalRunOutcome::Incomplete
-    }
-}
-
-fn build_run_summary(
-    result: Option<&TurnExecutionResult>,
-    error: Option<String>,
-    outcome: EvalRunOutcome,
-    duration: std::time::Duration,
-    trace: &AgentTrace,
-) -> EvalRunSummary {
-    let provider_reported = trace.events.iter().any(|event| {
-        matches!(
-            event.envelope.event,
-            aicoder_core::AgentRawEvent::UsageUpdated { ref usage } if usage.input_tokens.is_some() || usage.output_tokens.is_some() || usage.total_tokens.is_some()
-        )
-    });
-    let traced_usage = if result.is_none() {
-        let mut usage = aicoder_core::model::ModelUsage::zero();
-        for event in &trace.events {
-            if let aicoder_core::AgentRawEvent::UsageUpdated { usage: update } =
-                &event.envelope.event
-            {
-                usage.accumulate(update);
-            }
-        }
-        Some(usage)
-    } else {
-        None
-    };
-    let usage = result.map(|result| &result.usage).or(traced_usage.as_ref());
-    EvalRunSummary {
-        outcome,
-        duration_ms: duration.as_millis().try_into().unwrap_or(u64::MAX),
-        rounds: result.map_or_else(|| trace.summary().rounds, |result| result.rounds),
-        final_content: result.map(|result| result.final_message.text_content()),
-        error,
-        usage: UsageSummary {
-            provider_reported,
-            prompt_tokens: usage.and_then(|usage| usage.input_tokens),
-            completion_tokens: usage.and_then(|usage| usage.output_tokens),
-            total_tokens: usage.and_then(|usage| usage.total_tokens),
-            cached_tokens: usage.and_then(|usage| usage.cached_input_tokens),
-        },
     }
 }

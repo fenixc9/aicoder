@@ -76,8 +76,7 @@ repository.append_all(&mut new, old.chat_messages())?;
 ```
 
 Tree history and richer migration control remain S2 work. This change does
-not yet persist interrupted turns' complete progress; unified partial outcomes
-and budgets are the next S1 task.
+not yet persist interrupted turns' complete progress; structured partial progress is returned to callers via the run outcome API.
 
 SWE-bench batch reports use schema version 2 for nullable token totals. Old
 checkpoints without the canonical model contract version are not resumed into
@@ -107,3 +106,22 @@ sample. The first repeat included a release build immediately beforehand;
 the later repeats reused it. These measurements do not establish the cause
 of the outliers or a statistically significant speed improvement. They do not
 show a sustained regression against the initial review budget.
+
+## S1: retained progress and execution budgets
+
+`TurnExecutionResult` now owns a `progress: RunProgress` field. Borrowing
+`result.messages`, `result.usage` and `result.rounds` remains possible through
+`Deref`; moves and struct literals use the `progress` field explicitly.
+`TurnExecutionConfig` gains `budget: RunBudget`; use `..Default::default()`
+when specifying only rounds/stream settings.
+
+Prefer `TurnExecutor::run_outcome` to receive structured interrupted progress.
+Existing `Result` methods attach `InterruptedTurn` to errors. Agent outcomes
+add `Limited` and `Stopped` variants and expose `progress()`; exhaustive matches
+must handle them. Event observers gain `AgentStopped`/`on_agent_stopped`, and
+`AgentRunState::Stopped` is terminal.
+
+Evaluation reports now contain progress and a typed stop, with limited/model
+stops classified as incomplete. Token measurements are still nullable;
+estimation lives separately in the budget accounting. See [the full contract](run-outcomes.md)
+for scope, units, retry behavior and session persistence boundaries.

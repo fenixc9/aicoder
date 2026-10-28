@@ -24,7 +24,8 @@ The [development roadmap](docs/roadmap.md) defines the plan for a lightweight,
 extensible core and Pi feature parity across SDK, CLI, TUI, and Web integrations.
 See [API migrations](docs/migrations.md) when updating an embedded application.
 The [provider-neutral model API](docs/model-api.md) is shared by the agent
-loop, tools, sessions and frontends. S1 continues with partial outcomes and budgets.
+loop, tools, sessions and frontends. Structured [run outcomes and budgets](docs/run-outcomes.md) retain progress on
+limits, failures and cancellation. S1 continues with provider transport configuration.
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs
 request construction or session persistence. Both layers consume the single

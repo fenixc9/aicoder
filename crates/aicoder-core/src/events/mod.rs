@@ -5,11 +5,10 @@ mod handler;
 mod model;
 mod types;
 pub use emitter::AgentEventEmitter;
-pub(crate) use handler::dispatch_event;
 #[allow(unused_imports)]
 pub use handler::{
     AgentAbortedEvent, AgentCompletedEvent, AgentEventHandler, AgentEventMeta, AgentFailedEvent,
-    AgentStartedEvent, AgentStateChangedEvent, CompletionVerificationEndedEvent,
+    AgentStartedEvent, AgentStateChangedEvent, AgentStoppedEvent, CompletionVerificationEndedEvent,
     CompletionVerificationStartedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
     ContextCompactionCompletedEvent, ContextCompactionFailedEvent, ContextCompactionStartedEvent,
     ModelRequestStartedEvent, ModelResponseCompletedEvent, ModelResponseFailedEvent,

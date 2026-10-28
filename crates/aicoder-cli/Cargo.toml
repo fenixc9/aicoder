@@ -21,3 +21,6 @@ dotenvy.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
