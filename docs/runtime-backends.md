@@ -83,4 +83,5 @@ cargo run --locked -p aicoder-runtime --example offline_smoke
 Core's `model_provider`, `embedded_agent`, `controlled_agent` and `event_stream`
 examples remain runnable without runtime. This completes the S3 extraction item;
 [Directory/glob and bounded read/search](file-tools.md) are now available.
-Editing/shell contracts and session approval policies remain on the [roadmap](roadmap.md).
+[Prepared editing and diff review](file-mutations.md) are also available.
+Shell contracts and session approval policies remain on the [roadmap](roadmap.md).

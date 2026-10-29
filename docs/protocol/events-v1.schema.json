@@ -429,6 +429,16 @@
         "arguments": {},
         "capability": {
           "$ref": "#/$defs/capability"
+        },
+        "preview": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/tool_preview"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1879,6 +1889,16 @@
             },
             "capability": {
               "$ref": "#/$defs/capability"
+            },
+            "preview": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/tool_preview"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -1968,6 +1988,29 @@
             "usage"
           ]
         }
+      ]
+    },
+    "tool_preview": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "summary",
+        "body",
+        "format",
+        "truncated"
       ]
     }
   }

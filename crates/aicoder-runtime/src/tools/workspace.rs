@@ -23,8 +23,10 @@ impl<'a> WorkspacePaths<'a> {
 
     pub fn resolve_for_write(&self, path: &str) -> Result<PathBuf, ToolFailure> {
         let candidate = self.candidate(path);
-        if candidate.exists() {
-            return self.resolve_existing(path);
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(_) => return self.resolve_existing(path),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(ToolFailure::new("invalid_path", error.to_string())),
         }
 
         let parent = candidate
@@ -39,8 +41,11 @@ impl<'a> WorkspacePaths<'a> {
                 ),
             )
         })?;
-        self.ensure_inside_workspace(resolved_parent)?;
-        Ok(candidate)
+        let resolved_parent = self.ensure_inside_workspace(resolved_parent)?;
+        let name = candidate
+            .file_name()
+            .ok_or_else(|| ToolFailure::new("invalid_path", "File has no name"))?;
+        Ok(resolved_parent.join(name))
     }
 
     fn candidate(&self, path: &str) -> PathBuf {

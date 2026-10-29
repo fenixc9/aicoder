@@ -51,6 +51,8 @@ pub enum TimelineItem {
 pub struct PendingApproval {
     pub invocation: ToolInvocation,
     pub id: ApprovalRequestId,
+    pub scroll: u16,
+    pub show_arguments: bool,
 }
 
 #[derive(Default)]
@@ -350,6 +352,8 @@ impl App {
                 }) {
                     self.approval = Some(PendingApproval {
                         id: request.id.clone(),
+                        scroll: 0,
+                        show_arguments: false,
                         invocation: request.invocation.clone(),
                     });
                 }

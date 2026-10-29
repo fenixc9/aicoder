@@ -295,11 +295,59 @@ impl ToolDispatcher {
             ));
         };
 
+        // Prepare once, before approval, without changing external state. The same
+        // owned operation is consumed after approval; no re-reading/re-planning then.
+        let preparation = timeout(
+            self.config.tool_timeout,
+            tool.prepare(&self.context, arguments.clone()),
+        );
+        let prepared = match context {
+            Some(context) => tokio::select! {
+                biased;
+                cancelled = context.cancelled() => {
+                    emit_event(events, AgentRawEvent::ToolExecutionEnded {
+                        call_id: call.id.clone().into(), name: call.name.clone().into(),
+                        outcome: ToolExecutionOutcome::Cancelled.into(),
+                    });
+                    return Err(cancelled.into());
+                },
+                _ = async { match &context.control { Some(control) => control.steering_requested().await, None => std::future::pending().await } } => {
+                    return Ok(failed_tool_message(events,call,limits,ToolFailure::new("steered_before_execution","Tool preparation was superseded by steering")));
+                },
+                result = preparation => result,
+            },
+            None => preparation.await,
+        };
+        let prepared = match prepared {
+            Ok(Ok(prepared)) => prepared,
+            Ok(Err(error)) => return Ok(failed_tool_message(events, call, limits, error)),
+            Err(_) => {
+                return Ok(failed_tool_message(
+                    events,
+                    call,
+                    limits,
+                    ToolFailure::new("timeout", "Tool preparation exceeded its time limit"),
+                ));
+            }
+        };
+        let preview = prepared.as_ref().map(|plan| plan.preview());
+        if preview.as_ref().is_some_and(|preview| {
+            serde_json::to_vec(preview)
+                .map_or(true, |bytes| bytes.len() > super::MAX_TOOL_PREVIEW_BYTES)
+        }) {
+            return Ok(failed_tool_message(
+                events,
+                call,
+                limits,
+                ToolFailure::new("preview_too_large", "Prepared tool preview exceeds 32 KiB"),
+            ));
+        }
         let invocation = ToolInvocation {
             call_id: call.id.clone(),
             name: call.name.clone(),
             arguments: arguments.clone(),
             capability: tool.capability(),
+            preview,
         };
 
         if invocation.capability != ToolCapability::ReadOnly {
@@ -309,6 +357,7 @@ impl ToolDispatcher {
                     call_id: invocation.call_id.clone().into(),
                     name: invocation.name.clone().into(),
                     capability: invocation.capability,
+                    preview: invocation.preview.clone().map(Arc::new),
                 },
             );
             let approval = async {
@@ -434,10 +483,12 @@ impl ToolDispatcher {
             arguments_bytes = invocation.arguments.to_string().len(),
             "Executing tool"
         );
-        let execution = timeout(
-            self.config.tool_timeout,
-            tool.execute(&self.context, arguments),
-        );
+        let execution = timeout(self.config.tool_timeout, async {
+            match prepared {
+                Some(plan) => plan.execute(&self.context).await,
+                None => tool.execute(&self.context, arguments).await,
+            }
+        });
         let execution = match context {
             Some(context) => tokio::select! {
                 biased;

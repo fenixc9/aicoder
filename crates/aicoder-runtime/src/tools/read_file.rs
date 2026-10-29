@@ -154,7 +154,7 @@ async fn read(context: &ToolContext, args: Arguments) -> Result<ToolSuccess, Too
         let lines_read = newline_count + u64::from(!raw.is_empty() && !raw.ends_with('\n'));
         let end_line = (lines_read > 0).then(|| line + lines_read - 1);
         json!({"path":label,"offset_line":line,"lines_read":lines_read,"end_line":end_line,
-            "content":content,"content_truncated":has_more && !complete,"end_line_complete":complete,
+            "content":content,"revision":super::atomic_file::revision(&stamp),"content_truncated":has_more && !complete,"end_line_complete":complete,
             "has_more":has_more,"next_offset_line":has_more.then_some(next_line),
             "next_offset_byte":has_more.then_some(next_offset),
             "next_cursor":has_more.then(||Cursor::new(&query,label.clone(),next_offset,next_line,Some(stamp.clone())).encode()),

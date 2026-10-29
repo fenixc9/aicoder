@@ -1,3 +1,4 @@
+mod atomic_file;
 mod bash;
 mod edit_file;
 mod grep;
@@ -11,8 +12,8 @@ use anyhow::Result;
 
 pub use aicoder_core::tools::{
     AllowAllApproval, ApprovalHandler, DenyAllApproval, DispatcherConfig, ExecutableTool,
-    ToolCapability, ToolContext, ToolDispatcher, ToolFailure, ToolInvocation, ToolRegistry,
-    ToolSuccess,
+    PreparedTool, ToolCapability, ToolContext, ToolDispatcher, ToolFailure, ToolInvocation,
+    ToolPreview, ToolRegistry, ToolSuccess,
 };
 mod util;
 mod workspace;
@@ -44,3 +45,29 @@ pub(crate) fn registry_with_shell(shell: impl ExecutableTool + 'static) -> Resul
 
 #[cfg(test)]
 mod tests;
+
+/// Plain terminal display, with control and direction-override characters escaped.
+pub fn display_preview(preview: &ToolPreview) -> String {
+    let raw = format!(
+        "{}\n{}{}",
+        preview.summary,
+        preview.body,
+        if preview.truncated {
+            "\n[Preview truncated; the operation includes the complete prepared change]"
+        } else {
+            ""
+        }
+    );
+    raw.chars()
+        .flat_map(|ch| {
+            if ch != '\n'
+                && ch != '\t'
+                && (ch.is_control() || matches!(ch as u32, 0x202a..=0x202e | 0x2066..=0x2069))
+            {
+                ch.escape_default().collect::<Vec<_>>()
+            } else {
+                vec![ch]
+            }
+        })
+        .collect()
+}

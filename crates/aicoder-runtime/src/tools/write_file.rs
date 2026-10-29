@@ -1,83 +1,65 @@
-use super::WorkspacePaths;
+use super::{
+    ExecutableTool, PreparedTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess,
+    atomic_file::{FilePlan, MAX_FILE_BYTES, Target},
+    util::parse_arguments,
+};
+use aicoder_core::model::ToolDefinition;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::fs;
-use uuid::Uuid;
-
-use aicoder_core::model::ToolDefinition;
-
-use super::{
-    ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess, util::parse_arguments,
-};
-
 pub struct WriteFileTool;
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WriteFileArguments {
+struct Arguments {
     path: String,
     content: String,
+    expected_revision: Option<String>,
 }
-
 #[async_trait]
 impl ExecutableTool for WriteFileTool {
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "write_file".to_string(),
-            description: Some(
-                "Create or replace a UTF-8 file inside the workspace. Parent must exist."
-                    .to_string(),
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string"},
-                    "content": {"type": "string"}
-                },
-                "required": ["path", "content"],
-                "additionalProperties": false
-            }),
-        }
+        ToolDefinition{name:"write_file".into(),description:Some("Prepare and atomically create/replace a UTF-8 file. Approval shows the prepared diff. Use expected_revision from read_file for stale-read protection, or 'missing' to create only. Parent must exist.".into()),
+            parameters:json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"expected_revision":{"type":"string"}},"required":["path","content"],"additionalProperties":false})}
     }
-
     fn capability(&self) -> ToolCapability {
         ToolCapability::Mutating
     }
-
-    async fn execute(
+    async fn prepare(
         &self,
         context: &ToolContext,
         arguments: Value,
+    ) -> Result<Option<Box<dyn PreparedTool>>, ToolFailure> {
+        let args: Arguments = parse_arguments(arguments)?;
+        if args.content.len() > MAX_FILE_BYTES {
+            return Err(ToolFailure::new(
+                "file_too_large",
+                "Replacement exceeds the 4 MiB mutation limit",
+            ));
+        }
+        let context = context.clone();
+        let plan = tokio::task::spawn_blocking(move || {
+            let target = Target::load(&context, &args.path)?;
+            target.expect(args.expected_revision.as_deref())?;
+            let output = json!({"bytes_written":args.content.len()});
+            FilePlan::new(&context, target, args.content.into_bytes(), output)
+        })
+        .await
+        .map_err(|error| ToolFailure::new("preparation_failed", error.to_string()))??;
+        Ok(Some(Box::new(plan)))
+    }
+    async fn execute(
+        &self,
+        context: &ToolContext,
+        args: Value,
     ) -> Result<ToolSuccess, ToolFailure> {
-        let arguments: WriteFileArguments = parse_arguments(arguments)?;
-        let path = WorkspacePaths::from_context(context).resolve_for_write(&arguments.path)?;
-        if path.exists() && !path.is_file() {
-            return Err(ToolFailure::new("not_a_file", "Path is not a file"));
-        }
-
-        let parent = path.parent().ok_or_else(|| {
-            ToolFailure::new("invalid_path", format!("Invalid path: {}", path.display()))
-        })?;
-        let temporary = parent.join(format!(".aicoder-{}.tmp", Uuid::new_v4()));
-        fs::write(&temporary, arguments.content.as_bytes())
-            .await
-            .map_err(|error| ToolFailure::new("write_failed", error.to_string()))?;
-
-        if let Ok(metadata) = fs::metadata(&path).await
-            && let Err(error) = fs::set_permissions(&temporary, metadata.permissions()).await
-        {
-            let _ = fs::remove_file(&temporary).await;
-            return Err(ToolFailure::new("write_failed", error.to_string()));
-        }
-        if let Err(error) = fs::rename(&temporary, &path).await {
-            let _ = fs::remove_file(&temporary).await;
-            return Err(ToolFailure::new("write_failed", error.to_string()));
-        }
-
-        Ok(ToolSuccess::new(json!({
-            "path": WorkspacePaths::from_context(context).relative_path(&path),
-            "bytes_written": arguments.content.len(),
-        })))
+        tokio::time::timeout(context.tool_timeout(), async {
+            self.prepare(context, args)
+                .await?
+                .expect("file operation plan")
+                .execute(context)
+                .await
+        })
+        .await
+        .map_err(|_| ToolFailure::new("timeout", "File write exceeded its time limit"))?
     }
 }

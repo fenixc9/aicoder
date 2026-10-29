@@ -12,6 +12,8 @@
   Concrete IO/process backends belong here; core builders install no implicit tools.
   Read-only tools must bound input scans and complete serialized pages, preserve usable
   continuation cursors, and report exhausted budgets and stale file cursors explicitly.
+  Mutation preparation must be read-only; approval must describe the same owned plan
+  later committed. Preserve conflict checks and cleanup on denial/cancellation.
   Backend checkpoints must stay opaque, immutable and out of serialized domain history.
   Project settings may select trusted profiles but must not define credential routing
   or private storage paths. Keep credential values out of settings snapshots/errors.

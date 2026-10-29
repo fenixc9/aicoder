@@ -286,43 +286,53 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, model: &str, area: Rect) {
 }
 
 fn draw_approval(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let popup = centered_rect(70, 50, area);
+    let popup = centered_rect(85, 80, area);
     let approval = app
         .approval
         .as_ref()
         .expect("approval popup without request");
-    let arguments = serde_json::to_string_pretty(&approval.invocation.arguments)
-        .unwrap_or_else(|_| approval.invocation.arguments.to_string());
+    let text = if !approval.show_arguments
+        && let Some(preview) = &approval.invocation.preview
+    {
+        aicoder_runtime::tools::display_preview(preview)
+    } else {
+        let arguments =
+            serde_json::to_string_pretty(&approval.invocation.arguments).unwrap_or_default();
+        let mut end = arguments.len().min(32 * 1024);
+        while !arguments.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!(
+            "{}{}",
+            &arguments[..end],
+            if end < arguments.len() {
+                "\n[Arguments truncated]"
+            } else {
+                ""
+            }
+        )
+    };
     frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(format!(" Approval: {} ", approval.invocation.name))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(TOOL));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(1), Constraint::Length(2)])
+        .split(inner);
     frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled("Tool: ", Style::default().fg(MUTED)),
-                Span::styled(
-                    &approval.invocation.name,
-                    Style::default().fg(TOOL).add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("Capability: ", Style::default().fg(MUTED)),
-                Span::raw(format!("{:?}", approval.invocation.capability)),
-            ]),
-            Line::default(),
-            Line::from(arguments),
-            Line::default(),
-            Line::from(Span::styled(
-                "y allow   n deny   Esc cancel turn",
-                Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-            )),
-        ])
-        .wrap(Wrap { trim: false })
-        .block(
-            Block::default()
-                .title(" Approval required ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(TOOL)),
-        ),
-        popup,
+        Paragraph::new(text)
+            .wrap(Wrap { trim: false })
+            .scroll((approval.scroll, 0)),
+        parts[0],
+    );
+    frame.render_widget(
+        Paragraph::new("PgUp/PgDn scroll • Tab diff/arguments\ny allow • n deny • Esc cancel turn")
+            .style(Style::default().fg(ACCENT)),
+        parts[1],
     );
 }
 
@@ -446,5 +456,61 @@ mod tests {
         assert!(rendered.contains("Commands"));
         assert!(rendered.contains("/exit"));
         assert!(rendered.contains("Exit the TUI"));
+    }
+    #[test]
+    fn approval_diff_can_scroll_without_hiding_decision_controls() {
+        use aicoder_core::{
+            ApprovalRequestId,
+            tools::{ToolCapability, ToolInvocation, ToolPreview},
+        };
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = App::new(Vec::new());
+        app.approval = Some(crate::app::PendingApproval {
+            id: ApprovalRequestId {
+                run_id: "test".into(),
+                sequence: 1,
+            },
+            invocation: ToolInvocation {
+                call_id: "call".into(),
+                name: "edit_file".into(),
+                arguments: serde_json::json!({"path":"file"}),
+                capability: ToolCapability::Mutating,
+                preview: Some(ToolPreview {
+                    summary: "Modify file".into(),
+                    body: (1..=80).map(|i| format!("+changed line {i}\n")).collect(),
+                    format: "unified_diff".into(),
+                    truncated: true,
+                }),
+            },
+            scroll: 40,
+            show_arguments: false,
+        });
+        terminal
+            .draw(|frame| draw(frame, &app, "test-model"))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("changed line 40"));
+        assert!(rendered.contains("y allow"));
+        assert!(rendered.contains("Tab diff/arguments"));
+        app.approval.as_mut().unwrap().show_arguments = true;
+        app.approval.as_mut().unwrap().scroll = 0;
+        terminal
+            .draw(|frame| draw(frame, &app, "test-model"))
+            .unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("\"path\""));
     }
 }

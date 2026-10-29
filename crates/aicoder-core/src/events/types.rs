@@ -213,6 +213,8 @@ pub enum AgentRawEvent {
         call_id: Arc<str>,
         name: Arc<str>,
         capability: ToolCapability,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        preview: Option<Arc<crate::tools::ToolPreview>>,
     },
     ToolApprovalResolved {
         call_id: Arc<str>,

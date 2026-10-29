@@ -22,6 +22,7 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["fs", "io-util", "process", "time"] }
 url = "2"
 shlex = "2"
+similar = { version = "3", default-features = false, features = ["std", "text"] }
 regex = "1"
 globset = "0.4"
 ignore = "0.4"

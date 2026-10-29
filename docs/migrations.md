@@ -307,3 +307,27 @@ typed error instead of clipped JSON. Grep may return an empty but resumable scan
 page, and oversized lines include a recovery read cursor. See [the complete limits,
 filters and compatibility rules](file-tools.md) and [acceptance](s3-file-tools-acceptance.md).
 No core API, event schema or JSONL version changes are required.
+
+
+## S3: prepare/review/commit for file mutations
+
+`ExecutableTool::prepare` defaults to `Ok(None)`, preserving existing custom tool
+implementations. Returning `Some(Box<dyn PreparedTool>)` opts into read-only preparation,
+preview review and execute-once commit. The dispatcher invokes `execute` on that same
+plan after approval; SDK users calling prepare directly supply their own approval policy.
+
+`ToolInvocation` gains optional `preview`; add `preview: None` to explicit Rust literals.
+`AgentRawEvent::ToolApprovalRequested` and its typed event gain the same optional preview;
+add the field or use `..` in patterns. JSON event version remains 1, and older invocation/
+event records without the field still deserialize. The schema and approval trace fixture
+cover the additive fields. Existing custom approval callbacks need no new trait method.
+
+Runtime write/edit now prepare exact bytes before approval and return `edit_conflict`
+when originals change. Read pages and mutation receipts add `revision`; pass it as
+`expected_revision` for an earlier-read guard, or `missing` for create-only writes.
+Both mutation tools enforce a 4 MiB limit; identical replacement returns `no_change`.
+Receipts must fit the output cap before writing. Diff previews can be explicitly truncated
+or omitted. Normal creation uses 0600; replacement preserves lower permission bits and
+creates a new inode. A post-publication directory-sync error is `durability_uncertain`
+with `committed: true` and a receipt; inspect before retrying. See [the exact filesystem,
+lock, cancellation and UI rules](file-mutations.md) and [verification/cost review](s3-edits-acceptance.md).

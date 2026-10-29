@@ -1,20 +1,18 @@
-use super::WorkspacePaths;
 use std::ops::Range;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::fs;
-use uuid::Uuid;
 
 use aicoder_core::model::ToolDefinition;
 
 use super::{
-    ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess, util::parse_arguments,
+    ExecutableTool, PreparedTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess,
+    atomic_file::{FilePlan, Target},
+    util::parse_arguments,
 };
 
 const MAX_EDITS: usize = 32;
-const MAX_FILE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_EDIT_ARGUMENT_BYTES: usize = 1024 * 1024;
 
 pub struct EditFileTool;
@@ -24,6 +22,7 @@ pub struct EditFileTool;
 struct EditFileArguments {
     path: String,
     edits: Vec<TextEdit>,
+    expected_revision: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -51,6 +50,7 @@ impl ExecutableTool for EditFileTool {
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
+                    "expected_revision": {"type":"string","description":"Revision from read_file; reject changes since that read"},
                     "edits": {
                         "type": "array",
                         "minItems": 1,
@@ -76,95 +76,56 @@ impl ExecutableTool for EditFileTool {
         ToolCapability::Mutating
     }
 
+    async fn prepare(
+        &self,
+        context: &ToolContext,
+        arguments: Value,
+    ) -> Result<Option<Box<dyn PreparedTool>>, ToolFailure> {
+        let arguments: EditFileArguments = parse_arguments(arguments)?;
+        validate_arguments(&arguments)?;
+        let context = context.clone();
+        let plan = tokio::task::spawn_blocking(move || prepare_file(&context, arguments))
+            .await
+            .map_err(|error| ToolFailure::new("preparation_failed", error.to_string()))??;
+        Ok(Some(Box::new(plan)))
+    }
     async fn execute(
         &self,
         context: &ToolContext,
         arguments: Value,
     ) -> Result<ToolSuccess, ToolFailure> {
-        let arguments: EditFileArguments = parse_arguments(arguments)?;
-        validate_arguments(&arguments)?;
-
-        let path = WorkspacePaths::from_context(context).resolve_existing(&arguments.path)?;
-        if !path.is_file() {
-            return Err(ToolFailure::new("not_a_file", "Path is not a file"));
-        }
-
-        let metadata = fs::metadata(&path)
-            .await
-            .map_err(|error| ToolFailure::new("read_failed", error.to_string()))?;
-        if metadata.len() > MAX_FILE_BYTES as u64 {
-            return Err(ToolFailure::new(
-                "file_too_large",
-                format!("File exceeds {MAX_FILE_BYTES} byte edit limit"),
-            ));
-        }
-
-        let original_bytes = fs::read(&path)
-            .await
-            .map_err(|error| ToolFailure::new("read_failed", error.to_string()))?;
-        if original_bytes.len() > MAX_FILE_BYTES {
-            return Err(ToolFailure::new(
-                "file_too_large",
-                format!("File exceeds {MAX_FILE_BYTES} byte edit limit"),
-            ));
-        }
-        let original = String::from_utf8(original_bytes.clone()).map_err(|_| {
-            ToolFailure::new("invalid_utf8", "edit_file only supports UTF-8 text files")
-        })?;
-
-        let prepared = prepare_edits(&original, arguments.edits)?;
-        let mut updated = original.clone();
-        for edit in prepared.iter().rev() {
-            updated.replace_range(edit.range.clone(), &edit.new_text);
-        }
-        if updated.len() > MAX_FILE_BYTES {
-            return Err(ToolFailure::new(
-                "file_too_large",
-                format!("Edited file would exceed {MAX_FILE_BYTES} byte limit"),
-            ));
-        }
-
-        let parent = path.parent().ok_or_else(|| {
-            ToolFailure::new("invalid_path", format!("Invalid path: {}", path.display()))
-        })?;
-        let temporary = parent.join(format!(".aicoder-{}.tmp", Uuid::new_v4()));
-        if let Err(error) = fs::write(&temporary, updated.as_bytes()).await {
-            let _ = fs::remove_file(&temporary).await;
-            return Err(ToolFailure::new("write_failed", error.to_string()));
-        }
-
-        if let Err(error) = fs::set_permissions(&temporary, metadata.permissions()).await {
-            let _ = fs::remove_file(&temporary).await;
-            return Err(ToolFailure::new("write_failed", error.to_string()));
-        }
-
-        let current_bytes = match fs::read(&path).await {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                let _ = fs::remove_file(&temporary).await;
-                return Err(ToolFailure::new("read_failed", error.to_string()));
-            }
-        };
-        if current_bytes != original_bytes {
-            let _ = fs::remove_file(&temporary).await;
-            return Err(ToolFailure::new(
-                "edit_conflict",
-                "File changed while edit was being prepared",
-            ));
-        }
-
-        if let Err(error) = fs::rename(&temporary, &path).await {
-            let _ = fs::remove_file(&temporary).await;
-            return Err(ToolFailure::new("write_failed", error.to_string()));
-        }
-
-        Ok(ToolSuccess::new(json!({
-            "path": WorkspacePaths::from_context(context).relative_path(&path),
-            "edits_applied": prepared.len(),
-            "bytes_before": original.len(),
-            "bytes_after": updated.len(),
-        })))
+        tokio::time::timeout(context.tool_timeout(), async {
+            self.prepare(context, arguments)
+                .await?
+                .expect("file operation plan")
+                .execute(context)
+                .await
+        })
+        .await
+        .map_err(|_| ToolFailure::new("timeout", "File edit exceeded its time limit"))?
     }
+}
+
+fn prepare_file(
+    context: &ToolContext,
+    arguments: EditFileArguments,
+) -> Result<FilePlan, ToolFailure> {
+    let target = Target::load(context, &arguments.path)?;
+    target.expect(arguments.expected_revision.as_deref())?;
+    let original = target
+        .original
+        .as_ref()
+        .ok_or_else(|| ToolFailure::new("path_not_found", "File to edit does not exist"))?;
+    let original = std::str::from_utf8(&original.bytes).map_err(|_| {
+        ToolFailure::new("invalid_utf8", "edit_file only supports UTF-8 text files")
+    })?;
+    let prepared = prepare_edits(original, arguments.edits)?;
+    let mut updated = original.to_string();
+    for edit in prepared.iter().rev() {
+        updated.replace_range(edit.range.clone(), &edit.new_text);
+    }
+    let output = json!({"edits_applied":prepared.len(),"bytes_before":original.len(),"bytes_after":updated.len()});
+    FilePlan::new(context, target, updated.into_bytes(), output)
 }
 
 fn validate_arguments(arguments: &EditFileArguments) -> Result<(), ToolFailure> {

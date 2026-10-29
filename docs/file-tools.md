@@ -82,6 +82,9 @@ a terminal LF and its optional preceding CR are removed from each returned page.
 Interior line endings remain as stored. This is a text inspection API, not a raw-byte
 archive/export API.
 
+Pages also carry a `revision` for optional [mutation preconditions](file-mutations.md).
+It is a stat/identity fingerprint, not a content hash.
+
 `lines_read`, `end_line` and `end_line_complete` describe the returned fragment.
 If output ends inside a line, `content_truncated` is true and `next_offset_line`
 remains on that same line. `next_offset_byte` identifies the exact continuation;

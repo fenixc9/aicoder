@@ -7,9 +7,12 @@ mod dispatcher;
 mod registry;
 mod util;
 
-pub use approval::{AllowAllApproval, ApprovalHandler, DenyAllApproval, ToolInvocation};
+pub use approval::{
+    AllowAllApproval, ApprovalHandler, DenyAllApproval, MAX_TOOL_PREVIEW_BYTES, ToolInvocation,
+    ToolPreview,
+};
 pub use context::ToolContext;
-pub use core::{ExecutableTool, ToolCapability, ToolFailure, ToolSuccess};
+pub use core::{ExecutableTool, PreparedTool, ToolCapability, ToolFailure, ToolSuccess};
 pub use dispatcher::{DispatcherConfig, ToolDispatcher};
 pub use registry::ToolRegistry;
 

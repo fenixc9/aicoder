@@ -54,9 +54,25 @@ impl ToolFailure {
 pub trait ExecutableTool: Send + Sync {
     fn definition(&self) -> ToolDefinition;
     fn capability(&self) -> ToolCapability;
+    /// Read-only preparation before approval. The returned plan must retain the exact
+    /// operation being reviewed; dropping it must not mutate external state.
+    async fn prepare(
+        &self,
+        _context: &ToolContext,
+        _arguments: Value,
+    ) -> Result<Option<Box<dyn PreparedTool>>, ToolFailure> {
+        Ok(None)
+    }
     async fn execute(
         &self,
         context: &ToolContext,
         arguments: Value,
     ) -> Result<ToolSuccess, ToolFailure>;
+}
+
+/// An immutable operation prepared before approval and consumed once after approval.
+#[async_trait]
+pub trait PreparedTool: Send + Sync {
+    fn preview(&self) -> super::ToolPreview;
+    async fn execute(self: Box<Self>, context: &ToolContext) -> Result<ToolSuccess, ToolFailure>;
 }

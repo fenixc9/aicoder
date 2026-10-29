@@ -223,6 +223,22 @@ fn handle_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) -> Resul
             KeyCode::Char('y') | KeyCode::Char('Y') => app.resolve_approval(true),
             KeyCode::Char('n') | KeyCode::Char('N') => app.resolve_approval(false),
             KeyCode::Esc => app.cancel("Approval cancelled"),
+            KeyCode::PageDown => {
+                if let Some(approval) = &mut app.approval {
+                    approval.scroll = approval.scroll.saturating_add(8);
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(approval) = &mut app.approval {
+                    approval.scroll = approval.scroll.saturating_sub(8);
+                }
+            }
+            KeyCode::Tab => {
+                if let Some(approval) = &mut app.approval {
+                    approval.show_arguments = !approval.show_arguments;
+                    approval.scroll = 0;
+                }
+            }
             _ => {}
         }
         return Ok(());

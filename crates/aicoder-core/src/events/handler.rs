@@ -218,6 +218,7 @@ pub struct ToolApprovalRequestedEvent {
     pub call_id: Arc<str>,
     pub name: Arc<str>,
     pub capability: ToolCapability,
+    pub preview: Option<Arc<crate::tools::ToolPreview>>,
 }
 
 #[derive(Debug, Clone)]
@@ -542,11 +543,13 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
             call_id,
             name,
             capability,
+            preview,
         } => handler.on_tool_approval_requested(ToolApprovalRequestedEvent {
             meta,
             call_id: Arc::clone(call_id),
             name: Arc::clone(name),
             capability: *capability,
+            preview: preview.clone(),
         }),
         AgentRawEvent::ToolApprovalResolved { call_id, approved } => {
             handler.on_tool_approval_resolved(ToolApprovalResolvedEvent {

@@ -704,3 +704,72 @@ async fn pending_byte_capacity_is_released_after_application_independently_of_co
     assert_eq!(result.rounds, 2);
     assert!(handle.snapshot().pending_inputs.is_empty());
 }
+
+struct PreparingTool(Arc<Gate>);
+#[async_trait]
+impl ExecutableTool for PreparingTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "preparing".into(),
+            description: None,
+            parameters: json!({"type":"object"}),
+        }
+    }
+    fn capability(&self) -> ToolCapability {
+        ToolCapability::Mutating
+    }
+    async fn prepare(
+        &self,
+        _: &ToolContext,
+        _: Value,
+    ) -> Result<Option<Box<dyn PreparedTool>>, ToolFailure> {
+        self.0.enter().await;
+        unreachable!("preparation is never released")
+    }
+    async fn execute(&self, _: &ToolContext, _: Value) -> Result<ToolSuccess, ToolFailure> {
+        panic!("unapproved preparation must not execute")
+    }
+}
+#[tokio::test]
+async fn steering_and_cancellation_interrupt_read_only_preparation_without_requesting_approval() {
+    for cancel in [false, true] {
+        let workspace = tempfile::tempdir().unwrap();
+        let script = Script::new(vec![calls(&["preparing"]), reply("redirected")]);
+        let gate = Arc::new(Gate::default());
+        let mut registry = ToolRegistry::default();
+        registry.register(PreparingTool(gate.clone())).unwrap();
+        let executor = executor(script.clone(), registry, workspace.path());
+        let (handle, control) = RunHandle::pair();
+        let run = tokio::spawn(async move {
+            executor
+                .run_controlled(request(), Arc::new(()), control)
+                .await
+        });
+        gate.wait().await;
+        if cancel {
+            handle.cancel("cancel preparation").unwrap();
+        } else {
+            handle.steer(user("redirect")).unwrap();
+        }
+        let outcome = tokio::time::timeout(Duration::from_secs(2), run)
+            .await
+            .unwrap()
+            .unwrap();
+        if cancel {
+            let RunOutcome::Interrupted(interrupted) = outcome else {
+                panic!("cancellation must interrupt preparation")
+            };
+            assert!(matches!(interrupted.stop, RunStop::Cancelled { .. }));
+        } else {
+            assert!(matches!(outcome, RunOutcome::Completed(_)));
+            assert_eq!(
+                script.requests.lock().unwrap()[1].messages[2]
+                    .tool_result()
+                    .unwrap()
+                    .1["error"]["code"],
+                "steered_before_execution"
+            );
+        }
+        assert!(handle.snapshot().approvals.is_empty());
+    }
+}

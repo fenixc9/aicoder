@@ -171,3 +171,10 @@ Pass additional JSONL paths to validate fresh example output. CI checks the publ
 fixture with JSON Schema, while Cargo tests compare it with real SDK output and
 exercise deserialization, lifecycle, limits, concurrent producers, disconnects,
 callback failures/real-time drain, cancellation, task destruction and TUI reconciliation.
+
+
+S3 adds optional prepared-tool previews to `tool_approval_requested` and controlled
+approval invocations. The version stays 1; absent previews remain valid. The
+[approval trace](protocol/approval-preview-v1-trace.jsonl) contains full success/conflict
+runs, and the default schema checker validates it alongside the original fixture.
+See [prepare/review/commit](file-mutations.md) for limits and source-data handling.

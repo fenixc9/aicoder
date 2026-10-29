@@ -145,11 +145,19 @@ impl ApprovalHandler for ConsoleApproval {
             .name("aicoder-approval".into())
             .spawn(move || {
                 let result = (|| -> Result<bool> {
-                    eprintln!(
-                        "\n工具 {} 将以当前用户权限执行（不是沙箱）\n参数: {}",
-                        invocation.name,
-                        serde_json::to_string_pretty(&invocation.arguments)?
-                    );
+                    if let Some(preview) = &invocation.preview {
+                        eprintln!(
+                            "\n{}\n{}",
+                            invocation.name,
+                            aicoder_runtime::tools::display_preview(preview)
+                        );
+                    } else {
+                        eprintln!(
+                            "\n工具 {} 将以当前用户权限执行（不是沙箱）\n参数: {}",
+                            invocation.name,
+                            serde_json::to_string_pretty(&invocation.arguments)?
+                        );
+                    }
                     eprint!("允许执行? [y/N] ");
                     io::stderr().flush()?;
 
