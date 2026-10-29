@@ -1,7 +1,10 @@
 mod bash;
 mod edit_file;
 mod grep;
+mod io;
+mod list;
 mod read_file;
+mod tree;
 mod write_file;
 
 use anyhow::Result;
@@ -18,6 +21,7 @@ pub use workspace::WorkspacePaths;
 pub use bash::BashTool;
 pub use edit_file::EditFileTool;
 pub use grep::GrepTool;
+pub use list::{GlobTool, ListDirectoryTool};
 pub use read_file::ReadFileTool;
 pub use write_file::WriteFileTool;
 
@@ -33,6 +37,8 @@ pub(crate) fn registry_with_shell(shell: impl ExecutableTool + 'static) -> Resul
     registry.register(EditFileTool)?;
     registry.register(shell)?;
     registry.register(GrepTool)?;
+    registry.register(ListDirectoryTool)?;
+    registry.register(GlobTool)?;
     Ok(registry)
 }
 

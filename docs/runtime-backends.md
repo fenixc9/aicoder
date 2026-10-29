@@ -10,6 +10,7 @@ service, database or dependency package is introduced by this extraction.
 | Custom tool, registry, dispatcher and approval | `aicoder_core::tools` |
 | Default coding registry | `aicoder_runtime::tools::default_registry` |
 | Read/write/edit/search/Bash | `aicoder_runtime::tools::{ReadFileTool, WriteFileTool, EditFileTool, GrepTool, BashTool}` |
+| Directory and glob pages | `aicoder_runtime::tools::{ListDirectoryTool, GlobTool}` |
 | Canonical tool path checks | `aicoder_runtime::tools::WorkspacePaths` |
 | Session domain, repository contract and memory store | `aicoder_core::session` |
 | Durable JSONL store | `aicoder_runtime::session::JsonlSessionRepository` |
@@ -81,5 +82,5 @@ cargo run --locked -p aicoder-runtime --example offline_smoke
 
 Core's `model_provider`, `embedded_agent`, `controlled_agent` and `event_stream`
 examples remain runnable without runtime. This completes the S3 extraction item;
-directory/glob tools, stronger bounded IO/editing/shell contracts and session approval
-policies remain on the [roadmap](roadmap.md).
+[Directory/glob and bounded read/search](file-tools.md) are now available.
+Editing/shell contracts and session approval policies remain on the [roadmap](roadmap.md).

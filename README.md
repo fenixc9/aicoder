@@ -35,7 +35,8 @@ asynchronous approvals over the same execution loop. [Versioned events](docs/eve
 provide bounded subscriptions, explicit overflow/disconnect reports, and structured
 bench traces. S0–S2 are complete; S3 shared runtime configuration and [project resources](docs/project-resources.md) are
 available; [concrete tools and storage](docs/runtime-backends.md) now live in runtime.
-Remaining tool improvements are in progress. See [runtime settings](docs/runtime-configuration.md), including
+[Bounded discovery/read/search pages](docs/file-tools.md) are available;
+editing, shell and approval improvements remain in progress. See [runtime settings](docs/runtime-configuration.md), including
 the explicit `--env-file` migration.
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs

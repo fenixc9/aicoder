@@ -286,3 +286,24 @@ No persisted format change is needed: existing JSONL v3 files and legacy backups
 retain their contract. Custom stores can attach opaque immutable view checkpoints
 without adding backend-specific fields to core. See [the complete mapping and
 examples](runtime-backends.md) and [acceptance](s3-backends-acceptance.md).
+
+
+## S3: bounded discovery, reads and search
+
+Runtime default registries append `list_directory` and `glob` after the original five
+tools, including application settings/resource assembly. All four inspection tools are
+read-only. `grep` now uses Rust regex and bounded asynchronous file reads instead of
+collecting a ripgrep process's entire stdout/stderr. Existing `matches` remains display
+text; paths are now workspace-relative and structured `records` carry line/byte positions,
+excerpts and read cursors. Project-local `.gitignore` rules are honored; user-global
+ignore rules and `.ignore` are no longer implicit process configuration. Set `hidden`
+and `respect_gitignore` explicitly for other discovery policies.
+
+Use `has_more`/`next_cursor` for all continuation. Read cursors can resume within long
+UTF-8 lines and detect file changes; do not increment to the next line after a partial
+fragment. Initial `offset_line` remains available with a bounded scan. Successful JSON
+pages include their metadata/token in the output cap; insufficient budgets produce a
+typed error instead of clipped JSON. Grep may return an empty but resumable scan-budget
+page, and oversized lines include a recovery read cursor. See [the complete limits,
+filters and compatibility rules](file-tools.md) and [acceptance](s3-file-tools-acceptance.md).
+No core API, event schema or JSONL version changes are required.

@@ -171,14 +171,15 @@ S3 尚未整体完成；工具/存储迁移已完成，后续工具措施仍按�
 拆包契约见 [runtime 后端](runtime-backends.md)，验证见 [验收记录](s3-backends-acceptance.md)。
 [配置增量验收](s3-runtime-acceptance.md) 保留 268 个测试的历史记录；
 [资源增量验收](s3-resources-acceptance.md) 保留 293 个测试及三次轻量采样的历史记录；
-当前拆包增量覆盖 294 个测试。
+拆包增量保留 294 个测试的历史记录；当前文件工具增量覆盖 308 个测试。
 
 - [x] 新增 runtime，统一显式参数 > 环境变量 > 项目配置 > 用户配置 > 默认值；
   凭证使用独立来源，不混淆 provider 与默认 endpoint。
 - [x] 加载 AGENTS.md、SYSTEM.md、skills、提示词模板；确定全局、父目录、
   工作区与嵌套目录规则，去重、大小限制、来源展示、关闭开关和热重载边界。
 - [x] 内置文件/搜索/shell 工具和 JSONL store 由 runtime 提供，core 只保留接口及内存实现。
-- [ ] 补目录枚举与 glob 搜索；read/grep 以有界方式读取；明确截断与结果分页。
+- [x] 补目录枚举与 glob 搜索；read/grep 以有界方式读取；明确截断与结果分页。
+  见 [文件工具契约](file-tools.md) 与 [验收记录](s3-file-tools-acceptance.md)。
 - [ ] 编辑支持精确匹配及并发修改检测；写入采用适当的原子策略；审批可展示 diff。
 - [ ] shell 的输出、超时、取消、进程组清理和凭证处理形成统一契约。
 - [ ] 审批策略支持拒绝、单次、会话级授权；前端只负责展示和提交决定。

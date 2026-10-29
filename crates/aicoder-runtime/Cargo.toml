@@ -22,6 +22,9 @@ uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["fs", "io-util", "process", "time"] }
 url = "2"
 shlex = "2"
+regex = "1"
+globset = "0.4"
+ignore = "0.4"
 yaml-rust2 = { version = "0.12", default-features = false }
 
 [dev-dependencies]

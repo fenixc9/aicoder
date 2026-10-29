@@ -35,7 +35,15 @@ fn default_registry_includes_edit_file_in_stable_order() {
         .collect::<Vec<_>>();
     assert_eq!(
         names,
-        ["read_file", "write_file", "edit_file", "bash", "grep"]
+        [
+            "read_file",
+            "write_file",
+            "edit_file",
+            "bash",
+            "grep",
+            "list_directory",
+            "glob"
+        ]
     );
 }
 
@@ -117,8 +125,8 @@ async fn read_file_returns_bounded_pages() {
 #[tokio::test]
 async fn read_file_stops_at_output_byte_limit() {
     let directory = tempdir().unwrap();
-    std::fs::write(directory.path().join("wide.txt"), "abcdefghij\nsecond").unwrap();
-    let context = ToolContext::new(directory.path(), Duration::from_secs(1), 5).unwrap();
+    std::fs::write(directory.path().join("wide.txt"), "a".repeat(2048)).unwrap();
+    let context = ToolContext::new(directory.path(), Duration::from_secs(1), 512).unwrap();
 
     let result = ReadFileTool
         .execute(
@@ -128,7 +136,9 @@ async fn read_file_stops_at_output_byte_limit() {
         .await
         .unwrap();
 
-    assert_eq!(result.output["content"], "abcde");
+    assert!(result.output["content"].as_str().unwrap().len() < 2048);
+    assert!(result.output.to_string().len() <= 512);
+    assert!(result.output["next_cursor"].is_string());
     assert_eq!(result.output["content_truncated"], true);
     assert_eq!(result.output["has_more"], true);
     assert!(result.truncated);
