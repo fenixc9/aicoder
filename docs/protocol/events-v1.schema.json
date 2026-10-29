@@ -1277,6 +1277,16 @@
         },
         "input_context": {
           "description": "Optional opaque host source metadata for the prepared system prefix."
+        },
+        "model_context": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/model_context"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -2124,6 +2134,126 @@
       "required": [
         "decision",
         "source"
+      ]
+    },
+    "session_context_source": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "leaf_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recorded_messages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "recovered_tool_results": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "reordered_tool_results": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "interrupted_turns": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        }
+      },
+      "required": [
+        "session_id",
+        "revision",
+        "leaf_id",
+        "recorded_messages",
+        "recovered_tool_results",
+        "reordered_tool_results",
+        "interrupted_turns"
+      ]
+    },
+    "model_context": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/session_context_source"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "initial_history_messages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "initial_context_messages": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "requests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "compactions": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "last_request_messages": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_input_token_estimate": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 18446744073709551615
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "source",
+        "initial_history_messages",
+        "initial_context_messages",
+        "requests",
+        "compactions",
+        "last_request_messages",
+        "last_input_token_estimate"
       ]
     }
   }

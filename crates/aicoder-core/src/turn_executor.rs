@@ -108,6 +108,39 @@ impl TurnExecutor {
             .await
     }
 
+    pub async fn run_input(&self, input: crate::ExecutionInput) -> Result<TurnExecutionResult> {
+        self.run_input_outcome(input, Arc::new(()), TurnExecutionContext::new())
+            .await
+            .into_result()
+    }
+    pub async fn run_input_outcome(
+        &self,
+        input: crate::ExecutionInput,
+        handler: Arc<dyn AgentEventHandler>,
+        context: TurnExecutionContext,
+    ) -> RunOutcome {
+        self.run_input_with_journal(input, handler, context, &())
+            .await
+    }
+    pub async fn run_input_controlled(
+        &self,
+        input: crate::ExecutionInput,
+        handler: Arc<dyn AgentEventHandler>,
+        control: crate::RunControl,
+    ) -> RunOutcome {
+        self.run_input_outcome(input, handler, control.context.clone())
+            .await
+    }
+    pub async fn run_input_with_journal(
+        &self,
+        input: crate::ExecutionInput,
+        handler: Arc<dyn AgentEventHandler>,
+        context: TurnExecutionContext,
+        journal: &dyn crate::RunJournal,
+    ) -> RunOutcome {
+        let scope = self.start_scope(&input.request.model, handler, &context);
+        self.run_scoped_input(input, context, journal, scope).await
+    }
     pub async fn run_with_handler(
         &self,
         request: ModelRequest,
@@ -201,9 +234,39 @@ impl TurnExecutor {
         journal: &dyn crate::RunJournal,
         scope: RunScope,
     ) -> RunOutcome {
+        self.run_scoped_input(
+            crate::ExecutionInput::from_request(request),
+            context,
+            journal,
+            scope,
+        )
+        .await
+    }
+    pub(crate) async fn run_scoped_input(
+        &self,
+        input: crate::ExecutionInput,
+        context: TurnExecutionContext,
+        journal: &dyn crate::RunJournal,
+        scope: RunScope,
+    ) -> RunOutcome {
+        let crate::ExecutionInput {
+            request,
+            history,
+            system_prefix_len,
+            source,
+        } = input;
         let context = context.child();
         let limits = Arc::new(RunLimiter::new(self.config.budget.clone(), context.clone()));
-        let mut progress = RunProgress::new(request.messages.clone());
+        let mut progress = RunProgress::new(history);
+        progress.model_context = Some(crate::ModelContextInfo {
+            source,
+            initial_history_messages: progress.messages.len(),
+            initial_context_messages: request.messages.len(),
+            requests: 0,
+            last_request_messages: None,
+            last_input_token_estimate: None,
+            compactions: 0,
+        });
         let RunScope { events, mut state } = scope;
         let mut execution = match self.config.events.validate() {
             Err(error) => Err(error),
@@ -217,7 +280,7 @@ impl TurnExecutor {
             }
             Ok(()) => {
                 let inner = self.run_inner(
-                    request,
+                    (request, system_prefix_len),
                     &events,
                     &mut state,
                     &context,
@@ -364,7 +427,7 @@ impl TurnExecutor {
 
     async fn run_inner(
         &self,
-        mut request: ModelRequest,
+        (mut request, system_prefix_len): (ModelRequest, usize),
         events: &AgentEventEmitter,
         state: &mut AgentRunStateMachine,
         context: &TurnExecutionContext,
@@ -377,6 +440,7 @@ impl TurnExecutor {
         }
         limits.check()?;
 
+        let mut context_messages = std::mem::take(&mut request.messages);
         if let Some(provider) = &self.input_context {
             let prepared = tokio::select! {
                 biased;
@@ -384,16 +448,18 @@ impl TurnExecutor {
                 prepared=provider.prepare(self.workspace_root(),&progress.messages)=>prepared?,
             };
             crate::input_context::validate_prefix(&prepared.system_prefix)?;
-            let prefix_length = progress
-                .messages
-                .iter()
-                .take_while(|message| message.role == crate::model::MessageRole::System)
-                .count();
-            let history = progress.messages.split_off(prefix_length);
+            let history = progress.messages.split_off(system_prefix_len);
+            let projected_history = context_messages.split_off(system_prefix_len);
+            context_messages = prepared.system_prefix.clone();
+            context_messages.extend(projected_history);
             progress.messages = prepared.system_prefix;
             progress.messages.extend(history);
             progress.input_messages = progress.messages.len();
             progress.input_context = Some(prepared.provenance);
+            if let Some(info) = &mut progress.model_context {
+                info.initial_history_messages = progress.messages.len();
+                info.initial_context_messages = context_messages.len();
+            }
             tokio::select! {
                 biased;
                 cancelled=context.cancelled()=>return Err(cancelled.into()),
@@ -414,7 +480,10 @@ impl TurnExecutor {
             );
         }
 
-        let mut context_messages = progress.messages.clone();
+        if let Some(info) = &mut progress.model_context {
+            info.initial_history_messages = progress.messages.len();
+            info.initial_context_messages = context_messages.len();
+        }
 
         for round in 1..=self.config.max_rounds {
             limits.check()?;
@@ -515,6 +584,9 @@ impl TurnExecutor {
                             .saturating_add(compacted.estimated_tokens_after as u64),
                     );
                     context_messages = compacted.messages;
+                    if let Some(info) = &mut progress.model_context {
+                        info.compactions += 1;
+                    }
                     round_events.emit(AgentRawEvent::ContextCompactionCompleted {
                         strategy: compactor.name().into(),
                         estimated_tokens_before: compacted.estimated_tokens_before,
@@ -575,10 +647,18 @@ impl TurnExecutor {
                     .saturating_add(u64::from(request.options.max_output_tokens.unwrap_or(0))),
             ));
             round_events.emit(AgentRawEvent::ModelRequestStarted);
+            if let Some(info) = &mut progress.model_context {
+                info.requests += 1;
+                info.last_request_messages = Some(request.messages.len());
+                info.last_input_token_estimate = Some(input_estimate);
+            }
+            let messages = std::mem::take(&mut request.messages);
+            let mut model_request = request.clone();
+            model_request.messages = messages;
             let response = match tokio::select! {
                 biased;
                 cancelled = context.cancelled() => Err(anyhow::Error::from(cancelled)),
-                result = self.provider.generate(request.clone(), sink.clone(), context.clone()) =>
+                result = self.provider.generate(model_request, sink.clone(), context.clone()) =>
                     result.map_err(|error| if error.kind == crate::model::ProviderErrorKind::Cancelled {
                         context.cancel(error.message);
                         anyhow::Error::from(context.error())

@@ -605,6 +605,16 @@ async fn the_published_v1_fixture_matches_actual_sdk_output_after_identity_and_t
         }
         if record.get("termination").is_some() {
             record["termination"]["elapsed_ms"] = json!(0);
+            if let Some(source) = record["termination"]["model_context"]["source"].as_object_mut() {
+                source.insert(
+                    "session_id".into(),
+                    json!("00000000-0000-4000-8000-000000000002"),
+                );
+                source.insert(
+                    "leaf_id".into(),
+                    json!("00000000-0000-4000-8000-000000000004"),
+                );
+            }
         }
     }
     assert_eq!(actual, expected);

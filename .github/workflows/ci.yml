@@ -50,6 +50,8 @@ jobs:
         run: cargo run --locked -p aicoder-runtime --example offline_shell
       - name: Scoped session approval example
         run: cargo run --locked -p aicoder-runtime --example offline_approvals
+      - name: Branch context and canonical history example
+        run: cargo run --locked -p aicoder-runtime --example offline_context
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

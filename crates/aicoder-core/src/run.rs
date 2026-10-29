@@ -182,6 +182,8 @@ impl PartialModelResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunProgress {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_context: Option<crate::ModelContextInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_context: Option<serde_json::Value>,
     #[serde(default)]
     pub event_delivery: crate::events::EventDeliveryReport,
@@ -204,6 +206,7 @@ impl RunProgress {
     pub fn new(messages: Vec<Message>) -> Self {
         Self {
             input_context: None,
+            model_context: None,
             event_delivery: crate::events::EventDeliveryReport::default(),
             pending_inputs: Vec::new(),
             input_messages: messages.len(),

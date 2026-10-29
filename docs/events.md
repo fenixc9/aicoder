@@ -185,3 +185,10 @@ while retaining event version 1 and the existing approved boolean. The default s
 checker now includes [creation/reuse/revocation/denial](protocol/session-approvals-v1-trace.jsonl).
 [Session authorization](approvals.md) describes source attribution and validation;
 serialized events and snapshots never restore permission state.
+
+
+S4 adds optional terminal `model_context` metadata (source branch, initial/view counts,
+logical request attempts, last adapted request estimate and compaction count). Older
+terminal data remains readable. The validator checks these counts against observed events.
+The [branch projection fixture](protocol/model-context-v1-trace.jsonl) exercises an
+unbound SDK branch run with model-only repairs; see [the context contract](model-context.md).

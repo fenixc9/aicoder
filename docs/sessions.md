@@ -37,6 +37,8 @@ repository.checkout(&mut session, old_leaf.as_deref())?;
 
 `entries()` borrows the complete tree. `active_entries()` traverses only the
 selected ancestry; `messages()` provides borrowed message views and omits metadata.
+[Read-only branch projections](model-context.md) also support alternate leaves without
+checkout, with recorded/recovery origins and an explicit active-turn view.
 `chat_messages()` clones raw messages for display/export. `model_messages()` builds
 safe model context and should be used for continuation. Metadata such as summaries
 is not silently inserted into prompts. A selected model record describes the branch;

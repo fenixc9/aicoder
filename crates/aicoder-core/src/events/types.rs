@@ -243,6 +243,8 @@ pub enum AgentRawEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunTermination {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_context: Option<crate::ModelContextInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_context: Option<Value>,
     pub stop: Option<crate::RunStop>,
     pub persistence_error: Option<Box<crate::RunFailure>>,
@@ -264,6 +266,7 @@ impl From<&crate::RunOutcome> for RunTermination {
     fn from(outcome: &crate::RunOutcome) -> Self {
         let progress = outcome.progress();
         Self {
+            model_context: progress.model_context.clone(),
             input_context: progress.input_context.clone(),
             stop: outcome.stop().cloned(),
             persistence_error: match outcome {

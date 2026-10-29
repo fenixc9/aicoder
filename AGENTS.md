@@ -29,6 +29,9 @@
   do not duplicate agent execution logic in either frontend.
 - `crates/aicoder-eval` owns evaluation and SWE-bench integration. Do not
   leak evaluation fixtures or grading answers into agent prompts.
+- Keep canonical recorded history separate from provider projections. Recovery repairs
+  and pruning must not become historical facts; journal indices follow canonical input.
+  Preserve declared runtime prefixes and branch provenance when constructing model views.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

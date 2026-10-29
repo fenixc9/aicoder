@@ -9,6 +9,8 @@ pub mod completion;
 pub mod context;
 pub mod control;
 pub mod events;
+pub mod execution_input;
+pub use execution_input::{ExecutionInput, ModelContextInfo};
 pub mod input_context;
 pub mod journal;
 pub use input_context::{InputContextProvider, PreparedInput};

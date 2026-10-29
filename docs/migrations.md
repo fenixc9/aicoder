@@ -381,3 +381,26 @@ version remains 1 and older absent fields remain valid. No JSONL migration is ne
 CLI adds the explicit s choice for bound sessions; TUI adds s, /permissions and /revoke,
 and clears scopes on successful reload/deletion. See [the full ownership, limits and
 revocation rules](approvals.md) and [S3 acceptance](s3-approvals-acceptance.md).
+
+
+## S4: canonical history and independent model context
+
+`ExecutionInput` separates owned canonical history from the provider request. Existing
+ModelRequest execution methods stay; explicit input/controlled/journal variants support
+host projections. `Session::branch`/`selected_branch` provide borrowed views without
+checkout, `model_context` adds origin/source metadata, and `context_for_active_turn`
+requires complete live tool units. `ExecutionInput::from_branch` enables an alternate
+branch run without persistence or selection changes.
+
+Session-aware outcomes now start with recorded branch facts, rather than a repaired
+provider view. Synthetic recovery results/system markers are model-only; raw arrival
+order and real reasoning stay in history. Consumers forwarding result messages to a
+provider should switch to safe projections. Canonical `input_messages`/journal positions
+can differ from context lengths. Historical Compaction records keep their prior inert
+semantics; automatic/manual semantic summaries remain future work.
+
+Progress and terminal event-v1 summaries gain optional `model_context`. Add the optional
+field to explicit Rust struct literals; old serialized data still reads. JSONL remains
+v3. New reports expose actual adapted request counts and heuristic estimates, with no
+extra message-body copy. See [the complete input, prefix and source rules](model-context.md)
+and [verification](s4-projection-acceptance.md).

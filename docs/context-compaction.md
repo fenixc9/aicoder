@@ -57,3 +57,10 @@ invariants:
 
 Compaction emits state transitions and started, completed, or failed events.
 Evaluation traces aggregate compaction count, failures, and removed messages.
+
+
+S4 separates canonical history from provider-facing inputs through
+[ExecutionInput and branch projections](model-context.md). Pruning still transforms only
+the working view; it is transient, and stored Compaction records remain metadata until
+semantic summary policies are implemented. Progress/terminal context reports expose
+initial and outgoing counts without copying the whole provider request into outcomes.

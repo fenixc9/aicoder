@@ -262,21 +262,37 @@ impl Agent {
             entries.push(SessionEntryData::TurnStart {
                 turn_id: turn_id.clone(),
             });
-            let prior = session.model_messages()?;
+            let (mut history, mut model_context, mut source) = {
+                let branch = session.selected_branch();
+                let history = branch.chat_messages();
+                let projection = branch.model_context()?;
+                let source = projection.source.clone();
+                (history, projection.into_messages(), source)
+            };
             entries.push(SessionEntryData::Message {
                 message: user.clone(),
             });
             repository.append_entries(&mut session, entries)?;
-            let mut messages = self.system_messages();
-            messages.extend(prior);
-            messages.push(user);
+            history.push(user.clone());
+            model_context.push(user);
+            source.revision = session.metadata().revision;
+            source.leaf_id = session.metadata().leaf_id.clone();
+            source.recorded_messages += 1;
+            let mut raw = self.system_messages();
+            let prefix_len = raw.len();
+            let mut model = raw.clone();
+            raw.extend(history);
+            model.extend(model_context);
+            let mut input =
+                crate::ExecutionInput::projected(self.completion_request(model), raw, prefix_len)?;
+            input.source = Some(source);
             Ok((
                 SessionJournal::new(repository, session, turn_id),
                 lease,
-                messages,
+                input,
             ))
         })();
-        let (journal, lease, messages) = match prepared {
+        let (journal, lease, input) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 let mut progress = RunProgress::new(initial);
@@ -305,7 +321,7 @@ impl Agent {
         };
         let execution = self
             .turn_executor
-            .run_scoped(self.completion_request(messages), context, &journal, scope)
+            .run_scoped_input(input, context, &journal, scope)
             .await;
         let metadata = journal.metadata();
         drop(lease);

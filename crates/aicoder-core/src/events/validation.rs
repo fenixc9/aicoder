@@ -10,6 +10,8 @@ pub struct EventTraceValidator {
     state: AgentRunStateMachine,
     open_round: Option<usize>,
     last_round: usize,
+    model_requests: usize,
+    compactions: usize,
     terminal: bool,
     invalid: bool,
     last_elapsed_ms: u64,
@@ -153,6 +155,12 @@ impl EventTraceValidator {
                 self.last_round = round;
                 self.open_round = Some(round);
             }
+            AgentRawEvent::ModelRequestStarted => {
+                self.model_requests += 1;
+            }
+            AgentRawEvent::ContextCompactionCompleted { .. } => {
+                self.compactions += 1;
+            }
             AgentRawEvent::RoundCompleted { .. } => {
                 ensure!(
                     self.open_round.is_some() && self.open_round == envelope.round,
@@ -177,6 +185,26 @@ impl EventTraceValidator {
                     summary.rounds == self.last_round,
                     "terminal round count differs from trace"
                 );
+                if let Some(info) = &summary.model_context {
+                    ensure!(
+                        info.requests == self.model_requests
+                            && info.compactions == self.compactions,
+                        "model context counts differ from trace"
+                    );
+                    ensure!(
+                        info.last_request_messages.is_some() == (info.requests > 0)
+                            && info.last_input_token_estimate.is_some() == (info.requests > 0),
+                        "model context request metadata is incomplete"
+                    );
+                    if let Some(source) = &info.source
+                        && let Some((session, _)) = &self.session
+                    {
+                        ensure!(
+                            &source.session_id == session,
+                            "model context source differs from bound session"
+                        );
+                    }
+                }
                 let state = self.state.state();
                 match (event, &summary.stop) {
                     (AgentRawEvent::AgentCompleted { rounds, usage }, None) => ensure!(

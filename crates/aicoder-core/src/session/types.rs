@@ -1,10 +1,10 @@
 use crate::{
-    model::{ContentBlock, Message, MessageRole, ModelUsage},
+    model::{Message, MessageRole, ModelUsage},
     run::{PartialModelResponse, RunProgress, RunStop, TokenAccounting},
 };
-use anyhow::{Result, bail, ensure};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     any::Any,
     collections::{HashMap, HashSet},
@@ -282,78 +282,9 @@ impl Session {
         active
     }
     pub fn model_messages(&self) -> Result<Vec<Message>> {
-        let mut output = Vec::new();
-        let mut pending: Option<PendingTools> = None;
-        for entry in self.active_entries() {
-            match &entry.data {
-                SessionEntryData::Message { message } => {
-                    if message.role == MessageRole::Tool {
-                        let tools = pending.as_mut().ok_or_else(|| {
-                            anyhow::anyhow!("orphan tool result in session history")
-                        })?;
-                        for block in &message.content {
-                            let ContentBlock::ToolResult { call_id, .. } = block else {
-                                bail!("tool message contains a non-result block");
-                            };
-                            ensure!(
-                                tools.ids.contains(call_id),
-                                "tool result refers to an unknown call"
-                            );
-                            ensure!(
-                                tools
-                                    .results
-                                    .insert(call_id.clone(), block.clone())
-                                    .is_none(),
-                                "duplicate tool result in session history"
-                            );
-                        }
-                    } else {
-                        flush_tools(&mut pending, &mut output);
-                        let calls = message
-                            .tool_calls()
-                            .map(|call| call.id.clone())
-                            .collect::<Vec<_>>();
-                        if !calls.is_empty() {
-                            ensure!(
-                                message.role == MessageRole::Assistant,
-                                "tool calls require an assistant message"
-                            );
-                            let ids = calls.iter().cloned().collect::<HashSet<_>>();
-                            ensure!(
-                                ids.len() == calls.len(),
-                                "duplicate tool call IDs in session history"
-                            );
-                            pending = Some(PendingTools {
-                                order: calls,
-                                ids,
-                                results: HashMap::new(),
-                            });
-                        }
-                        output.push(message.clone());
-                    }
-                }
-                SessionEntryData::TurnEnd { record, .. } => {
-                    if record.stop.is_none() {
-                        ensure!(
-                            pending
-                                .as_ref()
-                                .is_none_or(|tools| tools.order.len() == tools.results.len()),
-                            "completed turn has unfinished tool calls"
-                        );
-                    }
-                    flush_tools(&mut pending, &mut output);
-                    if record.stop.is_some() {
-                        output.push(interruption_message());
-                    }
-                }
-                _ => {}
-            }
-        }
-        flush_tools(&mut pending, &mut output);
-        if self.unfinished_turn().is_some() {
-            output.push(interruption_message());
-        }
-        Ok(output)
+        self.selected_branch()
+            .model_context()
+            .map(|context| context.messages)
     }
     pub(crate) fn transaction(&self, data: Vec<SessionEntryData>) -> Result<SessionTransaction> {
         let mut leaf = self.metadata.leaf_id.clone();
@@ -500,28 +431,6 @@ impl Session {
         self.metadata.leaf_id = transaction.leaf_id;
         self.metadata.revision = revision;
         self.metadata.updated_at = updated_at;
-    }
-}
-struct PendingTools {
-    order: Vec<String>,
-    ids: HashSet<String>,
-    results: HashMap<String, ContentBlock>,
-}
-fn interruption_message() -> Message {
-    Message::text(
-        MessageRole::System,
-        "[Previous execution was interrupted. Recorded results remain authoritative; unrecorded operations may have run partially. Inspect the workspace before retrying. Partial response fragments are not a completed answer.]",
-    )
-}
-fn flush_tools(pending: &mut Option<PendingTools>, output: &mut Vec<Message>) {
-    if let Some(mut tools) = pending.take() {
-        for id in tools.order {
-            let block=tools.results.remove(&id).unwrap_or_else(||ContentBlock::ToolResult {call_id:id,content:json!({"ok":false,"error":{"code":"execution_interrupted","message":"No completed result was recorded. The operation may have run partially; inspect the workspace before retrying."}}),is_error:true});
-            output.push(Message {
-                role: MessageRole::Tool,
-                content: vec![block],
-            });
-        }
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

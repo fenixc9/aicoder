@@ -38,7 +38,8 @@ bench traces. S0–S3 are complete on the verified Linux platform. Runtime provi
 [concrete tools/storage](docs/runtime-backends.md), [bounded read/search](docs/file-tools.md),
 [checked edits and diffs](docs/file-mutations.md), [shell supervision](docs/shell-tools.md)
 and [session tool grants](docs/approvals.md). Current work advances to S4 long-context
-management. See the settings guide for the explicit `--env-file` migration and
+management; [branch model-context projections](docs/model-context.md) now keep recovery
+views separate from recorded history. See the settings guide for the explicit `--env-file` migration and
 [S3 acceptance](docs/s3-approvals-acceptance.md) for verification and cumulative costs.
 
 
