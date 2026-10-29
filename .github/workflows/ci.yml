@@ -56,6 +56,8 @@ jobs:
         run: cargo run --locked -p aicoder-runtime --example offline_summary
       - name: Recover full archived tool output
         run: cargo run --locked -p aicoder-runtime --example offline_artifacts
+      - name: Branch navigation and validated model selection
+        run: cargo run --locked -p aicoder-runtime --example offline_navigation
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

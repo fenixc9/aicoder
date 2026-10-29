@@ -69,6 +69,72 @@ impl ModelProvider for ChatClient {
         Ok(spec)
     }
 
+    fn validate_request(&self, request: &ModelRequest) -> Result<(), ProviderError> {
+        request.validate(&self.model_spec(&request.model)?)?;
+        let unsupported = |message: &str| {
+            ProviderError::new(
+                &self.config.provider_id,
+                ProviderErrorKind::Unsupported,
+                message,
+            )
+        };
+        if self.config.compatibility == crate::CompatibilityProfile::DeepseekThinking
+            && matches!(
+                request.tool_choice,
+                ModelToolChoice::Required | ModelToolChoice::Named(_)
+            )
+        {
+            return Err(unsupported(
+                "DeepSeek thinking mode does not support required or named tool choice",
+            ));
+        }
+        if self.config.compatibility != crate::CompatibilityProfile::Generic
+            && matches!(
+                request.options.response_format,
+                Some(ResponseFormat::JsonSchema { .. })
+            )
+        {
+            return Err(unsupported(
+                "DeepSeek compatibility profiles support JSON object output, not JSON Schema output",
+            ));
+        }
+        for message in &request.messages {
+            for block in &message.content {
+                match block {
+                    ContentBlock::ProviderData { .. } => {
+                        return Err(unsupported(
+                            "opaque provider state cannot be encoded by this adapter",
+                        ));
+                    }
+                    ContentBlock::Image { source } => {
+                        if message.role != MessageRole::User {
+                            return Err(unsupported(
+                                "this adapter only accepts images in user messages",
+                            ));
+                        }
+                        let valid = match source {
+                            ImageSource::Url { url } => {
+                                url.starts_with("https://") || url.starts_with("http://")
+                            }
+                            ImageSource::Base64 { media_type, data } => {
+                                media_type.starts_with("image/") && !data.is_empty()
+                            }
+                        };
+                        if !valid {
+                            return Err(ProviderError::new(
+                                &self.config.provider_id,
+                                ProviderErrorKind::InvalidRequest,
+                                "image source must be HTTP(S) or nonempty image base64",
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn generate(
         &self,
         request: ModelRequest,
@@ -79,21 +145,25 @@ impl ModelProvider for ChatClient {
             if context.is_cancelled() {
                 return Err(error(ProviderErrorKind::Cancelled, context.reason()));
             }
-            let spec = self.model_spec(&request.model)?;
-            request.validate(&spec)?;
+            self.validate_request(&request)?;
             let stream = request.stream;
-            if self.config.compatibility==crate::CompatibilityProfile::DeepseekThinking && matches!(request.tool_choice,ModelToolChoice::Required|ModelToolChoice::Named(_)) {
-                return Err(error(ProviderErrorKind::Unsupported,"DeepSeek thinking mode does not support required or named tool choice"));
-            }
-            if self.config.compatibility!=crate::CompatibilityProfile::Generic && matches!(request.options.response_format,Some(ResponseFormat::JsonSchema {..})) {return Err(error(ProviderErrorKind::Unsupported,"DeepSeek compatibility profiles support JSON object output, not JSON Schema output"));}
             let mut body = encode_request(request)?;
             match self.config.compatibility {
-                crate::CompatibilityProfile::Generic=>{},
-                crate::CompatibilityProfile::DeepseekThinking=>{
-                    body["thinking"]=json!({"type":"enabled"});body["reasoning_effort"]=json!("high");
-                    for message in body["messages"].as_array_mut().unwrap() {if message["role"]=="assistant"&&message.get("reasoning_content").is_none() {message["reasoning_content"]=json!("");}}
+                crate::CompatibilityProfile::Generic => {}
+                crate::CompatibilityProfile::DeepseekThinking => {
+                    body["thinking"] = json!({"type":"enabled"});
+                    body["reasoning_effort"] = json!("high");
+                    for message in body["messages"].as_array_mut().unwrap() {
+                        if message["role"] == "assistant"
+                            && message.get("reasoning_content").is_none()
+                        {
+                            message["reasoning_content"] = json!("");
+                        }
+                    }
                 }
-                crate::CompatibilityProfile::DeepseekChat=>body["thinking"]=json!({"type":"disabled"}),
+                crate::CompatibilityProfile::DeepseekChat => {
+                    body["thinking"] = json!({"type":"disabled"})
+                }
             }
             events.emit(ModelEvent::Started);
             let sink = NormalizedSink {

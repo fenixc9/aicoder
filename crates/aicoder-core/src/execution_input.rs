@@ -27,6 +27,8 @@ pub struct ExecutionInput {
     pub(crate) history: Vec<Message>,
     pub(crate) system_prefix_len: usize,
     pub(crate) source: Option<SessionContextSource>,
+    pub(crate) prepared_context: Option<serde_json::Value>,
+    pub(crate) started: Option<tokio::time::Instant>,
 }
 impl ExecutionInput {
     pub fn from_request(request: ModelRequest) -> Self {
@@ -40,6 +42,8 @@ impl ExecutionInput {
             request,
             system_prefix_len: prefix,
             source: None,
+            prepared_context: None,
+            started: None,
         }
     }
     /// Explicit host projection. Only the shared runtime instruction prefix is replaced
@@ -73,6 +77,8 @@ impl ExecutionInput {
             history,
             system_prefix_len,
             source: None,
+            prepared_context: None,
+            started: None,
         })
     }
     /// Read-only branch execution: request messages contain the runtime system prefix

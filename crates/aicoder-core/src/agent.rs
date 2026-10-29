@@ -96,6 +96,7 @@ impl AgentTurnOutcome {
     }
 }
 pub struct Agent {
+    follow_session_models: bool,
     turn_executor: TurnExecutor,
     config: AgentConfig,
 }
@@ -104,8 +105,65 @@ impl Agent {
         Self {
             turn_executor,
             config,
+            follow_session_models: false,
         }
     }
+    /// Honor recorded models only through this host's provider; never route credentials from history.
+    pub fn following_session_models(mut self) -> Self {
+        self.follow_session_models = true;
+        self
+    }
+    fn selected_model(&self, session: &Session) -> Result<String> {
+        if self.follow_session_models
+            && let Some((provider, model)) = session.selected_model()
+        {
+            let spec = self.turn_executor.model_spec(model)?;
+            ensure!(
+                spec.provider == provider,
+                "recorded provider differs from the host provider; select a trusted provider explicitly"
+            );
+            return Ok(model.to_string());
+        }
+        Ok(self.config.model.clone())
+    }
+    pub async fn switch_session_model(
+        &self,
+        repository: &dyn SessionRepository,
+        id: &str,
+        model: &str,
+        context: TurnExecutionContext,
+    ) -> Result<crate::session::ModelSelectionReport> {
+        crate::session::navigation::name(model)?;
+        let mut session = repository.open(id)?;
+        ensure_session_workspace(&session, self.turn_executor.workspace_root())?;
+        let _lease = repository.acquire_run(&mut session)?;
+        ensure!(
+            session.unfinished_turn().is_none(),
+            "recover the unfinished turn before changing its model"
+        );
+        let mut request = self.completion_request(self.system_messages());
+        request.model = model.to_string();
+        let input = crate::ExecutionInput::from_branch(request, &session.selected_branch())?;
+        let input = self.turn_executor.prepare_input(input, &context).await?;
+        let report = self.turn_executor.validate_model_selection(&input)?;
+        self.turn_executor.check_preparation_budget(&input)?;
+        if context.is_cancelled() {
+            return Err(context.error().into());
+        }
+        if session.selected_model()
+            != Some((report.spec.provider.as_str(), report.spec.id.as_str()))
+        {
+            repository.append_entries(
+                &mut session,
+                vec![SessionEntryData::ModelChanged {
+                    provider: report.spec.provider.clone(),
+                    model: report.spec.id.clone(),
+                }],
+            )?;
+        }
+        Ok(report)
+    }
+
     pub fn turn_executor(&self) -> &TurnExecutor {
         &self.turn_executor
     }
@@ -236,20 +294,45 @@ impl Agent {
         context: TurnExecutionContext,
     ) -> AgentTurnOutcome {
         let mut context = context.child();
+        let started = tokio::time::Instant::now();
+        let selected = if context.is_cancelled() {
+            Err(context.error().into())
+        } else {
+            select_session(repository, self.turn_executor.workspace_root(), selection).and_then(
+                |session| {
+                    ensure_session_workspace(&session, self.turn_executor.workspace_root())?;
+                    Ok(session)
+                },
+            )
+        };
+        let model = selected
+            .as_ref()
+            .ok()
+            .map(|session| self.selected_model(session))
+            .transpose();
+        let requested_model = model
+            .as_ref()
+            .ok()
+            .and_then(|value| value.as_ref())
+            .unwrap_or(&self.config.model)
+            .clone();
         let scope = self
             .turn_executor
-            .start_scope(&self.config.model, handler, &context);
+            .start_scope(&requested_model, handler, &context);
         let user = Message::text(MessageRole::User, prompt);
         let mut initial = self.system_messages();
         initial.push(user.clone());
         let mut metadata = None;
-        let prepared = (|| -> Result<_> {
+        let mut preparation_stage = RunStage::Persistence;
+        let prepared = async {
             if context.is_cancelled() {
                 return Err(context.error().into());
             }
             let workspace = self.turn_executor.workspace_root();
-            let mut session = select_session(repository, workspace, selection)?;
+            let mut session = selected?;
             metadata = Some(session.metadata().clone());
+            preparation_stage = RunStage::Preparing;
+            model?;
             ensure_session_workspace(&session, workspace)?;
             context.bind_approvals(workspace, &session.metadata().id)?;
             if let Some(control) = &context.control {
@@ -259,7 +342,20 @@ impl Agent {
             scope
                 .events
                 .bind_session(session.metadata().id.clone(), turn_id.clone());
+            preparation_stage = RunStage::Persistence;
             let lease = repository.acquire_run(&mut session)?;
+            preparation_stage = RunStage::Preparing;
+            let mut request = self.completion_request(initial.clone());
+            request.model = requested_model;
+            let mut input =
+                crate::ExecutionInput::from_branch(request, &session.selected_branch())?;
+            input.started = Some(started);
+            let mut input = self.turn_executor.prepare_input(input, &context).await?;
+            let report = self.turn_executor.validate_model_selection(&input)?;
+            self.turn_executor.check_preparation_budget(&input)?;
+            if context.is_cancelled() {
+                return Err(context.error().into());
+            }
             let mut entries = Vec::new();
             if let Some(previous) = session.unfinished_turn() {
                 entries.push(SessionEntryData::TurnEnd {
@@ -267,57 +363,47 @@ impl Agent {
                     record: Box::new(TurnRecord::recovered()),
                 });
             }
-            let spec = self.turn_executor.model_spec(&self.config.model)?;
-            if session.selected_model() != Some((spec.provider.as_str(), spec.id.as_str())) {
+            if session.selected_model()
+                != Some((report.spec.provider.as_str(), report.spec.id.as_str()))
+            {
                 entries.push(SessionEntryData::ModelChanged {
-                    provider: spec.provider,
-                    model: spec.id,
+                    provider: report.spec.provider,
+                    model: report.spec.id,
                 });
             }
             entries.push(SessionEntryData::TurnStart {
                 turn_id: turn_id.clone(),
             });
-            let (mut history, mut model_context, mut source) = {
-                let branch = session.selected_branch();
-                let history = branch.chat_messages();
-                let projection = branch.model_context()?;
-                let source = projection.source.clone();
-                (history, projection.into_messages(), source)
-            };
-            entries.push(SessionEntryData::Message {
-                message: user.clone(),
-            });
+            entries.push(SessionEntryData::Message { message: user });
+            preparation_stage = RunStage::Persistence;
             repository.append_entries(&mut session, entries)?;
-            history.push(user.clone());
-            model_context.push(user);
-            source.revision = session.metadata().revision;
-            source.leaf_id = session.metadata().leaf_id.clone();
-            source.recorded_messages += 1;
-            let mut raw = self.system_messages();
-            let prefix_len = raw.len();
-            let mut model = raw.clone();
-            raw.extend(history);
-            model.extend(model_context);
-            let mut input =
-                crate::ExecutionInput::projected(self.completion_request(model), raw, prefix_len)?;
-            input.source = Some(source);
-            Ok((
+            if let Some(source) = &mut input.source {
+                source.revision = session.metadata().revision;
+                source.leaf_id = session.metadata().leaf_id.clone();
+                source.recorded_messages += 1;
+            }
+            Ok::<_, anyhow::Error>((
                 SessionJournal::new(repository, session, turn_id),
                 lease,
                 input,
             ))
-        })();
+        }
+        .await;
         let (journal, lease, input) = match prepared {
             Ok(prepared) => prepared,
             Err(error) => {
                 let mut progress = RunProgress::new(initial);
-                let stop = if let Some(cancelled) = error.downcast_ref::<crate::TurnCancelled>() {
+                progress.elapsed = started.elapsed();
+                let stop = if let Some(budget) = error.downcast_ref::<crate::run::BudgetExceeded>()
+                {
+                    RunStop::Budget(budget.clone())
+                } else if let Some(cancelled) = error.downcast_ref::<crate::TurnCancelled>() {
                     RunStop::Cancelled {
                         reason: cancelled.reason().into(),
                     }
                 } else {
-                    progress.stage = RunStage::Persistence;
-                    RunStop::Failed(RunFailure::from_error(RunStage::Persistence, &error))
+                    progress.stage = preparation_stage;
+                    RunStop::Failed(RunFailure::from_error(preparation_stage, &error))
                 };
                 let outcome = self
                     .turn_executor

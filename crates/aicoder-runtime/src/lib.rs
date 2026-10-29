@@ -5,7 +5,9 @@ mod environment;
 mod files;
 pub mod resources;
 pub mod session;
+mod session_client;
 mod settings;
+pub use session_client::SessionModelClient;
 pub mod tools;
 pub mod verification;
 use crate::{session::JsonlSessionRepository, tools::BashTool};
@@ -166,6 +168,10 @@ impl Runtime {
     }
     pub fn client(&self) -> Result<ChatClient> {
         ChatClient::with_credentials(self.config.provider.clone(), self.credential_provider())
+    }
+    /// Opt into model selection within this fixed host-selected protocol/credential route.
+    pub fn session_client(&self) -> Result<SessionModelClient> {
+        Ok(SessionModelClient::new(self.client()?))
     }
     pub fn client_with_credentials(
         &self,

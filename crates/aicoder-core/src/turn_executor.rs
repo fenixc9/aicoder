@@ -46,12 +46,12 @@ pub(crate) struct RunScope {
     state: AgentRunStateMachine,
 }
 pub struct TurnExecutor {
-    provider: Arc<dyn ModelProvider>,
-    dispatcher: Arc<ToolDispatcher>,
+    pub(crate) provider: Arc<dyn ModelProvider>,
+    pub(crate) dispatcher: Arc<ToolDispatcher>,
     completion_verifier: Arc<dyn CompletionVerifier>,
-    context_compactor: Option<Arc<dyn ContextCompactor>>,
-    input_context: Option<Arc<dyn crate::InputContextProvider>>,
-    config: TurnExecutionConfig,
+    pub(crate) context_compactor: Option<Arc<dyn ContextCompactor>>,
+    pub(crate) input_context: Option<Arc<dyn crate::InputContextProvider>>,
+    pub(crate) config: TurnExecutionConfig,
 }
 
 impl TurnExecutor {
@@ -276,10 +276,17 @@ impl TurnExecutor {
             history,
             system_prefix_len,
             source,
+            prepared_context,
+            started,
         } = input;
         let context = context.child();
-        let limits = Arc::new(RunLimiter::new(self.config.budget.clone(), context.clone()));
+        let mut limiter = RunLimiter::new(self.config.budget.clone(), context.clone());
+        if let Some(started) = started {
+            limiter.started = started;
+        }
+        let limits = Arc::new(limiter);
         let mut progress = RunProgress::new(history);
+        progress.input_context = prepared_context;
         progress.model_context = Some(crate::ModelContextInfo {
             source,
             initial_history_messages: progress.messages.len(),
@@ -466,7 +473,9 @@ impl TurnExecutor {
         limits.check()?;
 
         let mut context_messages = std::mem::take(&mut request.messages);
-        if let Some(provider) = &self.input_context {
+        if progress.input_context.is_none()
+            && let Some(provider) = &self.input_context
+        {
             let prepared = tokio::select! {
                 biased;
                 cancelled=context.cancelled()=>return Err(cancelled.into()),
@@ -485,6 +494,8 @@ impl TurnExecutor {
                 info.initial_history_messages = progress.messages.len();
                 info.initial_context_messages = context_messages.len();
             }
+        }
+        if progress.input_context.is_some() {
             tokio::select! {
                 biased;
                 cancelled=context.cancelled()=>return Err(cancelled.into()),
@@ -759,7 +770,9 @@ impl TurnExecutor {
                     Some(message)
                 })
                 .collect();
-            request.validate(&model_spec).map_err(anyhow::Error::from)?;
+            self.provider
+                .validate_request(&request)
+                .map_err(anyhow::Error::from)?;
             progress.stage = RunStage::Model;
             let input_estimate =
                 crate::context::estimate_context_tokens(&request.messages, Some(&request.tools))

@@ -444,3 +444,28 @@ their serialized size (including escaping) fits the display budget. Failure deta
 bounded and may use that preview wrapper; consumers must not assume an oversized tool
 result remains its original JSON type. Use the reference to retrieve exact returned JSON.
 See [output/artifact limits and retention](output-artifacts.md).
+
+## S4 session navigation and model selection
+
+Navigation uses reserved `aicoder.session.navigation.v1` extensions; JSONL remains v3.
+Rename/labels are global metadata over the complete log while model identity follows
+ancestry. Older readers retain the records but ignore new names/labels; upgrading restores
+their semantics without rewriting messages. New records are strictly validated; malformed
+reserved records fail loading/commit. SessionNavigator operations require matching workspace
+and an idle lease. Existing repository methods remain available to custom backends.
+
+`ModelProvider` gains a default pure `validate_request` hook; existing implementations
+compile unchanged. ChatClient adds explicit `for_model` without weakening its strict base
+registry. Runtime's SessionModelClient enables fixed-service profile model selection without
+routing credentials from history. Agent follows configured defaults unless the host opts
+into `following_session_models`; CLI/TUI do so for continuation, with explicit CLI model/
+profile overrides taking precedence. Input preparation/compatibility is now checked before
+new session turn writes; unsupported history can fail without an extra user/turn record.
+Preparation also counts toward duration budgets and is frozen once for execution.
+
+ExecutionInput's new fields are private; constructors retain source compatibility. Existing
+raw event shapes and source literals do not gain new fields. AgentStarted now reflects the
+actual followed model. Model-selection reports are separate metadata-operation results,
+not invented coding runs. Existing full `session-tree --json` output remains; bounded
+inspection is `session-branches`. Scope checks now also cover old tree/migrate/delete CLI
+commands. See [navigation/model constraints](session-navigation.md).

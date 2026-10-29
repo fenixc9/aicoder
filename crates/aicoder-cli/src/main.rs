@@ -108,7 +108,9 @@ enum Command {
     /// List resource sources and fingerprints without exposing document bodies.
     Resources,
     /// Inspect a template or explicit /skill expansion without making a model request.
-    ExpandPrompt { input: String },
+    ExpandPrompt {
+        input: String,
+    },
     /// List sessions belonging to the selected workspace.
     Sessions,
     /// Show every branch and entry; --json emits metadata and entries for other hosts.
@@ -116,6 +118,52 @@ enum Command {
         id: String,
         #[arg(long)]
         json: bool,
+    },
+    /// Page branch/tree metadata without dumping raw tool payloads.
+    SessionBranches {
+        id: String,
+        #[arg(long, default_value_t = 100)]
+        limit: usize,
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Search visible recorded text, with bounded revision-bound pages.
+    SearchSession {
+        id: String,
+        query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    RenameSession {
+        id: String,
+        title: String,
+    },
+    LabelSession {
+        id: String,
+        entry: String,
+        #[arg(required_unless_present = "remove", conflicts_with = "remove")]
+        label: Option<String>,
+        #[arg(long)]
+        remove: bool,
+    },
+    BranchSession {
+        id: String,
+        #[arg(long, conflicts_with = "root")]
+        from: Option<String>,
+        #[arg(long)]
+        root: bool,
+        #[arg(long)]
+        label: Option<String>,
+    },
+    RecoverSession {
+        id: String,
+    },
+    /// Check compatibility and record a model through the explicitly selected provider.
+    SwitchSessionModel {
+        id: String,
+        model: String,
     },
     /// Select an entry as the parent of the next turn; other branches remain available.
     CheckoutSession {
@@ -126,7 +174,9 @@ enum Command {
         root: bool,
     },
     /// Upgrade a legacy session, preserving an exact backup before changing its format.
-    MigrateSession { id: String },
+    MigrateSession {
+        id: String,
+    },
     /// Read a bounded saved-output page without resolving model credentials.
     ReadArtifact {
         id: String,
@@ -136,7 +186,9 @@ enum Command {
         max_bytes: usize,
     },
     /// Summarize this session branch without adding a user/coding turn; requires a context window.
-    CompactSession { id: String },
+    CompactSession {
+        id: String,
+    },
     /// Permanently delete a session by its full ID.
     DeleteSession {
         /// Session ID shown by `aicoder sessions`.
@@ -259,6 +311,77 @@ fn flush_stdout() {
 
 fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Result<bool> {
     match &cli.command {
+        Some(Command::SessionBranches { id, limit, cursor }) => {
+            let navigator =
+                aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?;
+            let cursor = cursor.as_deref().map(serde_json::from_str).transpose()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &navigator.open(id)?.tree_page(*limit, cursor.as_ref())?
+                )?
+            );
+            Ok(true)
+        }
+        Some(Command::SearchSession {
+            id,
+            query,
+            limit,
+            cursor,
+        }) => {
+            let navigator =
+                aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?;
+            let cursor = cursor.as_deref().map(serde_json::from_str).transpose()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&navigator.open(id)?.search_messages(
+                    query,
+                    *limit,
+                    cursor.as_ref()
+                )?)?
+            );
+            Ok(true)
+        }
+        Some(Command::RenameSession { id, title }) => {
+            let session = aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?
+                .rename(id, title)?;
+            println!("{}", serde_json::to_string_pretty(session.metadata())?);
+            Ok(true)
+        }
+        Some(Command::LabelSession {
+            id, entry, label, ..
+        }) => {
+            let session = aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?
+                .label(id, entry, label.as_deref())?;
+            println!("{}", serde_json::to_string_pretty(session.metadata())?);
+            Ok(true)
+        }
+        Some(Command::BranchSession {
+            id,
+            from,
+            root,
+            label,
+        }) => {
+            let navigator =
+                aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?;
+            let source = if *root {
+                None
+            } else {
+                match from {
+                    Some(entry) => Some(entry.clone()),
+                    None => navigator.open(id)?.metadata().leaf_id.clone(),
+                }
+            };
+            let session = navigator.branch(id, source.as_deref(), label.as_deref())?;
+            println!("{}", serde_json::to_string_pretty(session.metadata())?);
+            Ok(true)
+        }
+        Some(Command::RecoverSession { id }) => {
+            let session = aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?
+                .recover(id)?;
+            println!("{}", serde_json::to_string_pretty(session.metadata())?);
+            Ok(true)
+        }
         Some(Command::Sessions) => {
             let sessions = repository.list(&cli.workspace)?;
             if sessions.is_empty() {
@@ -276,7 +399,8 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             Ok(true)
         }
         Some(Command::SessionTree { id, json }) => {
-            let session = repository.open(id)?;
+            let session = aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?
+                .open(id)?;
             if *json {
                 println!(
                     "{}",
@@ -322,8 +446,8 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             Ok(true)
         }
         Some(Command::CheckoutSession { id, entry, .. }) => {
-            let mut session = repository.open(id)?;
-            repository.checkout(&mut session, entry.as_deref())?;
+            aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?
+                .checkout(id, entry.as_deref())?;
             println!(
                 "Session {id}: selected {}",
                 entry.as_deref().unwrap_or("root")
@@ -331,7 +455,9 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             Ok(true)
         }
         Some(Command::MigrateSession { id }) => {
-            let mut session = repository.open(id)?;
+            let mut session =
+                aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?
+                    .open(id)?;
             if let Some(backup) = repository.migrate(&mut session)? {
                 println!(
                     "Session {id}: v{}, backup {}",
@@ -344,6 +470,7 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             Ok(true)
         }
         Some(Command::DeleteSession { id }) => {
+            aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?.open(id)?;
             repository.delete(id)?;
             println!("已删除 session {id}");
             Ok(true)
@@ -353,7 +480,8 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             | Command::Resources
             | Command::ExpandPrompt { .. }
             | Command::CompactSession { .. }
-            | Command::ReadArtifact { .. },
+            | Command::ReadArtifact { .. }
+            | Command::SwitchSessionModel { .. },
         )
         | None => Ok(false),
     }
@@ -472,9 +600,28 @@ async fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&page.output)?);
         return Ok(());
     }
+    if let Some(Command::SwitchSessionModel { id, model }) = &cli.command {
+        let repository = runtime.sessions()?;
+        let agent = Agent::new(
+            runtime
+                .executor_builder(Arc::new(runtime.session_client()?))?
+                .build()?,
+            runtime.agent_config(),
+        );
+        let report = agent
+            .switch_session_model(
+                &repository,
+                id,
+                model,
+                aicoder_core::TurnExecutionContext::new(),
+            )
+            .await?;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
     if let Some(Command::CompactSession { id }) = &cli.command {
         let repository = runtime.sessions()?;
-        let agent = runtime.summary_agent(Arc::new(runtime.client()?))?;
+        let agent = runtime.summary_agent(Arc::new(runtime.session_client()?))?;
         let report = agent
             .compact_session(&repository, id, aicoder_core::TurnExecutionContext::new())
             .await;
@@ -497,13 +644,18 @@ async fn main() -> Result<()> {
     } else {
         Some(runtime.sessions()?)
     };
-    let builder = runtime.executor_builder(Arc::new(runtime.client()?))?;
+    let builder = runtime.executor_builder(Arc::new(runtime.session_client()?))?;
     let executor = if cli.yes {
         builder.approval(AllowAllApproval).build()?
     } else {
         builder.approval(ConsoleApproval).build()?
     };
     let agent = Agent::new(executor, runtime.agent_config());
+    let agent = if cli.model.is_none() && cli.profile.is_none() {
+        agent.following_session_models()
+    } else {
+        agent
+    };
     let prompt = runtime.prepare_prompt(&cli.prompt)?.text;
     let handler = Arc::new(ConsoleEvents);
     let outcome = match &repository {

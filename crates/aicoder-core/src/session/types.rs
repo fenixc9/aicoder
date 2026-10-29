@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     any::Any,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -133,6 +133,7 @@ pub struct Session {
     pub(crate) metadata: SessionMetadata,
     pub(crate) entries: Vec<SessionEntry>,
     pub(crate) index: HashMap<String, usize>,
+    pub(crate) navigation_labels: BTreeMap<String, String>,
     backend: Option<BackendState>,
     pub(crate) run_token: Option<String>,
 }
@@ -207,6 +208,7 @@ impl Session {
             metadata,
             entries: Vec::new(),
             index: HashMap::new(),
+            navigation_labels: BTreeMap::new(),
             backend: None,
             run_token: None,
         }
@@ -306,6 +308,7 @@ impl Session {
         })
     }
     pub(crate) fn validate(&self, transaction: &SessionTransaction) -> Result<()> {
+        let mut navigation_labels: Option<HashMap<String, String>> = None;
         let mut ids = HashSet::new();
         let mut new_entries: HashMap<&str, &SessionEntry> = HashMap::new();
         for entry in &transaction.entries {
@@ -394,6 +397,39 @@ impl Session {
                         !namespace.is_empty(),
                         "extension namespace must not be empty"
                     );
+                    if namespace == super::NAVIGATION_NAMESPACE {
+                        let record: super::NavigationRecord = serde_json::from_value(data.clone())?;
+                        record.validate(|id| {
+                            self.index.contains_key(id) || new_entries.contains_key(id)
+                        })?;
+                        if !matches!(record, super::NavigationRecord::Rename { .. }) {
+                            let labels = navigation_labels.get_or_insert_with(|| {
+                                self.labels()
+                                    .iter()
+                                    .map(|(id, label)| (id.to_string(), label.to_string()))
+                                    .collect()
+                            });
+                            match &record {
+                                super::NavigationRecord::Branch { name: Some(name) } => {
+                                    labels.insert(entry.id.clone(), name.clone());
+                                }
+                                super::NavigationRecord::Label {
+                                    entry_id,
+                                    label: Some(name),
+                                } => {
+                                    labels.insert(entry_id.clone(), name.clone());
+                                }
+                                super::NavigationRecord::Label {
+                                    entry_id,
+                                    label: None,
+                                } => {
+                                    labels.remove(entry_id);
+                                }
+                                _ => {}
+                            }
+                            ensure!(labels.len() <= 256, "session label limit is 256");
+                        }
+                    }
                     if namespace == crate::summary::MANUAL_USAGE_NAMESPACE {
                         let usage: crate::summary::manual::ManualSummaryUsage =
                             serde_json::from_value(data.clone())?;
@@ -450,6 +486,31 @@ impl Session {
                     .join(" ");
                 if !title.is_empty() {
                     self.metadata.title = Some(title.chars().take(80).collect());
+                }
+            }
+            if let SessionEntryData::Extension { namespace, data } = &entry.data
+                && namespace == super::NAVIGATION_NAMESPACE
+            {
+                match serde_json::from_value::<super::NavigationRecord>(data.clone())
+                    .expect("validated navigation")
+                {
+                    super::NavigationRecord::Rename { title } => self.metadata.title = Some(title),
+                    super::NavigationRecord::Branch { name: Some(name) } => {
+                        self.navigation_labels.insert(entry.id.clone(), name);
+                    }
+                    super::NavigationRecord::Label {
+                        entry_id,
+                        label: Some(name),
+                    } => {
+                        self.navigation_labels.insert(entry_id, name);
+                    }
+                    super::NavigationRecord::Label {
+                        entry_id,
+                        label: None,
+                    } => {
+                        self.navigation_labels.remove(&entry_id);
+                    }
+                    _ => {}
                 }
             }
             self.index.insert(entry.id.clone(), self.entries.len());

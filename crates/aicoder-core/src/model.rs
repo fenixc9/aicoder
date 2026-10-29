@@ -662,6 +662,12 @@ impl ModelEventSink for () {
 
 #[async_trait]
 pub trait ModelProvider: Send + Sync {
+    /// Pure local validation, including adapter-specific replay/option restrictions.
+    /// Hosts may call this before persisting a model selection or starting a request.
+    fn validate_request(&self, request: &ModelRequest) -> Result<(), ProviderError> {
+        request.validate(&self.model_spec(&request.model)?)
+    }
+
     fn model_spec(&self, model: &str) -> Result<ModelSpec, ProviderError>;
 
     /// Returns one assistant response. `stream` controls incremental events, not the result shape.

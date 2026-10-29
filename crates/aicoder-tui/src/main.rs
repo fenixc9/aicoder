@@ -142,6 +142,11 @@ async fn main() -> Result<()> {
     let runtime = AgentRuntime::new(application)?;
     let mut app = App::new(runtime.sessions()?);
     if let Some(session_id) = cli.session {
+        if cli.model.is_some() || cli.profile.is_some() {
+            runtime
+                .select_model(&session_id, &model, runtime.execution_context())
+                .await?;
+        }
         let session = runtime.open_session(&session_id)?;
         app.selected_session = app
             .sessions
@@ -167,7 +172,8 @@ async fn run(
     let mut terminal_events = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     loop {
-        terminal.draw(|frame| ui::draw(frame, &app, model))?;
+        terminal
+            .draw(|frame| ui::draw(frame, &app, app.model_label.as_deref().unwrap_or(model)))?;
         if app.should_quit {
             break;
         }
@@ -184,7 +190,13 @@ async fn run(
         match action {
             Action::Tick => {}
             Action::Agent(event) => {
-                let finished = matches!(event, AppEvent::TurnFinished(_) | AppEvent::RunDropped);
+                let finished = matches!(
+                    event,
+                    AppEvent::TurnFinished(_)
+                        | AppEvent::CompactionFinished(_)
+                        | AppEvent::ModelSelected(_)
+                        | AppEvent::RunDropped
+                );
                 app.apply(event);
                 if finished {
                     app.sessions = runtime.sessions().unwrap_or_else(|error| {
@@ -341,6 +353,54 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                     }
                     return;
                 }
+                Some(Ok(
+                    command @ (commands::SlashCommand::Tree
+                    | commands::SlashCommand::Search
+                    | commands::SlashCommand::SearchNext
+                    | commands::SlashCommand::Rename
+                    | commands::SlashCommand::Label
+                    | commands::SlashCommand::Unlabel
+                    | commands::SlashCommand::Checkout
+                    | commands::SlashCommand::Branch
+                    | commands::SlashCommand::Recover
+                    | commands::SlashCommand::Model),
+                )) => {
+                    if app.is_running() {
+                        app.input.replace(prompt);
+                        app.timeline.push(TimelineItem::Notice(
+                            "Finish or cancel the current operation before navigating.".into(),
+                        ));
+                        return;
+                    }
+                    let args = commands::arguments(&prompt);
+                    if command == commands::SlashCommand::Model {
+                        if let aicoder_core::SessionSelection::Existing(id) = &app.session_selection
+                        {
+                            let context = runtime.execution_context();
+                            app.run = Some(runtime.start_model_selection(
+                                id.clone(),
+                                args.into(),
+                                context.clone(),
+                            ));
+                            app.begin_model_selection(context);
+                        } else {
+                            app.timeline
+                                .push(TimelineItem::Error("Select a stored session first".into()));
+                        }
+                    } else {
+                        match runtime.navigate(&app.session_selection, command, args) {
+                            Ok((session, notice)) => {
+                                if let Some(session) = session {
+                                    app.load_session(&session);
+                                    app.sessions = runtime.sessions().unwrap_or_default();
+                                }
+                                app.timeline.push(TimelineItem::Notice(notice));
+                            }
+                            Err(error) => app.timeline.push(TimelineItem::Error(error.to_string())),
+                        }
+                    }
+                    return;
+                }
                 Some(Ok(commands::SlashCommand::Compact)) => {
                     if app.is_running() {
                         app.input.replace(prompt);
@@ -419,6 +479,11 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                             Err(error) => app.timeline.push(TimelineItem::Error(error.to_string())),
                         }
                     }
+                    return;
+                }
+                Some(Err(error)) if commands::registered(&prompt) => {
+                    app.timeline.push(TimelineItem::Error(error.to_string()));
+                    app.input.replace(prompt);
                     return;
                 }
                 _ => {}
@@ -503,7 +568,17 @@ fn handle_slash_command(app: &mut App, input: &str) -> bool {
             | commands::SlashCommand::Reload
             | commands::SlashCommand::Permissions
             | commands::SlashCommand::Revoke
-            | commands::SlashCommand::Compact,
+            | commands::SlashCommand::Compact
+            | commands::SlashCommand::Tree
+            | commands::SlashCommand::Search
+            | commands::SlashCommand::SearchNext
+            | commands::SlashCommand::Rename
+            | commands::SlashCommand::Label
+            | commands::SlashCommand::Unlabel
+            | commands::SlashCommand::Checkout
+            | commands::SlashCommand::Branch
+            | commands::SlashCommand::Recover
+            | commands::SlashCommand::Model,
         ) => {}
         Err(error) => {
             app.timeline.push(TimelineItem::Error(error.to_string()));

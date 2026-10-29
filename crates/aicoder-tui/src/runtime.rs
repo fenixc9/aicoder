@@ -22,6 +22,7 @@ pub struct ActiveRun {
 enum RunCompletion {
     Turn(oneshot::Receiver<AgentTurnOutcome>),
     Compaction(oneshot::Receiver<aicoder_core::summary::ManualCompactionReport>),
+    Model(oneshot::Receiver<Result<aicoder_core::session::ModelSelectionReport, String>>),
 }
 impl ActiveRun {
     pub async fn recv(&mut self) -> AppEvent {
@@ -36,6 +37,10 @@ impl ActiveRun {
             }
         }
         match &mut self.completion {
+            RunCompletion::Model(receiver) => match receiver.await {
+                Ok(report) => AppEvent::ModelSelected(Box::new(report)),
+                Err(_) => AppEvent::RunDropped,
+            },
             RunCompletion::Compaction(receiver) => match receiver.await {
                 Ok(report) => AppEvent::CompactionFinished(Box::new(report)),
                 Err(_) => AppEvent::RunDropped,
@@ -60,9 +65,10 @@ pub struct AgentRuntime {
 impl AgentRuntime {
     pub fn new(runtime: aicoder_runtime::Runtime) -> Result<Self> {
         let repository = Arc::new(runtime.sessions()?);
-        let provider: Arc<dyn aicoder_core::ModelProvider> = Arc::new(runtime.client()?);
+        let provider: Arc<dyn aicoder_core::ModelProvider> = Arc::new(runtime.session_client()?);
         let executor = runtime.executor_builder(provider.clone())?.build()?;
-        let agent = Arc::new(Agent::new(executor, runtime.agent_config()));
+        let agent =
+            Arc::new(Agent::new(executor, runtime.agent_config()).following_session_models());
         Ok(Self {
             agent,
             repository,
@@ -97,7 +103,8 @@ impl AgentRuntime {
     pub fn reload_resources(&mut self) -> Result<()> {
         let runtime = self.runtime.reload_resources()?;
         let executor = runtime.executor_builder(self.provider.clone())?.build()?;
-        let agent = Arc::new(Agent::new(executor, runtime.agent_config()));
+        let agent =
+            Arc::new(Agent::new(executor, runtime.agent_config()).following_session_models());
         self.approvals.clear();
         self.agent = agent;
         self.runtime = runtime;
@@ -120,11 +127,126 @@ impl AgentRuntime {
     }
 
     pub fn delete_session(&self, id: &str) -> Result<()> {
+        self.open_session(id)?;
         self.repository.delete(id)?;
         self.approvals.remove(&self.workspace, id);
         Ok(())
     }
 
+    pub fn navigate(
+        &self,
+        selection: &SessionSelection,
+        command: crate::commands::SlashCommand,
+        args: &str,
+    ) -> Result<(Option<Session>, String)> {
+        use crate::commands::SlashCommand;
+        let SessionSelection::Existing(id) = selection else {
+            anyhow::bail!("Select a stored session first")
+        };
+        let nav = aicoder_core::session::SessionNavigator::new(
+            self.repository.as_ref(),
+            &self.workspace,
+        )?;
+        let session = match command {
+            SlashCommand::Tree => {
+                let cursor = if args.is_empty() {
+                    None
+                } else {
+                    Some(serde_json::from_str(args)?)
+                };
+                return Ok((
+                    None,
+                    serde_json::to_string_pretty(&nav.open(id)?.tree_page(50, cursor.as_ref())?)?,
+                ));
+            }
+            SlashCommand::Search => {
+                return Ok((
+                    None,
+                    serde_json::to_string_pretty(&nav.open(id)?.search_messages(args, 20, None)?)?,
+                ));
+            }
+            SlashCommand::SearchNext => {
+                let cursor: aicoder_core::session::SearchCursor = serde_json::from_str(args)?;
+                return Ok((
+                    None,
+                    serde_json::to_string_pretty(&nav.open(id)?.search_messages(
+                        &cursor.query,
+                        20,
+                        Some(&cursor),
+                    )?)?,
+                ));
+            }
+            SlashCommand::Rename => nav.rename(id, args)?,
+            SlashCommand::Label => {
+                let selected = nav.open(id)?;
+                let entry = selected
+                    .metadata()
+                    .leaf_id
+                    .as_deref()
+                    .ok_or_else(|| anyhow::anyhow!("Empty root has no entry to label"))?;
+                nav.label(id, entry, Some(args))?
+            }
+            SlashCommand::Unlabel => nav.label(id, args, None)?,
+            SlashCommand::Checkout => nav.checkout(id, (args != "root").then_some(args))?,
+            SlashCommand::Branch => {
+                let current = nav.open(id)?;
+                let target = if args == "root" {
+                    None
+                } else if args.is_empty() {
+                    current.metadata().leaf_id.as_deref()
+                } else {
+                    Some(args)
+                };
+                nav.branch(id, target, None)?
+            }
+            SlashCommand::Recover => nav.recover(id)?,
+            _ => anyhow::bail!("Unsupported navigation command"),
+        };
+        self.approvals.remove(&self.workspace, id);
+        Ok((
+            Some(session),
+            "Session updated; previous branches remain available.".into(),
+        ))
+    }
+    pub async fn select_model(
+        &self,
+        id: &str,
+        model: &str,
+        context: TurnExecutionContext,
+    ) -> Result<aicoder_core::session::ModelSelectionReport> {
+        let report = self
+            .agent
+            .switch_session_model(self.repository.as_ref(), id, model, context)
+            .await?;
+        self.approvals.remove(&self.workspace, id);
+        Ok(report)
+    }
+    pub fn start_model_selection(
+        &self,
+        id: String,
+        model: String,
+        context: TurnExecutionContext,
+    ) -> ActiveRun {
+        let agent = self.agent.clone();
+        let repository = self.repository.clone();
+        let approvals = self.approvals.clone();
+        let workspace = self.workspace.clone();
+        let (sent, received) = oneshot::channel();
+        tokio::spawn(async move {
+            let report = agent
+                .switch_session_model(repository.as_ref(), &id, &model, context)
+                .await
+                .map_err(|error| aicoder_core::redaction::sanitize_text(&error.to_string(), 2048));
+            if report.is_ok() {
+                approvals.remove(&workspace, &id);
+            }
+            let _ = sent.send(report);
+        });
+        ActiveRun {
+            events: None,
+            completion: RunCompletion::Model(received),
+        }
+    }
     pub fn execution_context(&self) -> TurnExecutionContext {
         TurnExecutionContext::new().with_approval_sessions(self.approvals.clone())
     }
@@ -307,6 +429,85 @@ mod tests {
             runtime
                 .permissions(&SessionSelection::Existing(id))
                 .is_none()
+        );
+    }
+    #[tokio::test]
+    async fn navigation_and_model_selection_share_core_state_and_retire_old_grants() {
+        use crate::commands::SlashCommand;
+        use aicoder_runtime::{
+            ConfigDiscovery, Runtime, RuntimeOverrides, Setting, Settings,
+            resources::ResourceSettings,
+        };
+        let state = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let runtime = Runtime::load_with_environment(
+            workspace.path(),
+            RuntimeOverrides {
+                settings: Settings {
+                    resources: ResourceSettings {
+                        enabled: Setting::Value(false),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ConfigDiscovery {
+                enabled: false,
+                ..Default::default()
+            },
+            Arc::new(std::collections::BTreeMap::from([(
+                "AICODER_HOME".into(),
+                state.path().to_string_lossy().into_owned(),
+            )])),
+        )
+        .unwrap();
+        let runtime = AgentRuntime::new(runtime).unwrap();
+        let mut session = runtime.repository.create(workspace.path()).unwrap();
+        runtime
+            .repository
+            .append(
+                &mut session,
+                aicoder_core::model::Message::text(
+                    aicoder_core::model::MessageRole::User,
+                    "needle",
+                ),
+            )
+            .unwrap();
+        let id = session.metadata().id.clone();
+        let selection = SessionSelection::Existing(id.clone());
+        let scope = runtime.approvals.session(&runtime.workspace, &id).unwrap();
+        let (view, notice) = runtime
+            .navigate(&selection, SlashCommand::Tree, "")
+            .unwrap();
+        assert!(view.is_none() && notice.contains("rows"));
+        assert!(!scope.snapshot().session.closed);
+        let (renamed, _) = runtime
+            .navigate(&selection, SlashCommand::Rename, "ui title")
+            .unwrap();
+        assert_eq!(
+            renamed.unwrap().metadata().title.as_deref(),
+            Some("ui title")
+        );
+        assert!(scope.snapshot().session.closed);
+        let scope = runtime.approvals.session(&runtime.workspace, &id).unwrap();
+        let mut operation = runtime.start_model_selection(
+            id.clone(),
+            "another-model".into(),
+            runtime.execution_context(),
+        );
+        let result = operation.recv().await;
+        assert!(matches!(result,AppEvent::ModelSelected(report) if report.is_ok()));
+        assert!(scope.snapshot().session.closed);
+        assert_eq!(
+            runtime
+                .repository
+                .open(&id)
+                .unwrap()
+                .selected_model()
+                .unwrap()
+                .1,
+            "another-model"
         );
     }
 }

@@ -15,6 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::commands::{self, CommandSpec};
 
 pub enum AppEvent {
+    ModelSelected(Box<Result<aicoder_core::session::ModelSelectionReport, String>>),
     Agent(AgentRawEventEnvelope),
     TurnFinished(Box<AgentTurnOutcome>),
     CompactionFinished(Box<aicoder_core::summary::ManualCompactionReport>),
@@ -148,6 +149,7 @@ pub struct App {
     pub focus: Focus,
     pub state: AgentRunState,
     pub usage: ModelUsage,
+    pub model_label: Option<String>,
     pub round: usize,
     pub active_context: Option<TurnExecutionContext>,
     pub active_handle: Option<RunHandle>,
@@ -175,6 +177,7 @@ impl App {
             focus: Focus::Input,
             state: AgentRunState::Idle,
             usage: ModelUsage::zero(),
+            model_label: None,
             round: 0,
             active_context: None,
             active_handle: None,
@@ -248,6 +251,14 @@ impl App {
         self.slash_menu_dismissed = true;
     }
 
+    pub fn begin_model_selection(&mut self, context: TurnExecutionContext) {
+        self.active_context = Some(context);
+        self.active_handle = None;
+        self.started_at = Some(Instant::now());
+        self.state = AgentRunState::Preparing;
+        self.timeline
+            .push(TimelineItem::Notice("Checking selected model...".into()));
+    }
     pub fn begin_compaction(&mut self, context: TurnExecutionContext) {
         self.active_context = Some(context);
         self.active_handle = None;
@@ -326,6 +337,28 @@ impl App {
         match event {
             AppEvent::Agent(envelope) => self.apply_agent_event(envelope),
             AppEvent::TurnFinished(outcome) => self.finish_turn(*outcome),
+            AppEvent::ModelSelected(report) => {
+                self.run = None;
+                self.active_context = None;
+                self.active_handle = None;
+                self.started_at = None;
+                match *report {
+                    Ok(report) => {
+                        self.model_label =
+                            Some(format!("{}/{}", report.spec.provider, report.spec.id));
+                        self.state = AgentRunState::Completed { rounds: 0 };
+                        self.timeline.push(TimelineItem::Notice(format!(
+                            "Model selected: {}; estimated input {} tokens",
+                            self.model_label.as_deref().unwrap_or_default(),
+                            report.input_token_estimate
+                        )));
+                    }
+                    Err(error) => {
+                        self.state = AgentRunState::Failed { round: None };
+                        self.timeline.push(TimelineItem::Error(error));
+                    }
+                }
+            }
             AppEvent::CompactionFinished(report) => {
                 self.run = None;
                 self.active_context = None;
@@ -378,6 +411,7 @@ impl App {
     fn apply_agent_event(&mut self, envelope: AgentRawEventEnvelope) {
         self.round = self.round.max(envelope.round.unwrap_or(0));
         match envelope.event {
+            AgentRawEvent::AgentStarted { model } => self.model_label = Some(model.to_string()),
             AgentRawEvent::RunInputApplied { input } => {
                 self.timeline.push(TimelineItem::Notice(format!(
                     "Applied {:?} #{}",
@@ -576,6 +610,9 @@ impl App {
     }
 
     pub fn load_session(&mut self, session: &Session) {
+        self.model_label = session
+            .selected_model()
+            .map(|(provider, model)| format!("{provider}/{model}"));
         self.timeline.clear();
         self.tool_indexes.clear();
         self.usage = session
@@ -633,6 +670,7 @@ impl App {
 
     pub fn select_new_session(&mut self) {
         self.session_selection = SessionSelection::New;
+        self.model_label = None;
         self.timeline.clear();
         self.tool_indexes.clear();
         self.focus = Focus::Input;
@@ -799,6 +837,37 @@ mod tests {
             },
         ));
         assert!(app.timeline.iter().any(|item|matches!(item,TimelineItem::Notice(text) if text.contains(&reference.id) && text.contains("200000"))));
+    }
+
+    #[test]
+    fn model_selection_updates_the_header_without_inventing_a_chat_turn() {
+        let mut app = App::new(vec![]);
+        app.model_label = Some("previous".into());
+        app.timeline.push(TimelineItem::User("existing".into()));
+        app.begin_model_selection(TurnExecutionContext::new());
+        app.apply(AppEvent::ModelSelected(Box::new(Err("unsupported".into()))));
+        assert_eq!(app.model_label.as_deref(), Some("previous"));
+        let report = aicoder_core::session::ModelSelectionReport {
+            spec: aicoder_core::model::ModelSpec::new("host", "selected"),
+            input_token_estimate: 30,
+            output_reservation: 10,
+            context_limit: Some(1000),
+            needs_compaction: false,
+            omitted_reasoning_blocks: 0,
+        };
+        app.begin_model_selection(TurnExecutionContext::new());
+        app.apply(AppEvent::ModelSelected(Box::new(Ok(report))));
+        assert_eq!(app.model_label.as_deref(), Some("host/selected"));
+        assert!(!app.is_running());
+        assert_eq!(
+            app.timeline
+                .iter()
+                .filter(|item| matches!(item, TimelineItem::User(_)))
+                .count(),
+            1
+        );
+        app.select_new_session();
+        assert!(app.model_label.is_none());
     }
 
     #[test]
@@ -984,7 +1053,7 @@ mod tests {
     fn slash_menu_tracks_filtering_selection_and_dismissal() {
         let mut app = App::new(Vec::new());
         app.input.insert('/');
-        assert_eq!(app.slash_suggestions().len(), 6);
+        assert_eq!(app.slash_suggestions().len(), 16);
         assert_eq!(app.selected_slash_command().unwrap().name, "exit");
 
         app.dismiss_slash_menu();

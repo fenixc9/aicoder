@@ -219,3 +219,9 @@ Output archives use the trusted session root with workspace scoping and lazy cre
 Clearing session storage or CLI `--no-session` disables persistent archives. The
 [artifact contract](output-artifacts.md) covers SDK policy limits, retention and the
 credential-free `read-artifact` command.
+
+Session continuation can follow the selected branch model through `Runtime::session_client`,
+using the fixed trusted service profile and shared HTTP pool. Explicit CLI model/profile
+selection overrides continuation; history never chooses credentials or endpoints. Local
+model compatibility checks and the new metadata commands are described in
+[session navigation](session-navigation.md).

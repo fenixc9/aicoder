@@ -4,9 +4,13 @@ mod journal;
 pub(crate) use journal::SessionJournal;
 pub const SESSION_VERSION: u32 = 3;
 mod memory;
+mod model_selection;
+pub(crate) mod navigation;
+pub use model_selection::*;
 mod projection;
 mod repository;
 mod types;
+pub use navigation::*;
 pub use projection::{
     BranchAccounting, ContextOrigin, SessionBranch, SessionContext, SessionContextSource,
 };

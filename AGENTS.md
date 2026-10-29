@@ -38,6 +38,10 @@
 - Output artifacts are explicit scoped host storage. Bound serialization, staging, disk
   admission and pages; keep raw bytes and capture completeness separate from previews.
   Archive failures must not repeat completed operations or publish partial data as complete.
+- Navigation metadata must not become model instructions. Scope idle mutations to the
+  workspace/run lease, retain old branches, and reject stale cursors. Validate model,
+  adapter and projected-context compatibility before writing a selection or turn;
+  history may select a model only inside an explicitly host-selected provider route.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

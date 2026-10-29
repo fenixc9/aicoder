@@ -146,6 +146,32 @@ impl ChatClient {
             models: aicoder_core::model::ModelRegistry::default(),
         })
     }
+    /// Select another model on this exact configured service, reusing its HTTP pool and
+    /// credential provider. Registered metadata is retained; other names use the same
+    /// declarative protocol profile, never capabilities inferred from a model name.
+    pub fn for_model(
+        &self,
+        model: &str,
+    ) -> std::result::Result<Self, aicoder_core::model::ProviderError> {
+        if model.trim().is_empty() || model.len() > 256 || model.chars().any(char::is_control) {
+            return Err(aicoder_core::model::ProviderError::new(
+                &self.config.provider_id,
+                aicoder_core::model::ProviderErrorKind::InvalidRequest,
+                "model identity must be nonempty, single-line and at most 256 bytes",
+            ));
+        }
+        let mut config = self.config.clone();
+        config.model = model.to_string();
+        Ok(Self {
+            config,
+            http_client: self.http_client.clone(),
+            credentials: self.credentials.clone(),
+            endpoint: self.endpoint.clone(),
+            proxy_secrets: self.proxy_secrets.clone(),
+            models: self.models.clone(),
+        })
+    }
+
     pub fn model(&self) -> &str {
         &self.config.model
     }

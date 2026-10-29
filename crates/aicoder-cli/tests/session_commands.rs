@@ -56,3 +56,72 @@ fn cli_lists_branches_and_checks_out_an_entry_without_provider_configuration() {
     );
     assert!(repository.open(&id).unwrap().messages().is_empty());
 }
+
+#[test]
+fn cli_manages_metadata_pages_and_models_without_network_or_credentials() {
+    let home = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let repo = JsonlSessionRepository::new(home.path().join("sessions")).unwrap();
+    let mut session = repo.create(workspace.path()).unwrap();
+    repo.append(
+        &mut session,
+        Message::text(MessageRole::User, "needle common"),
+    )
+    .unwrap();
+    let root = session.metadata().leaf_id.clone().unwrap();
+    let id = session.metadata().id.clone();
+    let invoke = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_aicoder"))
+            .env_clear()
+            .env("AICODER_HOME", home.path())
+            .current_dir(workspace.path())
+            .args(["--no-config", "--no-resources"])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    for args in [
+        vec!["rename-session", &id, "renamed"],
+        vec!["label-session", &id, &root, "stable"],
+        vec![
+            "branch-session",
+            &id,
+            "--from",
+            "stable",
+            "--label",
+            "experiment",
+        ],
+        vec!["recover-session", &id],
+        vec!["switch-session-model", &id, "gpt-test-model"],
+    ] {
+        let output = invoke(&args);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let output = invoke(&["search-session", &id, "needle", "--limit", "1"]);
+    assert!(output.status.success());
+    let page: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(page["hits"][0]["entry_id"], root);
+    let output = invoke(&["session-branches", &id, "--limit", "1"]);
+    assert!(output.status.success());
+    let page: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(page["rows"].as_array().unwrap().len(), 1);
+    let cursor = serde_json::to_string(&page["next"]).unwrap();
+    assert!(
+        invoke(&["session-branches", &id, "--limit", "1", "--cursor", &cursor])
+            .status
+            .success()
+    );
+    let saved = repo.open(&id).unwrap();
+    assert_eq!(saved.metadata().title.as_deref(), Some("renamed"));
+    assert_eq!(saved.selected_model().unwrap().1, "gpt-test-model");
+    assert_eq!(saved.messages().len(), 1);
+    assert!(
+        invoke(&["checkout-session", &id, "stable"])
+            .status
+            .success()
+    );
+}
