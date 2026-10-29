@@ -1,5 +1,9 @@
 # S2 final acceptance: versioned events and bounded observation
 
+> S3 relocation: current coding smoke is `cargo run --locked -p aicoder-runtime --example offline_smoke`;
+> concrete backends now live in runtime. Commands/measurements below record this historical increment.
+> See [backend migration](runtime-backends.md).
+
 S2 is complete against the current roadmap. S3 shared runtime/project context is next;
 S3–S7 remain outstanding, and this is not full Pi parity acceptance. Product comparison
 is pinned to [Pi v1.4.0](pi-baseline.md). Our event schema and Rust API are independent

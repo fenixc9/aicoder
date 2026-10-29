@@ -5,9 +5,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::{process::Command, time::timeout};
 
-use crate::model::ToolDefinition;
+use aicoder_core::model::ToolDefinition;
 
-use super::super::{
+use super::{
     ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess,
     util::{parse_arguments, truncate_utf8},
 };

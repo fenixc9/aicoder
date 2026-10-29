@@ -31,7 +31,7 @@ S0 起点有四个 crate：core、cli、tui、eval。已有模型与工具循环
 取消、线性 JSONL 会话、确定性裁剪、可插拔 completion verifier 和评测链路。
 保留可复用实现，按阶段迁移，不重写整个项目。
 
-当时识别的主要约束如下。S1 已解除协议/HTTP 耦合，默认工具及存储装配的分离仍按 S3 推进：
+当时识别的主要约束如下。S1 已解除协议/HTTP 耦合，S3 已解除默认工具及存储装配的耦合：
 
 - `ChatCompletionProvider` 仍暴露 OpenAI 风格 wire types，抽象尚未跨协议。
 - core 同时包含 HTTP adapter、内置工具和运行逻辑；嵌入方难以只选必要能力。
@@ -53,8 +53,8 @@ S0 起点有四个 crate：core、cli、tui、eval。已有模型与工具循环
 | `aicoder-tui` | 终端输入、渲染、交互适配 | 使用 runtime/core |
 | `aicoder-eval` | case、工作区隔离、评测器、报告、SWE-bench | 使用 core；按需使用 providers/runtime |
 
-内置工具与文件存储先保留在现有位置以减少迁移量，待 S3 将具体实现迁入 runtime，
-core 保留接口与数据类型。MCP、Web adapter 和扩展运行时在功能出现后按需拆包，
+S3 已将内置工具、JSONL 文件存储和 Git 完成检查迁入 runtime，
+core 保留接口、数据类型与内存实现；默认 builder 不隐式注册工具。MCP、Web adapter 和扩展运行时在功能出现后按需拆包，
 不预建空 crate。运行不涉及配置与文件系统的 mock Agent 不应需要 runtime。
 
 核心契约按能力设计，以下名称是设计草案，S1 确定后补 API 文档：
@@ -167,15 +167,17 @@ S2 的版本化事件和有界订阅已落地，见 [事件契约](events.md)。
 
 共享配置/默认装配已接入 CLI、TUI、SWE-bench，见 [配置契约](runtime-configuration.md)。
 项目资源加载与快照重载已接通，见 [资源契约](project-resources.md)。
-S3 尚未整体完成；具体工具/存储迁移和后续工具措施仍按下列项推进。
+S3 尚未整体完成；工具/存储迁移已完成，后续工具措施仍按下列项推进。
+拆包契约见 [runtime 后端](runtime-backends.md)，验证见 [验收记录](s3-backends-acceptance.md)。
 [配置增量验收](s3-runtime-acceptance.md) 保留 268 个测试的历史记录；
-[资源增量验收](s3-resources-acceptance.md) 覆盖当前 293 个测试及三次轻量采样。
+[资源增量验收](s3-resources-acceptance.md) 保留 293 个测试及三次轻量采样的历史记录；
+当前拆包增量覆盖 294 个测试。
 
 - [x] 新增 runtime，统一显式参数 > 环境变量 > 项目配置 > 用户配置 > 默认值；
   凭证使用独立来源，不混淆 provider 与默认 endpoint。
 - [x] 加载 AGENTS.md、SYSTEM.md、skills、提示词模板；确定全局、父目录、
   工作区与嵌套目录规则，去重、大小限制、来源展示、关闭开关和热重载边界。
-- [ ] 内置文件/搜索/shell 工具和 JSONL store 由 runtime 提供，core 只保留接口。
+- [x] 内置文件/搜索/shell 工具和 JSONL store 由 runtime 提供，core 只保留接口及内存实现。
 - [ ] 补目录枚举与 glob 搜索；read/grep 以有界方式读取；明确截断与结果分页。
 - [ ] 编辑支持精确匹配及并发修改检测；写入采用适当的原子策略；审批可展示 diff。
 - [ ] shell 的输出、超时、取消、进程组清理和凭证处理形成统一契约。

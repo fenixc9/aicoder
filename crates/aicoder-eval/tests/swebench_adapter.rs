@@ -148,6 +148,7 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
         .run(&case.eval_case, &|workspace| {
             TurnExecutor::builder(PatchProvider::new())
                 .workspace(workspace)
+                .registry(aicoder_runtime::tools::default_registry().unwrap())
                 .approval(AllowAllApproval)
                 .build()
         })
@@ -178,6 +179,7 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
             |workspace| {
                 TurnExecutor::builder(PatchProvider::new())
                     .workspace(workspace)
+                    .registry(aicoder_runtime::tools::default_registry().unwrap())
                     .approval(AllowAllApproval)
                     .build()
             },
@@ -233,6 +235,7 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
         |workspace| {
             TurnExecutor::builder(PatchProvider::new())
                 .workspace(workspace)
+                .registry(aicoder_runtime::tools::default_registry().unwrap())
                 .approval(AllowAllApproval)
                 .build()
         },
@@ -253,6 +256,7 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
         |workspace| {
             TurnExecutor::builder(PatchProvider::new())
                 .workspace(workspace)
+                .registry(aicoder_runtime::tools::default_registry().unwrap())
                 .approval(AllowAllApproval)
                 .build()
         },

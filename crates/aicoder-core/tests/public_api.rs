@@ -40,6 +40,10 @@ impl ModelProvider for StaticProvider {
         events: Arc<dyn aicoder_core::model::ModelEventSink>,
         _context: aicoder_core::TurnExecutionContext,
     ) -> std::result::Result<ModelResponse, aicoder_core::model::ProviderError> {
+        assert!(
+            request.tools.is_empty(),
+            "core must not implicitly install IO tools"
+        );
         let result: anyhow::Result<ModelResponse> = async {
         Ok(serde_json::from_value(serde_json::json!({"id":"response-1","model":request.model,"message":{"role":"assistant","content":[{"type":"text","text":"done"}]},"stop_reason":{"reason":"complete"},"usage":{"input_tokens":null,"output_tokens":null,"total_tokens":null,"cached_input_tokens":null,"cache_write_tokens":null}}))?)
     }.await;
@@ -62,7 +66,6 @@ async fn external_application_can_build_turn_executor_and_observe_raw_events() {
     let workspace = tempdir().unwrap();
     let turn_executor = TurnExecutor::builder(StaticProvider)
         .workspace(workspace.path())
-        .registry(ToolRegistry::default())
         .context_compactor(
             PruningContextCompactor::new(ContextWindowConfig {
                 max_context_tokens: 32_768,
@@ -227,4 +230,35 @@ async fn external_application_can_observe_a_structured_cancelled_outcome() {
         "frontend cancelled"
     );
     assert_eq!(interrupted.rounds, 0);
+}
+
+#[test]
+fn repository_checkpoints_are_ephemeral_and_independent_between_cloned_views() {
+    use aicoder_core::session::Session;
+
+    #[derive(Debug, PartialEq)]
+    struct Checkpoint(u64);
+
+    let workspace = tempdir().unwrap();
+    let repository = MemorySessionRepository::new();
+    let mut session = repository.create(workspace.path()).unwrap();
+    session.attach_backend_state(Checkpoint(1), Some(workspace.path().join("snapshot")));
+    session.attach_run_token(Some("private-owner".into()));
+    let old_view = session.clone();
+    session.attach_backend_state(Checkpoint(2), None);
+    assert_eq!(old_view.backend_state::<Checkpoint>(), Some(&Checkpoint(1)));
+    assert_eq!(session.backend_state::<Checkpoint>(), Some(&Checkpoint(2)));
+    assert!(old_view.path().is_some());
+    assert!(session.path().is_none());
+    assert!(session.backend_state::<String>().is_none());
+    assert!(!format!("{old_view:?}").contains("Checkpoint(1)"));
+
+    let restored =
+        Session::from_entries(old_view.metadata().clone(), old_view.entries().to_vec()).unwrap();
+    assert!(restored.backend_state::<Checkpoint>().is_none());
+    assert!(restored.path().is_none());
+    assert!(restored.run_token().is_none());
+    assert_eq!(restored.metadata().revision, old_view.metadata().revision);
+    session.clear_backend_state();
+    assert!(session.backend_state::<Checkpoint>().is_none());
 }

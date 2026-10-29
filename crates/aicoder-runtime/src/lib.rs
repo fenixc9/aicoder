@@ -3,11 +3,14 @@ mod config;
 mod environment;
 mod files;
 pub mod resources;
+pub mod session;
 mod settings;
+pub mod tools;
+pub mod verification;
+use crate::{session::JsonlSessionRepository, tools::BashTool};
 use aicoder_core::{
     AgentConfig, ModelProvider, PruningContextCompactor, TurnExecutor, TurnExecutorBuilder,
-    session::JsonlSessionRepository,
-    tools::{BashTool, EditFileTool, GrepTool, ReadFileTool, ToolRegistry, WriteFileTool},
+    tools::ToolRegistry,
 };
 use aicoder_providers::{BearerToken, ChatClient, CredentialProvider};
 use anyhow::{Context, Result};
@@ -161,14 +164,9 @@ impl Runtime {
         &self,
         resources: Option<Arc<resources::ResourceSnapshot>>,
     ) -> Result<ToolRegistry> {
-        let mut registry = ToolRegistry::default();
-        registry.register(ReadFileTool)?;
-        registry.register(WriteFileTool)?;
-        registry.register(EditFileTool)?;
-        registry.register(BashTool::excluding_environment(
+        let mut registry = tools::registry_with_shell(BashTool::excluding_environment(
             self.config.credential_references.clone(),
         ))?;
-        registry.register(GrepTool)?;
         if let Some(resources) = resources {
             resources.register_tools(&mut registry)?;
         }

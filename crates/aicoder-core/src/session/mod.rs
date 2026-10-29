@@ -1,18 +1,14 @@
 //! Conversation session management and persistence.
 
 mod journal;
-mod jsonl;
 pub(crate) use journal::SessionJournal;
-mod legacy;
 pub const SESSION_VERSION: u32 = 3;
 mod memory;
 mod repository;
 mod types;
 
-pub use jsonl::JsonlSessionRepository;
 pub use memory::MemorySessionRepository;
 pub use repository::{SessionConflict, SessionRepository, SessionRunLease};
-pub(crate) use types::StorageCursor;
 pub use types::{
     Session, SessionEntry, SessionEntryData, SessionInfo, SessionMessage, SessionMetadata,
     SessionTransaction, TurnRecord, TurnStatistics,

@@ -7,14 +7,14 @@ report. Evaluation never changes the TurnExecutor or feeds grader output back in
 ```rust,no_run
 use std::path::Path;
 
-use aicoder_core::{TurnExecutor, types::ChatCompletionRequest};
+use aicoder_core::{TurnExecutor, model::ModelRequest};
 use aicoder_eval::{
     CommandEvaluator, EvalCase, EvalRunner, TrajectoryEvaluator, WorkspaceDiffEvaluator,
     WorkspaceFixture,
 };
 use anyhow::Result;
 
-async fn evaluate<F>(request: ChatCompletionRequest, build_executor: F) -> Result<()>
+async fn evaluate<F>(request: ModelRequest, build_executor: F) -> Result<()>
 where
     F: Fn(&Path) -> Result<TurnExecutor>,
 {
@@ -42,6 +42,12 @@ where
     Ok(())
 }
 ```
+
+For coding tasks, the factory must explicitly install
+`aicoder_runtime::tools::default_registry()?`, or use `Runtime::executor_builder_for`
+for shared settings and isolated project resources. A bare core builder has no tools.
+Git-based completion verification lives at
+`aicoder_runtime::verification::WorkspaceChangeVerifier`; its trait remains in core.
 
 Use `run_many` to repeat stochastic cases and obtain pass rate, mean score, and mean duration.
 Subjective LLM judges remain outside the first-phase API. Deterministic online

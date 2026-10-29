@@ -1,5 +1,5 @@
 //! Private v1 storage codec. Legacy transport types are deliberately not a core dependency.
-use crate::model::{ContentBlock, Message, MessageRole, ModelToolCall};
+use aicoder_core::model::{ContentBlock, Message, MessageRole, ModelToolCall};
 use anyhow::{Context, Result};
 use serde_json::Value;
 

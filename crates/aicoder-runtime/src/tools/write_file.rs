@@ -1,12 +1,13 @@
+use super::WorkspacePaths;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::model::ToolDefinition;
+use aicoder_core::model::ToolDefinition;
 
-use super::super::{
+use super::{
     ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess, util::parse_arguments,
 };
 
@@ -50,7 +51,7 @@ impl ExecutableTool for WriteFileTool {
         arguments: Value,
     ) -> Result<ToolSuccess, ToolFailure> {
         let arguments: WriteFileArguments = parse_arguments(arguments)?;
-        let path = context.resolve_for_write(&arguments.path)?;
+        let path = WorkspacePaths::from_context(context).resolve_for_write(&arguments.path)?;
         if path.exists() && !path.is_file() {
             return Err(ToolFailure::new("not_a_file", "Path is not a file"));
         }
@@ -75,7 +76,7 @@ impl ExecutableTool for WriteFileTool {
         }
 
         Ok(ToolSuccess::new(json!({
-            "path": context.relative_path(&path),
+            "path": WorkspacePaths::from_context(context).relative_path(&path),
             "bytes_written": arguments.content.len(),
         })))
     }

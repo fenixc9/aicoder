@@ -1,5 +1,9 @@
 # S0 开发基线
 
+> S3 relocation: current coding smoke is `cargo run --locked -p aicoder-runtime --example offline_smoke`;
+> concrete backends now live in runtime. Commands/measurements below record this historical increment.
+> See [backend migration](runtime-backends.md).
+
 本文件描述 S1 迁移前的行为，供后续比较；未来实现不能把这里的限制当成目标契约。
 
 ## 工具链和平台

@@ -6,8 +6,10 @@ use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    any::Any,
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
@@ -114,25 +116,29 @@ pub struct SessionMessage<'a> {
     pub created_at: u64,
     pub message: &'a Message,
 }
-#[derive(Debug, Clone)]
-pub(crate) struct StorageCursor {
-    pub path: PathBuf,
-    pub expected_len: u64,
-    pub valid_len: u64,
-    pub fingerprint: u64,
-    pub needs_separator: bool,
+#[derive(Clone)]
+struct BackendState {
+    value: Arc<dyn Any + Send + Sync>,
+    path: Option<PathBuf>,
+}
+impl std::fmt::Debug for BackendState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BackendState")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 #[derive(Debug, Clone)]
 pub struct Session {
     pub(crate) metadata: SessionMetadata,
     pub(crate) entries: Vec<SessionEntry>,
     pub(crate) index: HashMap<String, usize>,
-    pub(crate) storage: Option<StorageCursor>,
+    backend: Option<BackendState>,
     pub(crate) run_token: Option<String>,
 }
 impl Session {
     /// Reconstruct a validated domain snapshot in a custom repository.
-    /// Storage cursors and run ownership are never restored from serialized history.
+    /// Backend checkpoints and run ownership are never restored from serialized history.
     pub fn from_entries(metadata: SessionMetadata, entries: Vec<SessionEntry>) -> Result<Self> {
         ensure!(!metadata.id.is_empty(), "session ID must not be empty");
         ensure!(
@@ -183,12 +189,25 @@ impl Session {
     pub fn attach_run_token(&mut self, token: Option<String>) {
         self.run_token = token;
     }
+    /// Attach an immutable backend checkpoint to this view. Clones retain their old checkpoint.
+    pub fn attach_backend_state<T: Any + Send + Sync>(&mut self, state: T, path: Option<PathBuf>) {
+        self.backend = Some(BackendState {
+            value: Arc::new(state),
+            path,
+        });
+    }
+    pub fn backend_state<T: Any>(&self) -> Option<&T> {
+        self.backend.as_ref()?.value.downcast_ref()
+    }
+    pub fn clear_backend_state(&mut self) {
+        self.backend = None;
+    }
     pub(crate) fn empty(metadata: SessionMetadata) -> Self {
         Self {
             metadata,
             entries: Vec::new(),
             index: HashMap::new(),
-            storage: None,
+            backend: None,
             run_token: None,
         }
     }
@@ -234,7 +253,9 @@ impl Session {
             .collect()
     }
     pub fn path(&self) -> Option<&Path> {
-        self.storage.as_ref().map(|storage| storage.path.as_path())
+        self.backend
+            .as_ref()
+            .and_then(|backend| backend.path.as_deref())
     }
     pub fn selected_model(&self) -> Option<(&str, &str)> {
         self.active_entries()

@@ -8,14 +8,12 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 tokio-util = "0.7"
 serde.workspace = true
 serde_json.workspace = true
 regex = "1"
 url = "2"
-fs2 = "0.4"
-libc = "0.2"
 anyhow.workspace = true
 tracing.workspace = true
 futures.workspace = true

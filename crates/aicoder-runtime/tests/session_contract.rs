@@ -1,4 +1,5 @@
 use aicoder_core::{RunProgress, model::*, session::*};
+use aicoder_runtime::session::JsonlSessionRepository;
 use serde_json::json;
 use std::path::Path;
 

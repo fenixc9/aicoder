@@ -1,4 +1,5 @@
 //! Deterministic end-to-end smoke and small runtime baseline; never calls a model service.
+use aicoder_runtime::{session::JsonlSessionRepository, tools::default_registry};
 use std::{
     sync::{
         Arc,
@@ -14,7 +15,7 @@ use aicoder_core::{
         ContentBlock, Message, MessageRole, ModelRequest, ModelResponse, ModelToolCall, ModelUsage,
         StopReason,
     },
-    session::{JsonlSessionRepository, SessionRepository},
+    session::SessionRepository,
     tools::AllowAllApproval,
 };
 use anyhow::{Result, ensure};
@@ -141,6 +142,7 @@ async fn run_case(case: Case) -> Result<Value> {
         case,
         cancellation: context.clone(),
     })
+    .registry(default_registry()?)
     .workspace(workspace.path())
     .approval(AllowAllApproval)
     .build()?;

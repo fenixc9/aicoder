@@ -1,5 +1,9 @@
 # S3 shared runtime configuration acceptance
 
+> S3 relocation: current coding smoke is `cargo run --locked -p aicoder-runtime --example offline_smoke`;
+> concrete backends now live in runtime. Commands/measurements below record this historical increment.
+> See [backend migration](runtime-backends.md).
+
 This completes the shared configuration/default-assembly item of S3. S3 remains open
 for AGENTS.md/SYSTEM.md/skills/templates, concrete tool/storage extraction, tool/output
 improvements and richer approval policy. The [runtime contract](runtime-configuration.md)

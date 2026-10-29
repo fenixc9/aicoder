@@ -2,12 +2,15 @@
 
 ## Architecture
 
-- `crates/aicoder-core` owns the reusable agent loop, model protocol, tools,
-  events, cancellation, and sessions. Keep frontend concerns out of core.
+- `crates/aicoder-core` owns the reusable agent loop, model protocol, tool/policy contracts,
+  events, cancellation, session domain and memory storage. Keep frontend concerns out of core.
 - `crates/aicoder-providers` owns model-service clients and HTTP adapters.
   Providers depend on core; core must not depend on providers or HTTP clients.
-- `crates/aicoder-runtime` owns layered application settings, credential references
-  and default assembly. Keep terminal/Web types out; core must not depend on it.
+- `crates/aicoder-runtime` owns layered application settings, credential references,
+  default coding tools, filesystem session stores and Git completion verification.
+  Keep terminal/Web types out; core must not depend on it.
+  Concrete IO/process backends belong here; core builders install no implicit tools.
+  Backend checkpoints must stay opaque, immutable and out of serialized domain history.
   Project settings may select trusted profiles but must not define credential routing
   or private storage paths. Keep credential values out of settings snapshots/errors.
   Resource snapshots must preserve user/tool history, keep skill assets inside pinned
@@ -41,8 +44,9 @@ cross-crate change is complete, run:
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked -p aicoder-core --all-targets
 cargo test --locked --workspace
-cargo run --locked -p aicoder-core --example offline_smoke
+cargo run --locked -p aicoder-runtime --example offline_smoke
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
 ```
 

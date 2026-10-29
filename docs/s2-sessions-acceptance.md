@@ -1,5 +1,9 @@
 # S2 session storage and recovery acceptance
 
+> S3 relocation: current coding smoke is `cargo run --locked -p aicoder-runtime --example offline_smoke`;
+> concrete backends now live in runtime. Commands/measurements below record this historical increment.
+> See [backend migration](runtime-backends.md).
+
 Historical increment record. [Final S2 acceptance](s2-events-acceptance.md) supersedes
 the remaining-stage status below; these measurements and test counts remain archived.
 

@@ -96,8 +96,9 @@ impl ToolDispatcher {
         self.dispatch_inner(calls, None).await
     }
 
-    #[cfg(test)]
-    pub(crate) async fn dispatch_with_events(
+    /// Dispatch a standalone batch with tool events. Agent hosts should use the executor
+    /// for run control, budgets and durable journaling.
+    pub async fn dispatch_with_events(
         &self,
         calls: &[ModelToolCall],
         events: &AgentEventEmitter,

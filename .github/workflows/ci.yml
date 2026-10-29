@@ -20,12 +20,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes ripgrep
       - name: Check formatting
         run: cargo fmt --all --check
+      - name: Test isolated core without workspace feature unification
+        run: cargo test --locked -p aicoder-core --all-targets
       - name: Lint
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --locked --workspace
       - name: Offline smoke
-        run: cargo run --locked -p aicoder-core --example offline_smoke
+        run: cargo run --locked -p aicoder-runtime --example offline_smoke
       - name: In-memory model provider example
         run: cargo run --locked -p aicoder-core --example model_provider
       - name: Embedded agent example

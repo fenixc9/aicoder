@@ -1,3 +1,4 @@
+use super::WorkspacePaths;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -6,9 +7,9 @@ use tokio::{
     io::{AsyncBufReadExt, BufReader},
 };
 
-use crate::model::ToolDefinition;
+use aicoder_core::model::ToolDefinition;
 
-use super::super::{
+use super::{
     ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess,
     util::{parse_arguments, truncate_utf8},
 };
@@ -71,7 +72,7 @@ impl ExecutableTool for ReadFileTool {
                 "offset_line must be >= 1 and limit_lines must be between 1 and 4000",
             ));
         }
-        let path = context.resolve_existing(&arguments.path)?;
+        let path = WorkspacePaths::from_context(context).resolve_existing(&arguments.path)?;
         if !path.is_file() {
             return Err(ToolFailure::new("not_a_file", "Path is not a file"));
         }
@@ -83,7 +84,7 @@ impl ExecutableTool for ReadFileTool {
         for _ in 1..arguments.offset_line {
             if next_line(&mut lines).await?.is_none() {
                 return Ok(ToolSuccess::new(json!({
-                    "path": context.relative_path(&path),
+                    "path": WorkspacePaths::from_context(context).relative_path(&path),
                     "offset_line": arguments.offset_line,
                     "lines_read": 0,
                     "end_line": null,
@@ -141,7 +142,7 @@ impl ExecutableTool for ReadFileTool {
 
         Ok(ToolSuccess {
             output: json!({
-                "path": context.relative_path(&path),
+                "path": WorkspacePaths::from_context(context).relative_path(&path),
                 "offset_line": arguments.offset_line,
                 "lines_read": lines_read,
                 "end_line": end_line,

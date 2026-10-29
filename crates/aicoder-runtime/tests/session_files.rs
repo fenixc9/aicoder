@@ -1,4 +1,5 @@
 use aicoder_core::{model::*, session::*};
+use aicoder_runtime::session::JsonlSessionRepository;
 use serde_json::json;
 use std::{
     fs::{self, OpenOptions},

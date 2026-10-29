@@ -3,8 +3,9 @@
 `aicoder-runtime` now owns application configuration, credential references, default
 agent/tool/session assembly and context-pruning setup. CLI, TUI and the SWE-bench
 entry point use it. Core keeps the single execution loop and does not gain a runtime,
-HTTP or frontend dependency. Builtin tool implementations and JSONL storage still live
-in core during this migration; their extraction and remaining tool improvements remain open S3 items.
+HTTP or frontend dependency. [Builtin tools, JSONL storage and Git verification](runtime-backends.md)
+now live in runtime; core builders use an empty tool registry unless one is supplied.
+Remaining tool improvements are open S3 items.
 [Project instructions, skills and templates](project-resources.md) are now available.
 
 ## Files and precedence

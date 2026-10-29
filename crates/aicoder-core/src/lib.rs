@@ -26,7 +26,6 @@ pub use agent::{
 pub use cancellation::{TurnCancelled, TurnExecutionContext};
 pub use completion::{
     AcceptAllCompletionVerifier, CompletionContext, CompletionVerdict, CompletionVerifier,
-    WorkspaceChangeVerifier,
 };
 pub use context::{
     ContextCompaction, ContextCompactionInput, ContextCompactor, ContextWindowConfig,

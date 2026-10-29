@@ -74,7 +74,7 @@ new unknown values serialize as JSON null.
 - `cargo run --locked -p aicoder-core --example model_provider`: direct in-memory model API.
 - `cargo run --locked -p aicoder-core --example embedded_agent`: model/tool loop,
   in-memory custom tool and session storage, no model-service or file-edit I/O.
-- `cargo run --locked -p aicoder-core --example offline_smoke`: real coding
+- `cargo run --locked -p aicoder-runtime --example offline_smoke`: real coding
   tools, cancellation and JSONL recovery with a scripted model.
 
 Historical baseline measurements are retained in `docs/baselines/`; compare
@@ -268,3 +268,21 @@ isolated base-checkout context, frozen globals and full source metadata; checkpo
 also match base_commit and input_context_version. Incompatible historical checkpoints
 regenerate rather than silently mixing contexts. Four Rust packages are added for real
 bounded YAML parsing; shlex is reused and no script runtime is required.
+
+
+## S3: concrete backends move to runtime
+
+Default coding tools and `default_registry` move from `aicoder_core::tools` to
+`aicoder_runtime::tools`. `JsonlSessionRepository` moves from core session to
+`aicoder_runtime::session`. `WorkspaceChangeVerifier` moves from core/root completion
+exports to `aicoder_runtime::verification`. Core retains all implementation contracts
+and the memory repository. `ToolContext` path helpers move to runtime `WorkspacePaths`.
+
+A bare `TurnExecutor` builder now installs no tools; explicitly pass
+`.registry(aicoder_runtime::tools::default_registry()?)` to retain the coding registry,
+or use `Runtime` assembly for settings/resources and credential-aware shell setup.
+CLI, TUI and SWE-bench already assemble it explicitly. Approval still defaults to deny.
+No persisted format change is needed: existing JSONL v3 files and legacy backups
+retain their contract. Custom stores can attach opaque immutable view checkpoints
+without adding backend-specific fields to core. See [the complete mapping and
+examples](runtime-backends.md) and [acceptance](s3-backends-acceptance.md).

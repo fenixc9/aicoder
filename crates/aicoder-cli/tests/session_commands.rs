@@ -1,7 +1,8 @@
 use aicoder_core::{
     model::{Message, MessageRole},
-    session::{JsonlSessionRepository, SessionRepository},
+    session::SessionRepository,
 };
+use aicoder_runtime::session::JsonlSessionRepository;
 use std::process::Command;
 
 #[test]

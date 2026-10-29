@@ -1,14 +1,19 @@
 # Tree sessions and durable turns
 
 `Agent` uses the same object-safe `SessionRepository` in SDK hosts and frontends.
-`MemorySessionRepository` and `JsonlSessionRepository` implement the same tree,
+`aicoder_core::session::MemorySessionRepository` and
+`aicoder_runtime::session::JsonlSessionRepository` implement the same tree,
 transaction, conflict and run-ownership contract. No database, service or new
 runtime dependency is required. Custom repositories can reconstruct snapshots with
 `Session::from_entries`, validate batches with `validate_transaction`, and fold a
 persisted batch with `apply_transaction`. `SESSION_VERSION` identifies the current
 schema. Store implementations use `run_token`/`attach_run_token` for ephemeral owner
 capabilities; do not serialize them or expose them in shared history. Store/host code
-is trusted to enforce these contracts.
+is trusted to enforce these contracts. Custom repositories can attach opaque checkpoints
+with `attach_backend_state`, inspect them with `backend_state::<T>()`, and clear them
+with `clear_backend_state`. Treat checkpoints as immutable: cloned views retain the
+previous attachment until replaced. `from_entries` restores neither checkpoints nor
+run ownership. See [backend boundaries](runtime-backends.md).
 
 ## Entries and branches
 

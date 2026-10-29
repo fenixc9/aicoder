@@ -1,5 +1,9 @@
 # S3 project resources acceptance
 
+> S3 relocation: current coding smoke is `cargo run --locked -p aicoder-runtime --example offline_smoke`;
+> concrete backends now live in runtime. Commands/measurements below record this historical increment.
+> See [backend migration](runtime-backends.md).
+
 This completes S3's AGENTS/SYSTEM/skills/templates item, including roots, nested scope,
 deduplication, limits, source inspection, disable switches and explicit reload boundaries.
 Concrete tool/JSONL extraction and remaining tool/approval improvements are still open;

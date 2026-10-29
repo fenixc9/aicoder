@@ -1,11 +1,12 @@
+use super::WorkspacePaths;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use crate::model::ToolDefinition;
+use aicoder_core::model::ToolDefinition;
 
-use super::super::{
+use super::{
     ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess,
     util::{parse_arguments, truncate_utf8},
 };
@@ -69,7 +70,7 @@ impl ExecutableTool for GrepTool {
                 "max_results must be between 1 and 1000",
             ));
         }
-        let path = context.resolve_existing(&arguments.path)?;
+        let path = WorkspacePaths::from_context(context).resolve_existing(&arguments.path)?;
 
         let mut command = Command::new("rg");
         command
@@ -106,7 +107,7 @@ impl ExecutableTool for GrepTool {
         let (matches, byte_limit_hit) = truncate_utf8(&matches, context.max_output_bytes());
         Ok(ToolSuccess {
             output: json!({
-                "path": context.relative_path(&path),
+                "path": WorkspacePaths::from_context(context).relative_path(&path),
                 "matches": matches,
             }),
             truncated: result_limit_hit || byte_limit_hit,

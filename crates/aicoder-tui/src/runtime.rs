@@ -1,8 +1,9 @@
+use aicoder_runtime::session::JsonlSessionRepository;
 use std::{path::PathBuf, sync::Arc};
 
 use aicoder_core::{
     Agent, RunControl, SessionSelection,
-    session::{JsonlSessionRepository, Session, SessionInfo, SessionRepository},
+    session::{Session, SessionInfo, SessionRepository},
 };
 use aicoder_core::{
     AgentTurnOutcome,

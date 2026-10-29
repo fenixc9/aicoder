@@ -7,10 +7,11 @@ are separate crates.
 ## Workspace
 
 - aicoder-core: the low-level TurnExecutor plus the session-aware Agent API,
-  model interfaces, events, tools, and session repositories.
+  model interfaces, events, tool/store contracts, and memory sessions.
 - aicoder-providers: model-service clients, HTTP transport, retries, and
   OpenAI-compatible response streaming.
-- aicoder-runtime: shared settings, credential references and agent/tool/session assembly.
+- aicoder-runtime: shared settings, project resources, credential references, coding tools,
+  JSONL sessions, Git verification, and default application assembly.
 - aicoder-cli: current command-line application.
 - aicoder-tui: interactive Ratatui frontend with sessions, streaming output,
   tool approvals, execution status, and cooperative cancellation.
@@ -33,7 +34,8 @@ cover branches, durable tool checkpoints, interrupted turns and backed-up v1/v2 
 asynchronous approvals over the same execution loop. [Versioned events](docs/events.md)
 provide bounded subscriptions, explicit overflow/disconnect reports, and structured
 bench traces. S0–S2 are complete; S3 shared runtime configuration and [project resources](docs/project-resources.md) are
-available; concrete tool/storage extraction and tool improvements remain in progress. See [runtime settings](docs/runtime-configuration.md), including
+available; [concrete tools and storage](docs/runtime-backends.md) now live in runtime.
+Remaining tool improvements are in progress. See [runtime settings](docs/runtime-configuration.md), including
 the explicit `--env-file` migration.
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs
@@ -84,7 +86,7 @@ are written to `$AICODER_HOME/tui.log` or `~/.aicoder/tui.log`.
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace
-cargo run --locked -p aicoder-core --example offline_smoke
+cargo run --locked -p aicoder-runtime --example offline_smoke
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
 ~~~
 

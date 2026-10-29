@@ -1,3 +1,4 @@
+use aicoder_runtime::session::JsonlSessionRepository;
 use std::{
     io::{self, Write},
     path::PathBuf,
@@ -11,7 +12,7 @@ use aicoder_core::{
         ContextCompactionCompletedEvent, ReasoningChunkEvent, ReasoningEndedEvent,
         ReasoningStartedEvent, ToolCallEndedEvent, ToolExecutionEndedEvent,
     },
-    session::{JsonlSessionRepository, SessionEntryData, SessionRepository},
+    session::{SessionEntryData, SessionRepository},
     tools::{AllowAllApproval, ApprovalHandler, ToolInvocation},
 };
 use aicoder_runtime::resources::ResourceSettings;

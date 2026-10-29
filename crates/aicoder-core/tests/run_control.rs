@@ -227,77 +227,6 @@ async fn queued_steering_has_priority_and_follow_ups_extend_the_same_budgeted_ru
 }
 
 #[tokio::test]
-async fn steering_waits_for_the_active_mutation_then_skips_unstarted_tools_and_persists_provenance()
-{
-    let workspace = tempfile::tempdir().unwrap();
-    let storage = tempfile::tempdir().unwrap();
-    for store in [
-        Arc::new(MemorySessionRepository::new()) as Arc<dyn SessionRepository>,
-        Arc::new(JsonlSessionRepository::new(storage.path()).unwrap()),
-    ] {
-        let script = Script::new(vec![calls(&["first", "second"]), reply("redirected")]);
-        let gate = Arc::new(Gate::default());
-        let executed = Arc::new(AtomicUsize::new(0));
-        let mut registry = ToolRegistry::default();
-        registry
-            .register(CommandTool {
-                name: "first",
-                gate: Some(gate.clone()),
-                executed: executed.clone(),
-            })
-            .unwrap();
-        registry
-            .register(CommandTool {
-                name: "second",
-                gate: None,
-                executed: executed.clone(),
-            })
-            .unwrap();
-        let agent = Agent::new(
-            executor(script.clone(), registry, workspace.path()),
-            AgentConfig::new("test"),
-        );
-        let (handle, control) = RunHandle::pair();
-        let target = store.clone();
-        let run = tokio::spawn(async move {
-            agent
-                .run_with_session_controlled(
-                    target.as_ref(),
-                    SessionSelection::New,
-                    "initial",
-                    Arc::new(()),
-                    control,
-                )
-                .await
-        });
-        gate.wait().await;
-        let input = handle.steer(user("change direction")).unwrap();
-        assert_eq!(executed.load(Ordering::SeqCst), 0);
-        gate.release.notify_one();
-        let outcome = run.await.unwrap();
-        assert!(
-            matches!(outcome, AgentTurnOutcome::Completed(_)),
-            "{outcome:?}"
-        );
-        assert_eq!(executed.load(Ordering::SeqCst), 1);
-        let id = outcome.session().unwrap().id.clone();
-        assert_eq!(handle.snapshot().session_id, Some(id.clone()));
-        let session = store.open(&id).unwrap();
-        assert!(session.entries().iter().any(|entry|matches!(&entry.data,SessionEntryData::Extension {namespace,data} if namespace=="aicoder.run.input" && data["id"]==input && data.get("message").is_none())));
-        assert_eq!(session.model_messages().unwrap().len(), 6);
-        let requests = script.requests.lock().unwrap();
-        let messages = &requests[1].messages;
-        assert_eq!(messages[2].tool_result().unwrap().0, "c0");
-        assert!(!messages[2].tool_result().unwrap().2);
-        assert_eq!(
-            messages[3].tool_result().unwrap().1["error"]["code"],
-            "steered_before_execution"
-        );
-        assert_eq!(messages.last(), Some(&user("change direction")));
-    }
-}
-
-#[tokio::test]
 async fn steering_during_a_model_request_pairs_skipped_calls_without_executing_them() {
     let workspace = tempfile::tempdir().unwrap();
     let script = Script::new(vec![calls(&["write"]), reply("new goal")]);
@@ -737,55 +666,6 @@ async fn external_cancellation_drops_the_approval_sender_and_rejects_late_decisi
         Err(RunControlError::Closed)
     );
     assert_eq!(executed.load(Ordering::SeqCst), 0);
-}
-
-#[tokio::test]
-async fn persisted_follow_ups_keep_answers_and_inputs_in_order_without_duplicate_checkpoints() {
-    let workspace = tempfile::tempdir().unwrap();
-    let storage = tempfile::tempdir().unwrap();
-    for store in [
-        Arc::new(MemorySessionRepository::new()) as Arc<dyn SessionRepository>,
-        Arc::new(JsonlSessionRepository::new(storage.path()).unwrap()),
-    ] {
-        let script = Script::new(vec![reply("one"), reply("two"), reply("three")]);
-        let agent = Agent::new(
-            executor(script, ToolRegistry::default(), workspace.path()),
-            AgentConfig::new("test"),
-        );
-        let (handle, control) = RunHandle::pair();
-        handle.follow_up(user("follow one")).unwrap();
-        handle.follow_up(user("follow two")).unwrap();
-        let outcome = agent
-            .run_with_session_controlled(
-                store.as_ref(),
-                SessionSelection::New,
-                "initial",
-                Arc::new(()),
-                control,
-            )
-            .await;
-        assert!(
-            matches!(&outcome, AgentTurnOutcome::Completed(_)),
-            "{outcome:?}"
-        );
-        let session = store.open(&outcome.session().unwrap().id).unwrap();
-        assert_eq!(
-            session.chat_messages(),
-            vec![
-                user("initial"),
-                Message::text(MessageRole::Assistant, "one"),
-                user("follow one"),
-                Message::text(MessageRole::Assistant, "two"),
-                user("follow two"),
-                Message::text(MessageRole::Assistant, "three")
-            ]
-        );
-        assert_eq!(session.model_messages().unwrap(), session.chat_messages());
-        assert_eq!(session.entries().iter().filter(|entry|matches!(&entry.data,SessionEntryData::Extension {namespace,..} if namespace=="aicoder.run.input")).count(),2);
-        assert!(
-            matches!(&session.active_entries().last().unwrap().data,SessionEntryData::TurnEnd {record,..} if record.pending_inputs.is_empty() && record.statistics.as_ref().unwrap().rounds==3)
-        );
-    }
 }
 
 #[tokio::test]

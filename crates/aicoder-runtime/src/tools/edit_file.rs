@@ -1,3 +1,4 @@
+use super::WorkspacePaths;
 use std::ops::Range;
 
 use async_trait::async_trait;
@@ -6,9 +7,9 @@ use serde_json::{Value, json};
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::model::ToolDefinition;
+use aicoder_core::model::ToolDefinition;
 
-use super::super::{
+use super::{
     ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess, util::parse_arguments,
 };
 
@@ -83,7 +84,7 @@ impl ExecutableTool for EditFileTool {
         let arguments: EditFileArguments = parse_arguments(arguments)?;
         validate_arguments(&arguments)?;
 
-        let path = context.resolve_existing(&arguments.path)?;
+        let path = WorkspacePaths::from_context(context).resolve_existing(&arguments.path)?;
         if !path.is_file() {
             return Err(ToolFailure::new("not_a_file", "Path is not a file"));
         }
@@ -158,7 +159,7 @@ impl ExecutableTool for EditFileTool {
         }
 
         Ok(ToolSuccess::new(json!({
-            "path": context.relative_path(&path),
+            "path": WorkspacePaths::from_context(context).relative_path(&path),
             "edits_applied": prepared.len(),
             "bytes_before": original.len(),
             "bytes_after": updated.len(),

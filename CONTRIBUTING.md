@@ -10,8 +10,9 @@ Run from the repository root:
 ```sh
 cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
+cargo test --locked -p aicoder-core --all-targets
 cargo test --locked --workspace
-cargo run --locked -p aicoder-core --example offline_smoke
+cargo run --locked -p aicoder-runtime --example offline_smoke
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
 ```
 
@@ -21,3 +22,7 @@ and CI resolve the same versions. See `AGENTS.md` for architecture and safety
 conventions and `docs/evaluation.md` for evaluation workflows.
 See `docs/development-baseline.md` for platform support, API/session format
 baselines, and reproducible runtime measurements.
+
+Run core separately to catch accidental dependencies on workspace-unified Tokio IO
+features. Concrete file/shell tools, JSONL storage and Git verification live in runtime;
+custom embedded tools/stores depend only on core. See `docs/runtime-backends.md`.

@@ -19,10 +19,7 @@ use crate::{
         RunLimiter, RunOutcome, RunProgress, RunStage, RunStop, TurnExecutionResult,
     },
     state::{AgentRunState, AgentRunStateMachine},
-    tools::{
-        ApprovalHandler, DenyAllApproval, DispatcherConfig, ToolDispatcher, ToolRegistry,
-        default_registry,
-    },
+    tools::{ApprovalHandler, DenyAllApproval, DispatcherConfig, ToolDispatcher, ToolRegistry},
 };
 
 #[derive(Debug, Clone)]
@@ -1028,7 +1025,7 @@ fn ensure_valid_compaction(compaction: &ContextCompaction, target_tokens: usize)
     Ok(())
 }
 
-/// Convenience assembly for applications that want the built-in coding tools.
+/// Host assembly for the reusable loop. An omitted registry is empty.
 pub struct TurnExecutorBuilder {
     provider: Arc<dyn ModelProvider>,
     registry: Option<Arc<ToolRegistry>>,
@@ -1136,7 +1133,7 @@ impl TurnExecutorBuilder {
         self.execution_config.events.validate()?;
         let registry = match self.registry {
             Some(registry) => registry,
-            None => Arc::new(default_registry()?),
+            None => Arc::new(ToolRegistry::default()),
         };
         let dispatcher = ToolDispatcher::new(
             registry,

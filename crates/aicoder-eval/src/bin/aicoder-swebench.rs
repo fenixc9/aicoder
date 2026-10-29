@@ -1,12 +1,13 @@
 use std::path::PathBuf;
 
-use aicoder_core::{WorkspaceChangeVerifier, tools::AllowAllApproval};
+use aicoder_core::tools::AllowAllApproval;
 use aicoder_eval::{
     SweBenchAdapter, SweBenchBatchOptions, SweBenchBatchRunner, SweBenchDataset, SweBenchFilter,
     SweBenchHarnessConfig, SweBenchHarnessReport, SweBenchRepositoryCache,
     SweBenchRepositorySource, run_swebench_harness,
 };
 use aicoder_runtime::resources::ResourceSettings;
+use aicoder_runtime::verification::WorkspaceChangeVerifier;
 use aicoder_runtime::{
     ConfigDiscovery, ExecutionSettings, ModelSettings, Runtime, RuntimeOverrides, Setting,
     Settings, environment_file,

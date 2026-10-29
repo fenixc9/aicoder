@@ -1,5 +1,9 @@
 # S1 acceptance
 
+> S3 relocation: current coding smoke is `cargo run --locked -p aicoder-runtime --example offline_smoke`;
+> concrete backends now live in runtime. Commands/measurements below record this historical increment.
+> See [backend migration](runtime-backends.md).
+
 S1 is complete. Its scope is the reusable model/execution boundary and the
 first compatible HTTP adapter, not the remaining Pi user-facing features.
 
@@ -12,7 +16,7 @@ first compatible HTTP adapter, not the remaining Pi user-facing features.
 | Unified stream/non-stream results | Existing SSE boundary/tool-fragment tests plus cancellation, size ceilings and reasoning-history tests in [provider tests](../crates/aicoder-providers/src/chat.rs) |
 | Partial outcomes and quotas | [run contract](run-outcomes.md), [run-limit tests](../crates/aicoder-core/tests/run_limits.rs), [CLI process tests](../crates/aicoder-cli/tests/run_budget.rs) |
 | In-memory model/tool/store embedding | [embedded agent](../crates/aicoder-core/examples/embedded_agent.rs), [direct model provider](../crates/aicoder-core/examples/model_provider.rs) |
-| Existing coding workflow remains runnable | [offline smoke](../crates/aicoder-core/examples/offline_smoke.rs), [core tool tests](../crates/aicoder-core/src/tools/tests.rs), [evaluation tests](../crates/aicoder-eval/tests/eval_runner.rs) |
+| Existing coding workflow remains runnable | [offline smoke](../crates/aicoder-runtime/examples/offline_smoke.rs), [runtime tool tests](../crates/aicoder-runtime/src/tools/tests.rs), [evaluation tests](../crates/aicoder-eval/tests/eval_runner.rs) |
 
 Verification on the pinned Rust 1.92.0/Linux toolchain:
 

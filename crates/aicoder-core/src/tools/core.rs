@@ -20,7 +20,7 @@ pub struct ToolSuccess {
 }
 
 impl ToolSuccess {
-    pub(crate) fn new(output: Value) -> Self {
+    pub fn new(output: Value) -> Self {
         Self {
             output,
             truncated: false,
@@ -36,7 +36,7 @@ pub struct ToolFailure {
 }
 
 impl ToolFailure {
-    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -44,7 +44,7 @@ impl ToolFailure {
         }
     }
 
-    pub(crate) fn with_details(mut self, details: Value) -> Self {
+    pub fn with_details(mut self, details: Value) -> Self {
         self.details = Some(details);
         self
     }

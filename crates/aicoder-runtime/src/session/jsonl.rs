@@ -1,6 +1,6 @@
 use super::*;
 #[cfg(test)]
-use crate::model::{Message, MessageRole};
+use aicoder_core::model::{Message, MessageRole};
 use anyhow::{Context, Result, bail, ensure};
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -143,7 +143,7 @@ impl JsonlSessionRepository {
         session: &mut Session,
         transaction: SessionTransaction,
     ) -> Result<Option<PathBuf>> {
-        session.validate(&transaction)?;
+        session.validate_transaction(&transaction)?;
         let path = session
             .path()
             .context("session has no storage path")?
@@ -152,29 +152,32 @@ impl JsonlSessionRepository {
             path.parent() == Some(self.root.as_path()),
             "session belongs to a different repository"
         );
-        let _metadata = self.metadata_lock(&session.metadata.id, true)?;
-        let _run = self.write_lease(&session.metadata.id, session.run_token.as_deref())?;
+        let _metadata = self.metadata_lock(&session.metadata().id, true)?;
+        let _run = self.write_lease(&session.metadata().id, session.run_token())?;
         let mut file = open_data(&path, true, true)?;
         FileExt::lock_exclusive(&file)?;
         let mut actual = Vec::new();
         file.read_to_end(&mut actual)?;
-        let cursor = session.storage.as_ref().unwrap();
+        let cursor = session
+            .backend_state::<StorageCursor>()
+            .context("session view has no JSONL checkpoint")?;
         if actual.len() as u64 != cursor.expected_len || fingerprint(&actual) != cursor.fingerprint
         {
             return Err(SessionConflict {
-                id: session.metadata.id.clone(),
+                id: session.metadata().id.clone(),
             }
             .into());
         }
-        let timestamp =
-            if transaction.entries.is_empty() && transaction.leaf_id == session.metadata.leaf_id {
-                session.metadata.updated_at
-            } else {
-                now_millis()?
-            };
-        if session.metadata.version < SESSION_VERSION {
+        let timestamp = if transaction.entries.is_empty()
+            && transaction.leaf_id == session.metadata().leaf_id
+        {
+            session.metadata().updated_at
+        } else {
+            now_millis()?
+        };
+        if session.metadata().version < SESSION_VERSION {
             let mut backup_name = path.as_os_str().to_os_string();
-            backup_name.push(format!(".v{}.bak", session.metadata.version));
+            backup_name.push(format!(".v{}.bak", session.metadata().version));
             let backup = PathBuf::from(backup_name);
             match create_private(&backup) {
                 Ok(mut backup_file) => {
@@ -190,33 +193,44 @@ impl JsonlSessionRepository {
                 }
                 Err(error) => return Err(error.into()),
             }
-            let mut upgraded = session.clone();
-            upgraded.metadata.version = SESSION_VERSION;
-            upgraded.apply(transaction, 1, timestamp);
-            let mut bytes = header(&upgraded.metadata)?;
-            if !upgraded.entries.is_empty() {
+            let mut metadata = session.metadata().clone();
+            metadata.version = SESSION_VERSION;
+            metadata.revision = if session.entries().is_empty() && transaction.entries.is_empty() {
+                0
+            } else {
+                1
+            };
+            metadata.updated_at = timestamp;
+            metadata.leaf_id = transaction.leaf_id;
+            let mut entries = session.entries().to_vec();
+            entries.extend(transaction.entries);
+            let mut upgraded = Session::from_entries(metadata, entries)?;
+            upgraded.attach_run_token(session.run_token().map(str::to_string));
+            let mut bytes = header(upgraded.metadata())?;
+            if !upgraded.entries().is_empty() {
                 bytes.extend(transaction_line(
                     1,
                     timestamp,
-                    &upgraded.entries,
-                    &upgraded.metadata.leaf_id,
+                    upgraded.entries(),
+                    &upgraded.metadata().leaf_id,
                 )?);
-            } else {
-                upgraded.metadata.revision = 0;
             }
             atomic_replace(&self.root, &path, &bytes)?;
-            upgraded.storage = Some(cursor_for(
-                path,
-                bytes.len() as u64,
-                bytes.len() as u64,
-                false,
-                fingerprint(&bytes),
-            ));
+            attach_cursor(
+                &mut upgraded,
+                cursor_for(
+                    path,
+                    bytes.len() as u64,
+                    bytes.len() as u64,
+                    false,
+                    fingerprint(&bytes),
+                ),
+            );
             *session = upgraded;
             return Ok(Some(backup));
         }
         let revision = session
-            .metadata
+            .metadata()
             .revision
             .checked_add(1)
             .context("session revision overflow")?;
@@ -239,8 +253,8 @@ impl JsonlSessionRepository {
         }
         hash = hash_more(hash, &encoded);
         let length = cursor.valid_len + u64::from(cursor.needs_separator) + encoded.len() as u64;
-        session.apply(transaction, revision, timestamp);
-        session.storage = Some(cursor_for(path, length, length, false, hash));
+        session.apply_transaction(transaction, revision, timestamp)?;
+        attach_cursor(session, cursor_for(path, length, length, false, hash));
         Ok(None)
     }
     fn read_backup(&self, path: &Path) -> Result<Vec<u8>> {
@@ -271,21 +285,24 @@ impl SessionRepository for JsonlSessionRepository {
         file.write_all(&bytes)?;
         file.sync_all()?;
         sync_directory(&self.root)?;
-        let mut session = Session::empty(metadata);
-        session.storage = Some(cursor_for(
-            path,
-            bytes.len() as u64,
-            bytes.len() as u64,
-            false,
-            fingerprint(&bytes),
-        ));
+        let mut session = Session::from_entries(metadata, Vec::new())?;
+        attach_cursor(
+            &mut session,
+            cursor_for(
+                path,
+                bytes.len() as u64,
+                bytes.len() as u64,
+                false,
+                fingerprint(&bytes),
+            ),
+        );
         Ok(session)
     }
     fn open(&self, id: &str) -> Result<Session> {
         let _metadata = self.metadata_lock(id, false)?;
         let path = self.find(id)?;
         let session = load_bytes(&path, &self.read(&path)?)?;
-        ensure!(session.metadata.id == id, "session identity changed");
+        ensure!(session.metadata().id == id, "session identity changed");
         Ok(session)
     }
     fn list(&self, cwd: &Path) -> Result<Vec<SessionInfo>> {
@@ -296,7 +313,7 @@ impl SessionRepository for JsonlSessionRepository {
                 continue;
             };
             match self.open(&id) {
-                Ok(session) if session.metadata.cwd == cwd => {
+                Ok(session) if session.metadata().cwd == cwd => {
                     sessions.push(SessionInfo::from(&session))
                 }
                 Ok(_) => {}
@@ -310,19 +327,19 @@ impl SessionRepository for JsonlSessionRepository {
         self.commit_inner(session, transaction).map(|_| ())
     }
     fn acquire_run(&self, session: &mut Session) -> Result<SessionRunLease> {
-        let _metadata = self.metadata_lock(&session.metadata.id, true)?;
-        let path = self.find(&session.metadata.id)?;
+        let _metadata = self.metadata_lock(&session.metadata().id, true)?;
+        let path = self.find(&session.metadata().id)?;
         ensure!(
             Some(path.as_path()) == session.path(),
             "session path changed"
         );
-        let mut file = self.run_file(&session.metadata.id)?;
+        let mut file = self.run_file(&session.metadata().id)?;
         FileExt::try_lock_exclusive(&file).context("session already has an active run")?;
         let token = Uuid::new_v4().to_string();
         file.set_len(0)?;
         file.write_all(token.as_bytes())?;
         file.flush()?;
-        session.run_token = Some(token);
+        session.attach_run_token(Some(token));
         Ok(Box::new(Lock(file)))
     }
     fn delete(&self, id: &str) -> Result<()> {
@@ -333,14 +350,14 @@ impl SessionRepository for JsonlSessionRepository {
         sync_directory(&self.root)
     }
     fn migrate(&self, session: &mut Session) -> Result<Option<PathBuf>> {
-        if session.metadata.version == SESSION_VERSION {
+        if session.metadata().version == SESSION_VERSION {
             return Ok(None);
         }
         self.commit_inner(
             session,
             SessionTransaction {
                 entries: Vec::new(),
-                leaf_id: session.metadata.leaf_id.clone(),
+                leaf_id: session.metadata().leaf_id.clone(),
             },
         )
     }
@@ -377,6 +394,9 @@ fn load_bytes(path: &Path, bytes: &[u8]) -> Result<Session> {
     let mut offset = 0;
     let mut valid_len = 0;
     let mut session: Option<Session> = None;
+    let mut legacy_entries = Vec::new();
+    let mut legacy_leaf = None;
+    let mut legacy_updated = 0;
     for raw in bytes.split_inclusive(|byte| *byte == b'\n') {
         let last = offset + raw.len() == bytes.len();
         let parsed = serde_json::from_slice::<Value>(raw);
@@ -401,45 +421,46 @@ fn load_bytes(path: &Path, bytes: &[u8]) -> Result<Session> {
                 );
                 validate_id(&id)?;
                 ensure!(cwd.is_absolute(), "session workspace must be absolute");
-                session = Some(Session::empty(SessionMetadata {
-                    version,
-                    id,
-                    cwd,
-                    created_at,
-                    updated_at: created_at,
-                    title: None,
-                    leaf_id: None,
-                    revision: 0,
-                }));
+                legacy_updated = created_at;
+                session = Some(Session::from_entries(
+                    SessionMetadata {
+                        version,
+                        id,
+                        cwd,
+                        created_at,
+                        updated_at: created_at,
+                        title: None,
+                        leaf_id: None,
+                        revision: 0,
+                    },
+                    Vec::new(),
+                )?);
             }
             StoredRecord::Message {
                 id,
                 created_at,
                 message,
             } => {
-                let session = session
-                    .as_mut()
+                let current = session
+                    .as_ref()
                     .context("first record is not a session header")?;
                 ensure!(
-                    session.metadata.version < SESSION_VERSION,
+                    current.metadata().version < SESSION_VERSION,
                     "legacy record in v3 log"
                 );
-                let message = if session.metadata.version == 1 {
+                let message = if current.metadata().version == 1 {
                     super::legacy::decode(message)?
                 } else {
                     serde_json::from_value(message)?
                 };
-                let transaction = SessionTransaction {
-                    entries: vec![SessionEntry {
-                        id: id.clone(),
-                        parent_id: session.metadata.leaf_id.clone(),
-                        created_at,
-                        data: SessionEntryData::Message { message },
-                    }],
-                    leaf_id: Some(id),
-                };
-                session.validate(&transaction)?;
-                session.apply(transaction, 0, session.metadata.updated_at.max(created_at));
+                legacy_entries.push(SessionEntry {
+                    id: id.clone(),
+                    parent_id: legacy_leaf,
+                    created_at,
+                    data: SessionEntryData::Message { message },
+                });
+                legacy_leaf = Some(id);
+                legacy_updated = legacy_updated.max(created_at);
             }
             StoredRecord::Transaction {
                 revision,
@@ -448,11 +469,11 @@ fn load_bytes(path: &Path, bytes: &[u8]) -> Result<Session> {
                 leaf_id,
                 checksum,
             } => {
-                let session = session
+                let current = session
                     .as_mut()
                     .context("first record is not a session header")?;
                 ensure!(
-                    session.metadata.version == SESSION_VERSION,
+                    current.metadata().version == SESSION_VERSION,
                     "transaction in legacy log"
                 );
                 let marker = b",\"checksum\":\"";
@@ -469,26 +490,33 @@ fn load_bytes(path: &Path, bytes: &[u8]) -> Result<Session> {
                     u64::from_str_radix(&checksum, 16).ok() == Some(fingerprint(&raw[..position])),
                     "session transaction checksum mismatch"
                 );
-                ensure!(
-                    session.metadata.revision.checked_add(1) == Some(revision),
-                    "non-monotonic session revision"
-                );
-                let transaction = SessionTransaction { entries, leaf_id };
-                session.validate(&transaction)?;
-                session.apply(transaction, revision, updated_at);
+                current.apply_transaction(
+                    SessionTransaction { entries, leaf_id },
+                    revision,
+                    updated_at,
+                )?;
             }
         }
         offset += raw.len();
         valid_len = offset;
     }
     let mut session = session.context("empty session file")?;
-    session.storage = Some(cursor_for(
-        path.to_path_buf(),
-        bytes.len() as u64,
-        valid_len as u64,
-        valid_len == bytes.len() && !bytes.ends_with(b"\n"),
-        fingerprint(bytes),
-    ));
+    if session.metadata().version < SESSION_VERSION {
+        let mut metadata = session.metadata().clone();
+        metadata.leaf_id = legacy_leaf;
+        metadata.updated_at = legacy_updated;
+        session = Session::from_entries(metadata, legacy_entries)?;
+    }
+    attach_cursor(
+        &mut session,
+        cursor_for(
+            path.to_path_buf(),
+            bytes.len() as u64,
+            valid_len as u64,
+            valid_len == bytes.len() && !bytes.ends_with(b"\n"),
+            fingerprint(bytes),
+        ),
+    );
     Ok(session)
 }
 fn read_header(path: &Path) -> Result<(String, u32, u64, PathBuf)> {
@@ -727,7 +755,7 @@ mod tests {
 #[cfg(test)]
 mod compatibility_tests {
     use super::*;
-    use crate::model::{ContentBlock, ImageSource};
+    use aicoder_core::model::{ContentBlock, ImageSource};
     use serde_json::json;
 
     #[test]
