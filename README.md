@@ -33,13 +33,14 @@ cover branches, durable tool checkpoints, interrupted turns and backed-up v1/v2 
 [RunHandle controls](docs/run-control.md) add bounded steer/follow-up queues and scoped
 asynchronous approvals over the same execution loop. [Versioned events](docs/events.md)
 provide bounded subscriptions, explicit overflow/disconnect reports, and structured
-bench traces. S0–S2 are complete; S3 shared runtime configuration and [project resources](docs/project-resources.md) are
-available; [concrete tools and storage](docs/runtime-backends.md) now live in runtime.
-[Bounded discovery/read/search pages](docs/file-tools.md) are available;
-[prepared edits and approval diffs](docs/file-mutations.md) are available.
-[Bounded shell execution](docs/shell-tools.md) is available; session approval improvements
-remain in progress. See [runtime settings](docs/runtime-configuration.md), including
-the explicit `--env-file` migration.
+bench traces. S0–S3 are complete on the verified Linux platform. Runtime provides
+[shared settings](docs/runtime-configuration.md), [project resources](docs/project-resources.md),
+[concrete tools/storage](docs/runtime-backends.md), [bounded read/search](docs/file-tools.md),
+[checked edits and diffs](docs/file-mutations.md), [shell supervision](docs/shell-tools.md)
+and [session tool grants](docs/approvals.md). Current work advances to S4 long-context
+management. See the settings guide for the explicit `--env-file` migration and
+[S3 acceptance](docs/s3-approvals-acceptance.md) for verification and cumulative costs.
+
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs
 request construction or session persistence. Both layers consume the single
@@ -80,7 +81,8 @@ a session, and `j`/`k` to navigate sessions. `n` creates a new conversation and
 `d` deletes the selected session after confirmation. During a run, Enter submits
 steering and Alt+Enter queues a follow-up. `Esc`
 cancels the active model request, approval, or tool execution. Approval dialogs
-accept `y` or `n`; `Ctrl-C` cancels an active turn or exits while idle. TUI logs
+accept `y` once, `s` for the displayed session/tool scope, or `n`;
+`/permissions` and `/revoke` inspect or clear grants while idle. `Ctrl-C` cancels an active turn or exits while idle. TUI logs
 are written to `$AICODER_HOME/tui.log` or `~/.aicoder/tui.log`.
 
 ## Verification

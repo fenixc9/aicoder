@@ -28,7 +28,15 @@ pub struct ToolInvocation {
 
 #[async_trait]
 pub trait ApprovalHandler: Send + Sync {
-    async fn approve(&self, invocation: &ToolInvocation) -> Result<bool>;
+    /// Legacy one-shot adapter; typed handlers can override `decide` instead.
+    async fn approve(&self, _invocation: &ToolInvocation) -> Result<bool> {
+        Ok(false)
+    }
+    async fn decide(&self, request: &ApprovalRequest<'_>) -> Result<ApprovalDecision> {
+        self.approve(request.invocation)
+            .await
+            .map(ApprovalDecision::from)
+    }
 }
 
 pub struct AllowAllApproval;
@@ -48,4 +56,43 @@ impl ApprovalHandler for DenyAllApproval {
     async fn approve(&self, _invocation: &ToolInvocation) -> Result<bool> {
         Ok(false)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalDecision {
+    Deny,
+    AllowOnce,
+    AllowSession,
+}
+impl ApprovalDecision {
+    pub fn is_allowed(self) -> bool {
+        matches!(self, Self::AllowOnce | Self::AllowSession)
+    }
+}
+impl From<bool> for ApprovalDecision {
+    fn from(allowed: bool) -> Self {
+        if allowed { Self::AllowOnce } else { Self::Deny }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalSource {
+    Handler,
+    RunHandle,
+    SessionGrant,
+}
+#[derive(Debug, serde::Serialize)]
+pub struct ApprovalRequest<'a> {
+    pub invocation: &'a ToolInvocation,
+    pub session: Option<super::ApprovalSessionInfo>,
+}
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ApprovalResolution {
+    pub decision: ApprovalDecision,
+    pub source: ApprovalSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<super::ApprovalSessionInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_id: Option<String>,
 }

@@ -13,7 +13,9 @@ use aicoder_core::{
         ReasoningStartedEvent, ToolCallEndedEvent, ToolExecutionEndedEvent,
     },
     session::{SessionEntryData, SessionRepository},
-    tools::{AllowAllApproval, ApprovalHandler, ToolInvocation},
+    tools::{
+        AllowAllApproval, ApprovalDecision, ApprovalHandler, ApprovalRequest, ApprovalSessions,
+    },
 };
 use aicoder_runtime::resources::ResourceSettings;
 use aicoder_runtime::{
@@ -138,13 +140,14 @@ struct ConsoleApproval;
 
 #[async_trait]
 impl ApprovalHandler for ConsoleApproval {
-    async fn approve(&self, invocation: &ToolInvocation) -> Result<bool> {
-        let invocation = invocation.clone();
+    async fn decide(&self, request: &ApprovalRequest<'_>) -> Result<ApprovalDecision> {
+        let invocation = request.invocation.clone();
+        let session = request.session.clone();
         let (sent, received) = tokio::sync::oneshot::channel();
         std::thread::Builder::new()
             .name("aicoder-approval".into())
             .spawn(move || {
-                let result = (|| -> Result<bool> {
+                let result = (|| -> Result<ApprovalDecision> {
                     if let Some(preview) = &invocation.preview {
                         eprintln!(
                             "\n{}\n{}",
@@ -158,15 +161,24 @@ impl ApprovalHandler for ConsoleApproval {
                             serde_json::to_string_pretty(&invocation.arguments)?
                         );
                     }
-                    eprint!("允许执行? [y/N] ");
+                    if let Some(session) = &session {
+                        eprintln!(
+                            "授权范围: 会话 {:?} / 工作区 {:?} / 工具 {} 的所有参数",
+                            session.session_id, session.workspace, invocation.name
+                        );
+                        eprint!("允许执行? [y 单次 / s 本会话此工具 / N 拒绝] ");
+                    } else {
+                        eprint!("允许执行? [y/N] ");
+                    }
                     io::stderr().flush()?;
 
                     let mut input = String::new();
                     io::stdin().read_line(&mut input)?;
-                    Ok(matches!(
-                        input.trim().to_ascii_lowercase().as_str(),
-                        "y" | "yes"
-                    ))
+                    Ok(match input.trim().to_ascii_lowercase().as_str() {
+                        "y" | "yes" => ApprovalDecision::AllowOnce,
+                        "s" if session.is_some() => ApprovalDecision::AllowSession,
+                        _ => ApprovalDecision::Deny,
+                    })
                 })();
                 let _ = sent.send(result);
             })
@@ -448,7 +460,8 @@ async fn main() -> Result<()> {
                     selection,
                     prompt,
                     handler,
-                    aicoder_core::TurnExecutionContext::new(),
+                    aicoder_core::TurnExecutionContext::new()
+                        .with_approval_sessions(ApprovalSessions::default()),
                 )
                 .await
         }

@@ -85,4 +85,5 @@ examples remain runnable without runtime. This completes the S3 extraction item;
 [Directory/glob and bounded read/search](file-tools.md) are now available.
 [Prepared editing and diff review](file-mutations.md) are also available.
 [Bounded shell capture and cleanup](shell-tools.md) are available.
-Session approval policies remain on the [roadmap](roadmap.md).
+[Session tool authorization](approvals.md) completes S3. Long-context work continues
+on the [roadmap](roadmap.md).

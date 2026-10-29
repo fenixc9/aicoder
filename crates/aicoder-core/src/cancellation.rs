@@ -13,6 +13,8 @@ const DEFAULT_REASON: &str = "Turn execution was cancelled";
 #[derive(Clone)]
 pub struct TurnExecutionContext {
     pub(crate) control: Option<Arc<crate::control::ControlState>>,
+    pub(crate) approval_sessions: Option<crate::tools::ApprovalSessions>,
+    pub(crate) approval_session: Option<crate::tools::ApprovalSession>,
     token: CancellationToken,
     reason: Arc<Mutex<Option<Arc<str>>>>,
     parent: Option<Arc<TurnExecutionContext>>,
@@ -22,12 +24,36 @@ impl TurnExecutionContext {
     pub fn new() -> Self {
         Self {
             control: None,
+            approval_sessions: None,
+            approval_session: None,
             token: CancellationToken::new(),
             reason: Arc::new(Mutex::new(None)),
             parent: None,
         }
     }
 
+    pub fn with_approval_sessions(mut self, sessions: crate::tools::ApprovalSessions) -> Self {
+        self.approval_sessions = Some(sessions);
+        self.approval_session = None;
+        self
+    }
+    pub fn with_approval_session(mut self, session: crate::tools::ApprovalSession) -> Self {
+        self.approval_session = Some(session);
+        self.approval_sessions = None;
+        self
+    }
+    pub(crate) fn bind_approvals(
+        &mut self,
+        workspace: &std::path::Path,
+        id: &str,
+    ) -> Result<(), crate::tools::ApprovalError> {
+        if let Some(session) = &self.approval_session {
+            session.matches(workspace, id)?;
+        } else if let Some(sessions) = &self.approval_sessions {
+            self.approval_session = Some(sessions.session(workspace, id)?);
+        }
+        Ok(())
+    }
     pub fn cancel(&self, reason: impl Into<Arc<str>>) {
         let mut stored = self
             .reason
@@ -60,6 +86,8 @@ impl TurnExecutionContext {
     pub fn child(&self) -> Self {
         Self {
             control: self.control.clone(),
+            approval_sessions: self.approval_sessions.clone(),
+            approval_session: self.approval_session.clone(),
             token: self.token.child_token(),
             reason: Arc::new(Mutex::new(None)),
             parent: Some(Arc::new(self.clone())),

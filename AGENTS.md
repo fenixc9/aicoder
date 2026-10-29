@@ -16,6 +16,10 @@
   later committed. Preserve conflict checks and cleanup on denial/cancellation.
   Shell capture must stay bounded while draining output; retain leader ownership until
   group signalling, and keep dropped-future cleanup independent of runtime shutdown.
+  Session grants are explicit, ephemeral host authority: bind workspace/session/tool
+  registry, keep caches bounded, and never restore authority from history or snapshots.
+  Revocation must expire pending questions; cancellation/steering and cache eviction
+  must not create late grants. Frontends submit choices, not authorization rules.
   Backend checkpoints must stay opaque, immutable and out of serialized domain history.
   Project settings may select trusted profiles but must not define credential routing
   or private storage paths. Keep credential values out of settings snapshots/errors.

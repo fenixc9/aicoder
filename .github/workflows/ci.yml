@@ -48,6 +48,8 @@ jobs:
         run: cargo run --locked -p aicoder-runtime --example offline_edits
       - name: Bounded shell and timeout recovery example
         run: cargo run --locked -p aicoder-runtime --example offline_shell
+      - name: Scoped session approval example
+        run: cargo run --locked -p aicoder-runtime --example offline_approvals
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

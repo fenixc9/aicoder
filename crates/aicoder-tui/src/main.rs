@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use aicoder_core::{RunControlConfig, RunHandle, RunInputKind, TurnExecutionContext};
+use aicoder_core::{RunControlConfig, RunHandle, RunInputKind};
 use aicoder_runtime::resources::ResourceSettings;
 use aicoder_runtime::{
     ConfigDiscovery, ContextSettings, Runtime, RuntimeOverrides, Setting, Settings,
@@ -223,6 +223,14 @@ fn handle_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) -> Resul
             KeyCode::Char('y') | KeyCode::Char('Y') => app.resolve_approval(true),
             KeyCode::Char('n') | KeyCode::Char('N') => app.resolve_approval(false),
             KeyCode::Esc => app.cancel("Approval cancelled"),
+            KeyCode::Char('s') | KeyCode::Char('S')
+                if app
+                    .approval
+                    .as_ref()
+                    .is_some_and(|approval| approval.session.is_some()) =>
+            {
+                app.resolve_approval_decision(aicoder_core::tools::ApprovalDecision::AllowSession)
+            }
             KeyCode::PageDown => {
                 if let Some(approval) = &mut app.approval {
                     approval.scroll = approval.scroll.saturating_add(8);
@@ -333,6 +341,46 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                     }
                     return;
                 }
+                Some(Ok(commands::SlashCommand::Permissions | commands::SlashCommand::Revoke)) => {
+                    if app.is_running() {
+                        app.input.replace(prompt);
+                        app.timeline.push(TimelineItem::Notice("Wait for the current run, or cancel it before changing session permissions.".into()));
+                    } else if matches!(
+                        commands::parse(&prompt),
+                        Some(Ok(commands::SlashCommand::Revoke))
+                    ) {
+                        runtime.revoke_permissions(&app.session_selection);
+                        app.timeline.push(TimelineItem::Notice(
+                            "Session grants cleared. New operations require approval.".into(),
+                        ));
+                    } else {
+                        let summary = runtime.permissions(&app.session_selection).map_or_else(
+                            || "No session grants.".into(),
+                            |snapshot| {
+                                if snapshot.grants.is_empty() {
+                                    return "No session grants.".into();
+                                }
+                                let grants = snapshot
+                                    .grants
+                                    .iter()
+                                    .map(|grant| {
+                                        format!(
+                                            "{} ({:?}, all arguments)",
+                                            grant.tool, grant.capability
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                format!(
+                                    "Session {:?} / {:?}\n{}",
+                                    snapshot.session.session_id, snapshot.session.workspace, grants
+                                )
+                            },
+                        );
+                        app.timeline.push(TimelineItem::Notice(summary));
+                    }
+                    return;
+                }
                 Some(Ok(commands::SlashCommand::Reload)) => {
                     if app.is_running() {
                         app.input.replace(prompt);
@@ -373,7 +421,7 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                 return;
             }
             let selection = app.session_selection.clone();
-            let context = TurnExecutionContext::new();
+            let context = runtime.execution_context();
             let (handle, control) = RunHandle::channel(
                 context.clone(),
                 RunControlConfig {
@@ -426,7 +474,12 @@ fn handle_slash_command(app: &mut App, input: &str) -> bool {
     };
     match command {
         Ok(commands::SlashCommand::Exit) => app.should_quit = true,
-        Ok(commands::SlashCommand::Resources | commands::SlashCommand::Reload) => {}
+        Ok(
+            commands::SlashCommand::Resources
+            | commands::SlashCommand::Reload
+            | commands::SlashCommand::Permissions
+            | commands::SlashCommand::Revoke,
+        ) => {}
         Err(error) => {
             app.timeline.push(TimelineItem::Error(error.to_string()));
             app.scroll_back = 0;
@@ -456,6 +509,9 @@ fn init_logging(root: &Path) -> Result<()> {
 fn _is_inside(path: &Path, root: &Path) -> bool {
     path.starts_with(root)
 }
+
+#[cfg(test)]
+use aicoder_core::TurnExecutionContext;
 
 #[cfg(test)]
 mod tests {

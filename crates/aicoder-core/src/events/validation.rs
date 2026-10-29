@@ -80,6 +80,59 @@ impl EventTraceValidator {
                 "session metadata without SessionBound"
             ),
         }
+        let scope = match &envelope.event {
+            AgentRawEvent::ToolApprovalRequested { session, .. } => session.as_deref(),
+            AgentRawEvent::RunApprovalRequested { request } => request.session.as_ref(),
+            AgentRawEvent::ToolApprovalResolved {
+                approved,
+                resolution: Some(resolution),
+                ..
+            } => {
+                use crate::tools::{ApprovalDecision, ApprovalSource};
+                ensure!(
+                    *approved == resolution.decision.is_allowed(),
+                    "approval decision disagrees with its result"
+                );
+                if resolution.decision == ApprovalDecision::AllowSession {
+                    ensure!(
+                        resolution.session.is_some()
+                            && resolution
+                                .grant_id
+                                .as_ref()
+                                .is_some_and(|id| !id.is_empty()),
+                        "session authorization is missing its scope/grant"
+                    );
+                } else {
+                    ensure!(
+                        resolution.grant_id.is_none(),
+                        "one-shot/denied approval has a session grant"
+                    );
+                }
+                if resolution.source == ApprovalSource::SessionGrant {
+                    ensure!(
+                        resolution.decision == ApprovalDecision::AllowSession,
+                        "cached authorization has the wrong decision"
+                    );
+                }
+                resolution.session.as_ref()
+            }
+            _ => None,
+        };
+        if let Some(scope) = scope {
+            ensure!(
+                !scope.closed
+                    && !scope.scope_id.is_empty()
+                    && !scope.session_id.is_empty()
+                    && scope.workspace.is_absolute(),
+                "invalid approval scope metadata"
+            );
+            if let Some((session, _)) = &self.session {
+                ensure!(
+                    &scope.session_id == session,
+                    "approval scope differs from bound session"
+                );
+            }
+        }
         match &envelope.event {
             AgentRawEvent::AgentStarted { .. } => ensure!(expected == 1, "duplicate AgentStarted"),
             AgentRawEvent::StateChanged { transition } => {

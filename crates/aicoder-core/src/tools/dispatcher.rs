@@ -350,6 +350,25 @@ impl ToolDispatcher {
             preview,
         };
 
+        let ticket = if invocation.capability != ToolCapability::ReadOnly {
+            match context
+                .and_then(|context| context.approval_session.as_ref())
+                .map(|session| session.ticket(self.context.workspace_root()))
+                .transpose()
+            {
+                Ok(ticket) => ticket,
+                Err(error) => {
+                    return Ok(failed_tool_message(
+                        events,
+                        call,
+                        limits,
+                        ToolFailure::new(error.code(), error.to_string()),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
         if invocation.capability != ToolCapability::ReadOnly {
             emit_event(
                 events,
@@ -358,89 +377,90 @@ impl ToolDispatcher {
                     name: invocation.name.clone().into(),
                     capability: invocation.capability,
                     preview: invocation.preview.clone().map(Arc::new),
+                    session: ticket.as_ref().map(|ticket| Arc::new(ticket.info.clone())),
                 },
             );
+            let cached = ticket
+                .as_ref()
+                .and_then(|ticket| ticket.lookup(self.registry.authority, &invocation));
             let approval = async {
-                if let Some(control) = context
+                let request = super::ApprovalRequest {
+                    invocation: &invocation,
+                    session: ticket.as_ref().map(|ticket| ticket.info.clone()),
+                };
+                let (decision, source) = if cached.is_some() {
+                    (
+                        super::ApprovalDecision::AllowSession,
+                        super::ApprovalSource::SessionGrant,
+                    )
+                } else if let Some(control) = context
                     .and_then(|context| context.control.as_ref())
                     .filter(|control| control.handle_approvals())
                 {
-                    control.approve(&invocation, events).await
+                    (
+                        control.approve(&request, events).await?,
+                        super::ApprovalSource::RunHandle,
+                    )
                 } else {
-                    self.approval.approve(&invocation).await
+                    (
+                        self.approval.decide(&request).await?,
+                        super::ApprovalSource::Handler,
+                    )
+                };
+                if let Some(context) = context {
+                    if context.is_cancelled() {
+                        return Err(context.error().into());
+                    }
+                    if context
+                        .control
+                        .as_ref()
+                        .is_some_and(|control| control.has_steering())
+                    {
+                        return Err(crate::control::SteeringRequested.into());
+                    }
                 }
+                let grant_id = match &ticket {
+                    Some(ticket) => ticket.apply(self.registry.authority, &invocation, decision)?,
+                    None if decision == super::ApprovalDecision::AllowSession => {
+                        return Err(super::ApprovalError::SessionUnavailable.into());
+                    }
+                    None => None,
+                };
+                Ok::<_, anyhow::Error>(super::ApprovalResolution {
+                    decision,
+                    source,
+                    session: request.session,
+                    grant_id,
+                })
             };
             let approval = match context {
-                Some(context) => tokio::select! {
-                    biased;
-                    cancelled = context.cancelled() => Err(anyhow::Error::from(cancelled)),
-                    _=async {match &context.control {Some(control)=>control.steering_requested().await,None=>std::future::pending().await}}=>Err(crate::control::SteeringRequested.into()),
-                    approval = approval => approval,
+                Some(context) => tokio::select! {biased;
+                    cancelled=context.cancelled()=>Err(anyhow::Error::from(cancelled)),
+                    _=async{match &context.control{Some(control)=>control.steering_requested().await,None=>std::future::pending().await}}=>Err(crate::control::SteeringRequested.into()),
+                    revoked=async{match &ticket { Some(ticket)=>ticket.revoked().await, None=>std::future::pending().await }}=>Err(anyhow::Error::from(revoked)),
+                    approval=approval=>approval,
                 },
                 None => approval.await,
             };
             match approval {
-                Ok(true) => emit_event(
-                    events,
-                    AgentRawEvent::ToolApprovalResolved {
-                        call_id: invocation.call_id.clone().into(),
-                        approved: true,
-                    },
-                ),
-                Ok(false) => {
+                Ok(resolution) => {
+                    let approved = resolution.decision.is_allowed();
                     emit_event(
                         events,
                         AgentRawEvent::ToolApprovalResolved {
                             call_id: invocation.call_id.clone().into(),
-                            approved: false,
+                            approved,
+                            resolution: Some(Arc::new(resolution)),
                         },
                     );
-                    return Ok(failed_tool_message(
-                        events,
-                        call,
-                        limits,
-                        ToolFailure::new("approval_denied", "User denied tool execution"),
-                    ));
-                }
-                Err(error)
-                    if error
-                        .downcast_ref::<crate::control::SteeringRequested>()
-                        .is_some() =>
-                {
-                    emit_event(
-                        events,
-                        AgentRawEvent::ToolApprovalResolved {
-                            call_id: invocation.call_id.clone().into(),
-                            approved: false,
-                        },
-                    );
-                    return Ok(failed_tool_message(
-                        events,
-                        call,
-                        limits,
-                        ToolFailure::new(
-                            "steered_before_execution",
-                            "Approval was superseded by steering; tool was not executed",
-                        ),
-                    ));
-                }
-                Err(error) if error.downcast_ref::<TurnCancelled>().is_some() => {
-                    emit_event(
-                        events,
-                        AgentRawEvent::ToolApprovalResolved {
-                            call_id: invocation.call_id.clone().into(),
-                            approved: false,
-                        },
-                    );
-                    emit_event(
-                        events,
-                        AgentRawEvent::ToolExecutionEnded {
-                            call_id: call.id.clone().into(),
-                            name: call.name.clone().into(),
-                            outcome: ToolExecutionOutcome::Cancelled.into(),
-                        },
-                    );
-                    return Err(error);
+                    if !approved {
+                        return Ok(failed_tool_message(
+                            events,
+                            call,
+                            limits,
+                            ToolFailure::new("approval_denied", "User denied tool execution"),
+                        ));
+                    }
                 }
                 Err(error) => {
                     emit_event(
@@ -448,16 +468,46 @@ impl ToolDispatcher {
                         AgentRawEvent::ToolApprovalResolved {
                             call_id: invocation.call_id.clone().into(),
                             approved: false,
+                            resolution: None,
                         },
                     );
-                    return Ok(failed_tool_message(
-                        events,
-                        call,
-                        limits,
-                        ToolFailure::new("approval_failed", error.to_string()),
-                    ));
+                    if error.downcast_ref::<TurnCancelled>().is_some() {
+                        emit_event(
+                            events,
+                            AgentRawEvent::ToolExecutionEnded {
+                                call_id: call.id.clone().into(),
+                                name: call.name.clone().into(),
+                                outcome: ToolExecutionOutcome::Cancelled.into(),
+                            },
+                        );
+                        return Err(error);
+                    }
+                    let failure = if error
+                        .downcast_ref::<crate::control::SteeringRequested>()
+                        .is_some()
+                    {
+                        ToolFailure::new(
+                            "steered_before_execution",
+                            "Approval was superseded by steering; tool was not executed",
+                        )
+                    } else if let Some(error) = error.downcast_ref::<super::ApprovalError>() {
+                        ToolFailure::new(error.code(), error.to_string())
+                    } else {
+                        ToolFailure::new("approval_failed", error.to_string())
+                    };
+                    return Ok(failed_tool_message(events, call, limits, failure));
                 }
             }
+        }
+        if let Some(ticket) = &ticket
+            && let Err(error) = ticket.current()
+        {
+            return Ok(failed_tool_message(
+                events,
+                call,
+                limits,
+                ToolFailure::new(error.code(), error.to_string()),
+            ));
         }
 
         if context.is_some_and(|context| {

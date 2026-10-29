@@ -528,6 +528,16 @@
         },
         "invocation": {
           "$ref": "#/$defs/invocation"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/approval_session"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -1899,6 +1909,16 @@
                   "type": "null"
                 }
               ]
+            },
+            "session": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/approval_session"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -1919,6 +1939,16 @@
             },
             "approved": {
               "type": "boolean"
+            },
+            "resolution": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/approval_resolution"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
@@ -2011,6 +2041,89 @@
         "body",
         "format",
         "truncated"
+      ]
+    },
+    "approval_session": {
+      "type": "object",
+      "properties": {
+        "scope_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "workspace": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "closed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "scope_id",
+        "session_id",
+        "workspace",
+        "epoch",
+        "closed"
+      ]
+    },
+    "approval_decision": {
+      "enum": [
+        "deny",
+        "allow_once",
+        "allow_session"
+      ]
+    },
+    "approval_source": {
+      "enum": [
+        "handler",
+        "run_handle",
+        "session_grant"
+      ]
+    },
+    "approval_resolution": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "$ref": "#/$defs/approval_decision"
+        },
+        "source": {
+          "$ref": "#/$defs/approval_source"
+        },
+        "session": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/approval_session"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "grant_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "uuid"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "decision",
+        "source"
       ]
     }
   }

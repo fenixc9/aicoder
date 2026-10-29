@@ -1842,7 +1842,7 @@ mod tests {
         let events = handler.0.lock().unwrap();
         assert!(events.iter().any(|event| matches!(
             event,
-            AgentRawEvent::ToolApprovalResolved { call_id, approved: false }
+            AgentRawEvent::ToolApprovalResolved { call_id, approved: false, .. }
                 if call_id.as_ref() == "call-approval"
         )));
         assert!(events.iter().any(|event| matches!(

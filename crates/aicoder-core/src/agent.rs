@@ -220,7 +220,7 @@ impl Agent {
         handler: Arc<dyn AgentEventHandler>,
         context: TurnExecutionContext,
     ) -> AgentTurnOutcome {
-        let context = context.child();
+        let mut context = context.child();
         let scope = self
             .turn_executor
             .start_scope(&self.config.model, handler, &context);
@@ -236,6 +236,7 @@ impl Agent {
             let mut session = select_session(repository, workspace, selection)?;
             metadata = Some(session.metadata().clone());
             ensure_session_workspace(&session, workspace)?;
+            context.bind_approvals(workspace, &session.metadata().id)?;
             if let Some(control) = &context.control {
                 control.session(session.metadata().id.clone());
             }

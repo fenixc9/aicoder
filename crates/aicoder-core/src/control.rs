@@ -2,7 +2,7 @@
 use crate::{
     RunId, TurnExecutionContext,
     model::{ContentBlock, Message, MessageRole},
-    tools::ToolInvocation,
+    tools::{ApprovalDecision, ApprovalRequest, ApprovalSessionInfo, ToolInvocation},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -65,6 +65,8 @@ pub struct ApprovalRequestId {
 pub struct PendingRunApproval {
     pub id: ApprovalRequestId,
     pub invocation: ToolInvocation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<ApprovalSessionInfo>,
 }
 #[derive(Debug, Clone)]
 pub struct RunControlSnapshot {
@@ -83,6 +85,7 @@ pub enum RunControlError {
     InvalidInput,
     UnknownApproval,
     InvalidConfig,
+    InvalidApprovalDecision,
 }
 impl fmt::Display for RunControlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -93,6 +96,9 @@ impl fmt::Display for RunControlError {
             Self::InvalidInput => "control input must contain user text or images",
             Self::UnknownApproval => "approval is unknown, expired, or already answered",
             Self::InvalidConfig => "run input limits must be positive",
+            Self::InvalidApprovalDecision => {
+                "session authorization is unavailable for this request"
+            }
         })
     }
 }
@@ -118,7 +124,7 @@ struct Queued {
 }
 struct Approval {
     request: PendingRunApproval,
-    response: oneshot::Sender<bool>,
+    response: oneshot::Sender<ApprovalDecision>,
 }
 struct State {
     status: RunControlStatus,
@@ -315,6 +321,13 @@ impl RunHandle {
         id: &ApprovalRequestId,
         approved: bool,
     ) -> Result<(), RunControlError> {
+        self.respond_approval_decision(id, approved.into())
+    }
+    pub fn respond_approval_decision(
+        &self,
+        id: &ApprovalRequestId,
+        decision: ApprovalDecision,
+    ) -> Result<(), RunControlError> {
         let mut state = self.shared.state.lock().expect("run controls poisoned");
         if self.context.is_cancelled() || state.status != RunControlStatus::Running {
             return Err(RunControlError::Closed);
@@ -326,10 +339,15 @@ impl RunHandle {
         {
             return Err(RunControlError::UnknownApproval);
         }
+        if decision == ApprovalDecision::AllowSession
+            && state.approval.as_ref().unwrap().request.session.is_none()
+        {
+            return Err(RunControlError::InvalidApprovalDecision);
+        }
         let pending = state.approval.take().unwrap();
         let result = pending
             .response
-            .send(approved)
+            .send(decision)
             .map_err(|_| RunControlError::UnknownApproval);
         self.shared.update(&mut state);
         result
@@ -442,9 +460,9 @@ impl ControlState {
     }
     pub(crate) async fn approve(
         self: &Arc<Self>,
-        invocation: &ToolInvocation,
+        approval: &ApprovalRequest<'_>,
         events: Option<&crate::events::AgentEventEmitter>,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<ApprovalDecision> {
         let (response, receive) = oneshot::channel();
         let id;
         let request;
@@ -468,7 +486,8 @@ impl ControlState {
             };
             request = PendingRunApproval {
                 id: id.clone(),
-                invocation: invocation.clone(),
+                invocation: approval.invocation.clone(),
+                session: approval.session.clone(),
             };
             state.approval = Some(Approval {
                 request: request.clone(),
@@ -485,7 +504,7 @@ impl ControlState {
             shared: self.clone(),
             id,
         };
-        Ok(receive.await.unwrap_or(false))
+        Ok(receive.await.unwrap_or(ApprovalDecision::Deny))
     }
 }
 impl ControlState {

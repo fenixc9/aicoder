@@ -101,7 +101,8 @@ An approval ID contains run identity and a unique sequence, independent of model
 call IDs. A model reusing `call_id` cannot make an old approval apply to a later
 operation. Foreign, already answered and expired requests fail. Snapshot lookup and
 `RunApprovalRequested` events expose the exact invocation. A decision is a single
-oneshot response; no session-wide grant is created. Rejection feeds an approval-denied
+oneshot response. The bool adapter permits only that invocation; explicit typed decisions
+can create a host-bound [session tool grant](approvals.md). Rejection feeds an approval-denied
 tool result to the model. Handle mode replaces the configured handler only for this
 explicitly configured run. Read-only tools still need no approval.
 
@@ -146,7 +147,8 @@ their inbox before submission. See [session recovery](sessions.md) for uncertain
 
 TUI now uses the core handle for approvals and control. While a run is active, type
 in the input box and press Enter to steer or Alt+Enter to queue a follow-up. Esc/Ctrl-C
-still cancel. Approval modals keep their y/n decision UI. Rejected submissions retain
+still cancel. Approval modals offer y once, s for the shown session/tool scope, and n deny.
+Idle /permissions and /revoke inspect or clear grants. Rejected submissions retain
 the input text; queued and applied inputs have distinct timeline notices, and pending
 inputs are shown on interruption/session reload. SDK hosts can deliver controls during
 approval without using the modal. Full terminal history/multiline and CLI RPC controls

@@ -178,3 +178,10 @@ approval invocations. The version stays 1; absent previews remain valid. The
 [approval trace](protocol/approval-preview-v1-trace.jsonl) contains full success/conflict
 runs, and the default schema checker validates it alongside the original fixture.
 See [prepare/review/commit](file-mutations.md) for limits and source-data handling.
+
+
+Session authorization adds optional scope/resolution metadata to approval records,
+while retaining event version 1 and the existing approved boolean. The default schema
+checker now includes [creation/reuse/revocation/denial](protocol/session-approvals-v1-trace.jsonl).
+[Session authorization](approvals.md) describes source attribution and validation;
+serialized events and snapshots never restore permission state.

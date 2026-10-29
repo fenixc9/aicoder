@@ -53,6 +53,7 @@ pub struct PendingApproval {
     pub id: ApprovalRequestId,
     pub scroll: u16,
     pub show_arguments: bool,
+    pub session: Option<aicoder_core::tools::ApprovalSessionInfo>,
 }
 
 #[derive(Default)]
@@ -298,11 +299,16 @@ impl App {
         accepted
     }
     pub fn resolve_approval(&mut self, approved: bool) {
-        if let Some(approval) = self.approval.take()
+        self.resolve_approval_decision(approved.into());
+    }
+    pub fn resolve_approval_decision(&mut self, decision: aicoder_core::tools::ApprovalDecision) {
+        if let Some(approval) = &self.approval
             && let Some(handle) = &self.active_handle
-            && let Err(error) = handle.respond_approval(&approval.id, approved)
         {
-            self.timeline.push(TimelineItem::Notice(error.to_string()));
+            match handle.respond_approval_decision(&approval.id, decision) {
+                Ok(()) => self.approval = None,
+                Err(error) => self.timeline.push(TimelineItem::Notice(error.to_string())),
+            }
         }
     }
 
@@ -354,6 +360,7 @@ impl App {
                         id: request.id.clone(),
                         scroll: 0,
                         show_arguments: false,
+                        session: request.session.clone(),
                         invocation: request.invocation.clone(),
                     });
                 }
@@ -860,7 +867,7 @@ mod tests {
     fn slash_menu_tracks_filtering_selection_and_dismissal() {
         let mut app = App::new(Vec::new());
         app.input.insert('/');
-        assert_eq!(app.slash_suggestions().len(), 3);
+        assert_eq!(app.slash_suggestions().len(), 5);
         assert_eq!(app.selected_slash_command().unwrap().name, "exit");
 
         app.dismiss_slash_menu();

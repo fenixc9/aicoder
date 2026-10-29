@@ -5,6 +5,8 @@ pub enum SlashCommand {
     Exit,
     Resources,
     Reload,
+    Permissions,
+    Revoke,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +43,20 @@ const COMMANDS: &[CommandSpec] = &[
         name: "reload",
         usage: "/reload",
         description: "Reload resources for the next run",
+        arguments: ArgumentPolicy::None,
+    },
+    CommandSpec {
+        command: SlashCommand::Permissions,
+        name: "permissions",
+        usage: "/permissions",
+        description: "Show current session tool grants",
+        arguments: ArgumentPolicy::None,
+    },
+    CommandSpec {
+        command: SlashCommand::Revoke,
+        name: "revoke",
+        usage: "/revoke",
+        description: "Revoke current session tool grants",
         arguments: ArgumentPolicy::None,
     },
 ];
@@ -109,7 +125,7 @@ mod tests {
 
     #[test]
     fn registry_exposes_metadata_for_every_command() {
-        assert_eq!(all().len(), 3);
+        assert_eq!(all().len(), 5);
         assert_eq!(all()[0].usage, "/exit");
         assert!(!all()[0].description.is_empty());
     }
@@ -121,7 +137,7 @@ mod tests {
                 .iter()
                 .map(|spec| spec.name)
                 .collect::<Vec<_>>(),
-            vec!["exit", "resources", "reload"]
+            vec!["exit", "resources", "reload", "permissions", "revoke"]
         );
         assert_eq!(
             suggestions("/ex")

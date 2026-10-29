@@ -291,7 +291,7 @@ fn draw_approval(frame: &mut Frame<'_>, app: &App, area: Rect) {
         .approval
         .as_ref()
         .expect("approval popup without request");
-    let text = if !approval.show_arguments
+    let body = if !approval.show_arguments
         && let Some(preview) = &approval.invocation.preview
     {
         aicoder_runtime::tools::display_preview(preview)
@@ -312,6 +312,14 @@ fn draw_approval(frame: &mut Frame<'_>, app: &App, area: Rect) {
             }
         )
     };
+    let text = if let Some(session) = &approval.session {
+        format!(
+            "Session {:?} / {:?}\nSession scope: this tool, all arguments\n\n{}",
+            session.session_id, session.workspace, body
+        )
+    } else {
+        body
+    };
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .title(format!(" Approval: {} ", approval.invocation.name))
@@ -330,7 +338,7 @@ fn draw_approval(frame: &mut Frame<'_>, app: &App, area: Rect) {
         parts[0],
     );
     frame.render_widget(
-        Paragraph::new("PgUp/PgDn scroll • Tab diff/arguments\ny allow • n deny • Esc cancel turn")
+        Paragraph::new(if approval.session.is_some() { "PgUp/PgDn scroll • Tab diff/arguments\ny once • s session/tool (all args) • n deny • Esc cancel" } else { "PgUp/PgDn scroll • Tab diff/arguments\ny allow • n deny • Esc cancel turn" })
             .style(Style::default().fg(ACCENT)),
         parts[1],
     );
@@ -485,6 +493,7 @@ mod tests {
             },
             scroll: 40,
             show_arguments: false,
+            session: None,
         });
         terminal
             .draw(|frame| draw(frame, &app, "test-model"))
@@ -512,5 +521,58 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(rendered.contains("\"path\""));
+    }
+    #[test]
+    fn session_approval_ui_displays_the_scope_and_never_offers_an_unbound_session_grant() {
+        use aicoder_core::{
+            ApprovalRequestId,
+            tools::{ApprovalSessions, ToolCapability, ToolInvocation},
+        };
+        let root = tempfile::tempdir().unwrap();
+        let info = ApprovalSessions::default()
+            .session(root.path(), "chat")
+            .unwrap()
+            .snapshot()
+            .session;
+        let mut app = App::new(Vec::new());
+        app.approval = Some(crate::app::PendingApproval {
+            id: ApprovalRequestId {
+                run_id: "run".into(),
+                sequence: 1,
+            },
+            invocation: ToolInvocation {
+                call_id: "call".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({"path":"file"}),
+                capability: ToolCapability::Mutating,
+                preview: None,
+            },
+            scroll: 0,
+            show_arguments: false,
+            session: Some(info),
+        });
+        let mut terminal = Terminal::new(TestBackend::new(140, 32)).unwrap();
+        terminal.draw(|frame| draw(frame, &app, "offline")).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(rendered.contains("this tool, all arguments"));
+        assert!(rendered.contains("s session/tool"));
+        assert!(rendered.contains("chat"));
+        app.approval.as_mut().unwrap().session = None;
+        terminal.draw(|frame| draw(frame, &app, "offline")).unwrap();
+        let rendered = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!rendered.contains("s session/tool"));
+        assert!(rendered.contains("y allow"));
     }
 }

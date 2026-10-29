@@ -215,10 +215,14 @@ pub enum AgentRawEvent {
         capability: ToolCapability,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         preview: Option<Arc<crate::tools::ToolPreview>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session: Option<Arc<crate::tools::ApprovalSessionInfo>>,
     },
     ToolApprovalResolved {
         call_id: Arc<str>,
         approved: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resolution: Option<Arc<crate::tools::ApprovalResolution>>,
     },
     ToolExecutionStarted {
         call_id: Arc<str>,

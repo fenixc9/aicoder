@@ -6,10 +6,20 @@ use crate::model::ToolDefinition;
 
 use super::ExecutableTool;
 
-#[derive(Default)]
 pub struct ToolRegistry {
     tools: Vec<Arc<dyn ExecutableTool>>,
     indexes: HashMap<String, usize>,
+    pub(crate) authority: uuid::Uuid,
+}
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self {
+            tools: Vec::new(),
+            indexes: HashMap::new(),
+            authority: uuid::Uuid::new_v4(),
+        }
+    }
 }
 
 impl ToolRegistry {

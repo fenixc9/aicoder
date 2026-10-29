@@ -357,3 +357,27 @@ New SDK `ShellLimits`, `ConfiguredBash` and public `registry_with_shell` support
 injection. Runtime credential-reference exclusions remain in place, with startup/function
 imports suppressed. See [the complete lifecycle and environment contract](shell-tools.md)
 and [acceptance evidence](s3-shell-acceptance.md).
+
+
+## S3: typed decisions and transient session tool grants
+
+`ApprovalHandler::decide(&ApprovalRequest)` supports `Deny`, `AllowOnce`, `AllowSession`.
+The default wraps the legacy bool method; existing true values are one-shot and do not
+create grants. New typed-only handlers can override decide; direct legacy approve then
+defaults to deny. RunHandle adds `respond_approval_decision`; its bool method stays.
+Unsupported session decisions are rejected without consuming the open question.
+
+Hosts opt in with `TurnExecutionContext::with_approval_sessions`, using one bounded
+cache per trusted principal/storage namespace. Agent binds the actual selected session;
+custom transcript hosts can pass an explicit scoped handle instead. Grants apply to the
+same workspace/session/tool/capability/registry and all arguments, stay in memory, and
+are never restored from JSONL, model input or serialized snapshots. Scope epochs revoke
+pending decisions; new registries do not inherit older tool permissions.
+
+PendingRunApproval and ToolApprovalRequested gain optional session metadata;
+ToolApprovalResolved gains optional resolution (decision/source/scope/grant ID), as do
+typed event callbacks. Add fields or `..` to explicit Rust literals/patterns. JSON event
+version remains 1 and older absent fields remain valid. No JSONL migration is needed.
+CLI adds the explicit s choice for bound sessions; TUI adds s, /permissions and /revoke,
+and clears scopes on successful reload/deletion. See [the full ownership, limits and
+revocation rules](approvals.md) and [S3 acceptance](s3-approvals-acceptance.md).

@@ -1,6 +1,6 @@
 # aicoder 路线图
 
-状态：S0、S1、S2 已完成；当前阶段 S3。本文替代旧 TODO 的排期。
+状态：S0、S1、S2、S3 已完成；当前阶段 S4。本文替代旧 TODO 的排期。
 基线和验证依据见 [S0 开发基线](development-baseline.md)。
 S1 的统一模型契约已贯穿执行器、工具、会话、CLI/TUI 和 bench，wire types 已移至
 providers；部分结果、任务预算和 provider 配置均已接通。S1 验收见 [验收记录](s1-acceptance.md)。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
@@ -167,12 +167,12 @@ S2 的版本化事件和有界订阅已落地，见 [事件契约](events.md)。
 
 共享配置/默认装配已接入 CLI、TUI、SWE-bench，见 [配置契约](runtime-configuration.md)。
 项目资源加载与快照重载已接通，见 [资源契约](project-resources.md)。
-S3 尚未整体完成；工具/存储迁移已完成，后续工具措施仍按下列项推进。
+S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals-acceptance.md)；后续按 S4 推进。
 拆包契约见 [runtime 后端](runtime-backends.md)，验证见 [验收记录](s3-backends-acceptance.md)。
 [配置增量验收](s3-runtime-acceptance.md) 保留 268 个测试的历史记录；
 [资源增量验收](s3-resources-acceptance.md) 保留 293 个测试及三次轻量采样的历史记录；
 拆包增量保留 294 个测试的历史记录；[文件工具增量](s3-file-tools-acceptance.md) 保留 308 个测试的历史记录；
-[编辑增量](s3-edits-acceptance.md) 保留 323 个测试的历史记录；当前 shell 增量覆盖 339 个测试。
+[编辑增量](s3-edits-acceptance.md) 保留 323 个测试的历史记录；[shell 增量](s3-shell-acceptance.md) 保留 339 个测试的历史记录；当前授权增量覆盖 355 个测试。
 
 - [x] 新增 runtime，统一显式参数 > 环境变量 > 项目配置 > 用户配置 > 默认值；
   凭证使用独立来源，不混淆 provider 与默认 endpoint。
@@ -185,7 +185,8 @@ S3 尚未整体完成；工具/存储迁移已完成，后续工具措施仍按�
   见 [修改契约](file-mutations.md) 与 [验收/耗时取舍](s3-edits-acceptance.md)。
 - [x] shell 的输出、超时、取消、进程组清理和凭证处理形成统一契约。
   见 [shell 契约](shell-tools.md) 与 [验收/内存采样](s3-shell-acceptance.md)。
-- [ ] 审批策略支持拒绝、单次、会话级授权；前端只负责展示和提交决定。
+- [x] 审批策略支持拒绝、单次、会话级授权；前端只负责展示和提交决定。
+  见 [授权契约](approvals.md) 与 [S3 全项验收/累计开销](s3-approvals-acceptance.md)。
 
 验收：CLI/TUI/eval 可共享同一 runtime 配置；项目指令可追溯；大输出、路径逃逸、
 并发编辑及取消工具有回归测试。保留已有路径与审批保护，明确 shell 不等于沙箱。
@@ -258,4 +259,4 @@ S3 尚未整体完成；工具/存储迁移已完成，后续工具措施仍按�
 - 跨 crate 改动通过 fmt、Clippy、workspace tests；公共文档和示例同步更新。
 - 新依赖说明用途与默认构建成本；宿主可选能力不进入 core 的强制依赖。
 - API/会话格式变更写明迁移，旧入口只在迁移期保留；不维护两套独立执行循环。
-- 当前执行 **S3**；按验收结果逐阶段推进，不并行堆叠后续功能。
+- 当前执行 **S4**；按验收结果逐阶段推进，不并行堆叠后续功能。
