@@ -1675,6 +1675,7 @@ mod tests {
                 _: serde_json::Value,
             ) -> std::result::Result<ToolSuccess, ToolFailure> {
                 Ok(ToolSuccess {
+                    artifacts: Vec::new(),
                     output: serde_json::json!("data"),
                     truncated: false,
                 })

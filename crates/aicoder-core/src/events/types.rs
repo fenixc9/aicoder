@@ -230,6 +230,8 @@ pub enum AgentRawEvent {
         arguments: Arc<str>,
     },
     ToolExecutionEnded {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        artifacts: Vec<crate::artifacts::ArtifactRef>,
         call_id: Arc<str>,
         name: Arc<str>,
         outcome: Arc<ToolExecutionOutcome>,

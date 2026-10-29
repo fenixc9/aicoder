@@ -423,3 +423,24 @@ plain SDK execution remain transient. SDK users constructing `ModelContextInfo` 
 Their optional serde fields read older JSON without changes; Rust source literals are
 a documented source-level change. Runtime context settings gain optional strategy/output
 fields; older JSON uses prune/1024 defaults. See [semantic-summary API and limits](semantic-summary.md).
+
+## S4 output artifacts
+
+`ToolSuccess` and `ToolFailure` source literals require `artifacts: Vec::new()`; constructors
+keep empty defaults. `AgentRawEvent::ToolExecutionEnded` source literals also need the new
+vector and exhaustive patterns should bind or ignore it. `ToolExecutionEndedEvent` exposes
+the same references. Old event JSON omitting artifacts still deserializes, and empty vectors
+are omitted; envelope version remains 1. ShellOutput gains optional reference/error fields.
+JSONL stays v3 because tool results already hold arbitrary JSON; existing sessions remain
+readable. References do not embed a private path or restore tool approval.
+
+Core defaults retain no artifact store. Install one with `TurnExecutorBuilder::artifact_store`
+and register `ReadArtifactTool` if the model should read pages. Runtime factories do this
+when session storage is enabled; bare seven-tool registries stay unchanged. CLI `--no-session`
+now explicitly clears the session directory and also disables persistent output artifacts.
+Tool-end events include fixed bounded reference metadata even when a global output budget
+cuts the preview. Generic oversized JSON previews are explicitly marked `json_prefix`, and
+their serialized size (including escaping) fits the display budget. Failure details are now
+bounded and may use that preview wrapper; consumers must not assume an oversized tool
+result remains its original JSON type. Use the reference to retrieve exact returned JSON.
+See [output/artifact limits and retention](output-artifacts.md).

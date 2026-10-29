@@ -240,6 +240,7 @@ pub struct ToolExecutionStartedEvent {
 
 #[derive(Debug, Clone)]
 pub struct ToolExecutionEndedEvent {
+    pub artifacts: Vec<crate::artifacts::ArtifactRef>,
     pub meta: AgentEventMeta,
     pub call_id: Arc<str>,
     pub name: Arc<str>,
@@ -578,10 +579,12 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
             arguments: Arc::clone(arguments),
         }),
         AgentRawEvent::ToolExecutionEnded {
+            artifacts,
             call_id,
             name,
             outcome,
         } => handler.on_tool_execution_ended(ToolExecutionEndedEvent {
+            artifacts: artifacts.clone(),
             meta,
             call_id: Arc::clone(call_id),
             name: Arc::clone(name),

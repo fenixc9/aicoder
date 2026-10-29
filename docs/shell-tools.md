@@ -70,7 +70,9 @@ an assertion about unread bytes the process produced or would have produced late
 Raw retained data totals at most the serialized-result cap, with equal maximum storage
 reserved per stream. Returned text can therefore use less than the whole result budget.
 Per-stream order is retained; the two strings do not establish cross-stream ordering.
-No full-output archive is silently written; artifact/reference handling remains S4 work.
+When an explicit artifact store is installed, omitted streams can be recovered through
+[bounded raw-output artifacts](output-artifacts.md). Core/bare-tool contexts without a store
+retain the existing clipping-only behavior. Small successful results create no archive.
 
 `ShellOutput` is public and serializable/deserializable. A successful tool returns it as
 `ToolSuccess.output`; shell execution failures attach the same shape to `ToolFailure.details`.
@@ -94,7 +96,7 @@ The public result and `ShellStopReason` allow future extension through non-exhau
 | `encoding` | `utf8_lossy`; invalid source bytes use replacement characters |
 
 Known valid UTF-8 is not split into replacement characters merely because a retained
-window ends mid-character. Binary capture is text-oriented and not a byte archive.
+window ends mid-character. Displayed binary capture is text-oriented; an available artifact retains byte-exact data.
 An exit code of zero alone does not establish tool success: an output-limit/capture/
 cleanup failure may coincide with a leader that already exited successfully.
 

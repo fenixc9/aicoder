@@ -1,4 +1,6 @@
 use super::process::{ManagedChild, Stop};
+use aicoder_core::artifacts::{ArtifactRef, ArtifactStore, ArtifactWriter};
+use std::sync::Arc;
 use std::{collections::VecDeque, time::Duration};
 use tokio::{
     io::AsyncReadExt,
@@ -13,6 +15,12 @@ pub(super) struct Capture {
     limit: usize,
     pub seen: u64,
     pub eof: bool,
+    store: Option<Arc<dyn ArtifactStore>>,
+    writer: Option<Box<dyn ArtifactWriter>>,
+    archived: u64,
+    limited: bool,
+    pub artifact: Option<ArtifactRef>,
+    pub artifact_error: Option<String>,
 }
 pub(super) struct View {
     pub text: String,
@@ -26,9 +34,22 @@ impl Capture {
             limit,
             seen: 0,
             eof: false,
+            store: None,
+            writer: None,
+            archived: 0,
+            limited: false,
+            artifact: None,
+            artifact_error: None,
         }
     }
-    fn push(&mut self, mut bytes: &[u8]) {
+    async fn push(&mut self, mut bytes: &[u8]) {
+        if self.store.is_some()
+            && self.artifact_error.is_none()
+            && self.seen.saturating_add(bytes.len() as u64) > self.limit as u64
+        {
+            self.start_archive().await;
+        }
+        self.append_archive(bytes).await;
         self.seen += bytes.len() as u64;
         let count = bytes
             .len()
@@ -46,6 +67,81 @@ impl Capture {
             let remove = (self.tail.len() + bytes.len()).saturating_sub(limit);
             self.tail.drain(..remove);
             self.tail.extend(bytes);
+        }
+    }
+    async fn start_archive(&mut self) {
+        if self.writer.is_some() || self.artifact_error.is_some() {
+            return;
+        }
+        let Some(store) = &self.store else {
+            return;
+        };
+        match tokio::time::timeout(
+            Duration::from_millis(250),
+            store.begin("application/octet-stream"),
+        )
+        .await
+        {
+            Ok(Ok(writer)) => {
+                self.writer = Some(writer);
+                let prefix = self
+                    .head
+                    .iter()
+                    .chain(self.tail.iter())
+                    .copied()
+                    .collect::<Vec<_>>();
+                self.append_archive(&prefix).await;
+            }
+            Ok(Err(error)) => self.artifact_error = Some(error.code.into()),
+            Err(_) => self.artifact_error = Some("storage_timeout".into()),
+        }
+    }
+    async fn append_archive(&mut self, bytes: &[u8]) {
+        let Some(writer) = &mut self.writer else {
+            return;
+        };
+        let limit = self
+            .store
+            .as_ref()
+            .expect("artifact writer store")
+            .limits()
+            .max_artifact_bytes;
+        let count = (limit.saturating_sub(self.archived)).min(bytes.len() as u64) as usize;
+        self.limited |= count < bytes.len();
+        if count == 0 {
+            return;
+        }
+        match tokio::time::timeout(Duration::from_millis(250), writer.write(&bytes[..count])).await
+        {
+            Ok(Ok(())) => self.archived += count as u64,
+            result => {
+                self.artifact_error = Some(
+                    match result {
+                        Ok(Err(error)) => error.code,
+                        _ => "storage_timeout",
+                    }
+                    .into(),
+                );
+                self.writer = None;
+            }
+        }
+    }
+    pub async fn finalize_archive(&mut self) {
+        if self.seen == 0 {
+            return;
+        }
+        self.start_archive().await;
+        if let Some(writer) = self.writer.take() {
+            match tokio::time::timeout(
+                Duration::from_millis(250),
+                writer.finish(self.eof && !self.limited),
+            )
+            .await
+            {
+                Ok(Ok(reference)) => self.artifact = Some(reference),
+                Ok(Err(error)) => self.artifact_error = Some(error.code.into()),
+                Err(_) => self.artifact_error = Some("storage_timeout".into()),
+            }
         }
     }
     pub fn view(&self, limit: usize) -> View {
@@ -113,6 +209,11 @@ impl Captures {
             limit_hit: false,
         }
     }
+    pub fn with_store(mut self, store: Option<Arc<dyn ArtifactStore>>) -> Self {
+        self.stdout.store = store.clone();
+        self.stderr.store = store;
+        self
+    }
     pub fn complete(&self) -> bool {
         self.stdout.eof && self.stderr.eof
     }
@@ -137,7 +238,7 @@ async fn read_any(
         else=>std::future::pending().await,
     }
 }
-fn consume(
+async fn consume(
     read: Read,
     out: &[u8],
     err: &[u8],
@@ -150,7 +251,7 @@ fn consume(
     };
     match result {
         Ok(0) => capture_stream.eof = true,
-        Ok(count) => capture_stream.push(&bytes[..count]),
+        Ok(count) => capture_stream.push(&bytes[..count]).await,
         Err(_) => return Err(Stop::CaptureError),
     }
     if capture.seen() > limit {
@@ -179,7 +280,7 @@ pub(super) async fn drive(
         tokio::select! {biased;
             _=tokio::time::sleep_until(deadline)=>return Stop::Timeout,
             signal=exits.recv()=>if signal.is_none(){return Stop::WaitError;},
-            read=read_any(stdout,stderr,capture,&mut out[..count],&mut err[..count])=>if let Err(stop)=consume(read,&out,&err,capture,limit){return stop;},
+            read=read_any(stdout,stderr,capture,&mut out[..count],&mut err[..count])=>if let Err(stop)=consume(read,&out,&err,capture,limit).await{return stop;},
         }
     }
 }
@@ -201,7 +302,7 @@ pub(super) async fn drain(
                 &mut err[..count],
             )
             .await;
-            if consume(read, &out, &err, capture, limit).is_err() {
+            if consume(read, &out, &err, capture, limit).await.is_err() {
                 break;
             }
         }

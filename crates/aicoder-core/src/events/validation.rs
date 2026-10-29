@@ -135,6 +135,12 @@ impl EventTraceValidator {
                 );
             }
         }
+        if let AgentRawEvent::ToolExecutionEnded { artifacts, .. } = &envelope.event {
+            ensure!(artifacts.len() <= 8, "too many tool artifact references");
+            for reference in artifacts {
+                reference.validate()?;
+            }
+        }
         match &envelope.event {
             AgentRawEvent::AgentStarted { .. } => ensure!(expected == 1, "duplicate AgentStarted"),
             AgentRawEvent::StateChanged { transition } => {

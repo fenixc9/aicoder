@@ -19,7 +19,6 @@ use crate::{
 
 use super::{
     ApprovalHandler, ToolCapability, ToolContext, ToolFailure, ToolInvocation, ToolRegistry,
-    ToolSuccess, util::truncate_utf8,
 };
 
 #[derive(Clone, Copy)]
@@ -81,6 +80,42 @@ impl ToolDispatcher {
             approval,
             config,
         })
+    }
+
+    pub fn with_artifact_store(
+        mut self,
+        store: Arc<dyn crate::artifacts::ArtifactStore>,
+    ) -> Result<Self> {
+        store.limits().validate()?;
+        anyhow::ensure!(
+            self.config.max_output_bytes >= 512,
+            "Artifact tool output budget must be at least 512 bytes"
+        );
+        self.context = self.context.with_artifact_store(store);
+        Ok(self)
+    }
+
+    async fn failed_tool_message(
+        &self,
+        events: Option<&AgentEventEmitter>,
+        call: &ModelToolCall,
+        limits: Option<&RunLimiter>,
+        error: ToolFailure,
+    ) -> Message {
+        let error = super::output::bound_failure(error, &self.context).await;
+        let artifacts = error.artifacts.clone();
+        let outcome = failure_outcome(&error);
+        let (envelope, outcome) = limit_payload(failure_envelope(error), outcome, limits);
+        emit_event(
+            events,
+            AgentRawEvent::ToolExecutionEnded {
+                artifacts,
+                call_id: call.id.clone().into(),
+                name: call.name.clone().into(),
+                outcome: outcome.into(),
+            },
+        );
+        tool_message(call, envelope)
     }
 
     pub fn registry(&self) -> &Arc<ToolRegistry> {
@@ -167,15 +202,17 @@ impl ToolDispatcher {
                     arguments: call.arguments.to_string().into(),
                 },
             );
-            Ok(failed_tool_message(
-                events,
-                call,
-                control.map(|(limits, _, _)| limits.as_ref()),
-                ToolFailure::new(
-                    "steered_before_execution",
-                    "Tool was not executed because steering input is waiting",
-                ),
-            ))
+            Ok(self
+                .failed_tool_message(
+                    events,
+                    call,
+                    control.map(|(limits, _, _)| limits.as_ref()),
+                    ToolFailure::new(
+                        "steered_before_execution",
+                        "Tool was not executed because steering input is waiting",
+                    ),
+                )
+                .await)
         } else {
             self.execute_call(
                 call,
@@ -287,12 +324,14 @@ impl ToolDispatcher {
         let arguments = call.arguments.clone();
 
         let Some(tool) = self.registry.get(&call.name) else {
-            return Ok(failed_tool_message(
-                events,
-                call,
-                limits,
-                ToolFailure::new("unknown_tool", format!("Unknown tool: {}", call.name)),
-            ));
+            return Ok(self
+                .failed_tool_message(
+                    events,
+                    call,
+                    limits,
+                    ToolFailure::new("unknown_tool", format!("Unknown tool: {}", call.name)),
+                )
+                .await);
         };
 
         // Prepare once, before approval, without changing external state. The same
@@ -306,13 +345,14 @@ impl ToolDispatcher {
                 biased;
                 cancelled = context.cancelled() => {
                     emit_event(events, AgentRawEvent::ToolExecutionEnded {
+                            artifacts:Vec::new(),
                         call_id: call.id.clone().into(), name: call.name.clone().into(),
                         outcome: ToolExecutionOutcome::Cancelled.into(),
                     });
                     return Err(cancelled.into());
                 },
                 _ = async { match &context.control { Some(control) => control.steering_requested().await, None => std::future::pending().await } } => {
-                    return Ok(failed_tool_message(events,call,limits,ToolFailure::new("steered_before_execution","Tool preparation was superseded by steering")));
+                    return Ok(self.failed_tool_message(events,call,limits,ToolFailure::new("steered_before_execution","Tool preparation was superseded by steering")).await);
                 },
                 result = preparation => result,
             },
@@ -320,14 +360,18 @@ impl ToolDispatcher {
         };
         let prepared = match prepared {
             Ok(Ok(prepared)) => prepared,
-            Ok(Err(error)) => return Ok(failed_tool_message(events, call, limits, error)),
+            Ok(Err(error)) => {
+                return Ok(self.failed_tool_message(events, call, limits, error).await);
+            }
             Err(_) => {
-                return Ok(failed_tool_message(
-                    events,
-                    call,
-                    limits,
-                    ToolFailure::new("timeout", "Tool preparation exceeded its time limit"),
-                ));
+                return Ok(self
+                    .failed_tool_message(
+                        events,
+                        call,
+                        limits,
+                        ToolFailure::new("timeout", "Tool preparation exceeded its time limit"),
+                    )
+                    .await);
             }
         };
         let preview = prepared.as_ref().map(|plan| plan.preview());
@@ -335,12 +379,14 @@ impl ToolDispatcher {
             serde_json::to_vec(preview)
                 .map_or(true, |bytes| bytes.len() > super::MAX_TOOL_PREVIEW_BYTES)
         }) {
-            return Ok(failed_tool_message(
-                events,
-                call,
-                limits,
-                ToolFailure::new("preview_too_large", "Prepared tool preview exceeds 32 KiB"),
-            ));
+            return Ok(self
+                .failed_tool_message(
+                    events,
+                    call,
+                    limits,
+                    ToolFailure::new("preview_too_large", "Prepared tool preview exceeds 32 KiB"),
+                )
+                .await);
         }
         let invocation = ToolInvocation {
             call_id: call.id.clone(),
@@ -358,12 +404,14 @@ impl ToolDispatcher {
             {
                 Ok(ticket) => ticket,
                 Err(error) => {
-                    return Ok(failed_tool_message(
-                        events,
-                        call,
-                        limits,
-                        ToolFailure::new(error.code(), error.to_string()),
-                    ));
+                    return Ok(self
+                        .failed_tool_message(
+                            events,
+                            call,
+                            limits,
+                            ToolFailure::new(error.code(), error.to_string()),
+                        )
+                        .await);
                 }
             }
         } else {
@@ -454,12 +502,14 @@ impl ToolDispatcher {
                         },
                     );
                     if !approved {
-                        return Ok(failed_tool_message(
-                            events,
-                            call,
-                            limits,
-                            ToolFailure::new("approval_denied", "User denied tool execution"),
-                        ));
+                        return Ok(self
+                            .failed_tool_message(
+                                events,
+                                call,
+                                limits,
+                                ToolFailure::new("approval_denied", "User denied tool execution"),
+                            )
+                            .await);
                     }
                 }
                 Err(error) => {
@@ -475,6 +525,7 @@ impl ToolDispatcher {
                         emit_event(
                             events,
                             AgentRawEvent::ToolExecutionEnded {
+                                artifacts: Vec::new(),
                                 call_id: call.id.clone().into(),
                                 name: call.name.clone().into(),
                                 outcome: ToolExecutionOutcome::Cancelled.into(),
@@ -495,19 +546,23 @@ impl ToolDispatcher {
                     } else {
                         ToolFailure::new("approval_failed", error.to_string())
                     };
-                    return Ok(failed_tool_message(events, call, limits, failure));
+                    return Ok(self
+                        .failed_tool_message(events, call, limits, failure)
+                        .await);
                 }
             }
         }
         if let Some(ticket) = &ticket
             && let Err(error) = ticket.current()
         {
-            return Ok(failed_tool_message(
-                events,
-                call,
-                limits,
-                ToolFailure::new(error.code(), error.to_string()),
-            ));
+            return Ok(self
+                .failed_tool_message(
+                    events,
+                    call,
+                    limits,
+                    ToolFailure::new(error.code(), error.to_string()),
+                )
+                .await);
         }
 
         if context.is_some_and(|context| {
@@ -516,15 +571,17 @@ impl ToolDispatcher {
                 .as_ref()
                 .is_some_and(|control| control.has_steering())
         }) {
-            return Ok(failed_tool_message(
-                events,
-                call,
-                limits,
-                ToolFailure::new(
-                    "steered_before_execution",
-                    "Tool was superseded by steering before execution",
-                ),
-            ));
+            return Ok(self
+                .failed_tool_message(
+                    events,
+                    call,
+                    limits,
+                    ToolFailure::new(
+                        "steered_before_execution",
+                        "Tool was superseded by steering before execution",
+                    ),
+                )
+                .await);
         }
 
         tracing::debug!(
@@ -546,6 +603,7 @@ impl ToolDispatcher {
                     emit_event(
                         events,
                         AgentRawEvent::ToolExecutionEnded {
+                            artifacts:Vec::new(),
                             call_id: call.id.clone().into(),
                             name: call.name.clone().into(),
                             outcome: ToolExecutionOutcome::Cancelled.into(),
@@ -558,8 +616,9 @@ impl ToolDispatcher {
             None => execution.await,
         };
         let (envelope, outcome) = match execution {
-            Ok(Ok(success)) => success_envelope(success, self.config.max_output_bytes),
+            Ok(Ok(success)) => super::output::success_envelope(success, &self.context).await,
             Ok(Err(error)) => {
+                let error = super::output::bound_failure(error, &self.context).await;
                 let outcome = failure_outcome(&error);
                 (failure_envelope(error), outcome)
             }
@@ -574,10 +633,15 @@ impl ToolDispatcher {
                 (failure_envelope(error), ToolExecutionOutcome::TimedOut)
             }
         };
+        let artifacts = envelope
+            .get("artifacts")
+            .and_then(|value| serde_json::from_value(value.clone()).ok())
+            .unwrap_or_default();
         let (envelope, outcome) = limit_payload(envelope, outcome, limits);
         emit_event(
             events,
             AgentRawEvent::ToolExecutionEnded {
+                artifacts,
                 call_id: call.id.clone().into(),
                 name: call.name.clone().into(),
                 outcome: outcome.into(),
@@ -591,25 +655,6 @@ fn emit_event(events: Option<&AgentEventEmitter>, event: AgentRawEvent) {
     if let Some(events) = events {
         events.emit(event);
     }
-}
-
-fn failed_tool_message(
-    events: Option<&AgentEventEmitter>,
-    call: &ModelToolCall,
-    limits: Option<&RunLimiter>,
-    error: ToolFailure,
-) -> Message {
-    let outcome = failure_outcome(&error);
-    let (envelope, outcome) = limit_payload(failure_envelope(error), outcome, limits);
-    emit_event(
-        events,
-        AgentRawEvent::ToolExecutionEnded {
-            call_id: call.id.clone().into(),
-            name: call.name.clone().into(),
-            outcome: outcome.into(),
-        },
-    );
-    tool_message(call, envelope)
 }
 
 fn failure_outcome(error: &ToolFailure) -> ToolExecutionOutcome {
@@ -634,34 +679,12 @@ fn tool_message(call: &ModelToolCall, envelope: Value) -> Message {
     }
 }
 
-fn success_envelope(mut success: ToolSuccess, max_bytes: usize) -> (Value, ToolExecutionOutcome) {
-    let serialized = success.output.to_string();
-    if serialized.len() > max_bytes {
-        let (output, _) = truncate_utf8(&serialized, max_bytes);
-        success.output = Value::String(output);
-        success.truncated = true;
-    }
-    let outcome = ToolExecutionOutcome::Succeeded {
-        output: success.output.clone(),
-        truncated: success.truncated,
-    };
-    let envelope = json!({
-        "ok": true,
-        "output": success.output,
-        "truncated": success.truncated,
-    });
-    (envelope, outcome)
-}
-
 fn failure_envelope(error: ToolFailure) -> Value {
-    json!({
-        "ok": false,
-        "error": {
-            "code": error.code,
-            "message": error.message,
-            "details": error.details,
-        }
-    })
+    let mut envelope = json!({"ok":false,"error":{"code":error.code,"message":error.message,"details":error.details}});
+    if !error.artifacts.is_empty() {
+        envelope["artifacts"] = json!(error.artifacts);
+    }
+    envelope
 }
 
 fn limit_payload(

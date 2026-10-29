@@ -38,6 +38,7 @@ pub(super) fn success(output: Value, limit: usize) -> Result<ToolSuccess, ToolFa
         return Err(too_small());
     }
     Ok(ToolSuccess {
+        artifacts: Vec::new(),
         truncated: output["has_more"] == true || output["content_truncated"] == true,
         output,
     })

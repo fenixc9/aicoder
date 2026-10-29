@@ -73,6 +73,7 @@ impl ExecutableTool for Remember {
     async fn execute(&self, _: &ToolContext, _: Value) -> Result<ToolSuccess, ToolFailure> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(ToolSuccess {
+            artifacts: Vec::new(),
             output: json!("recorded in memory"),
             truncated: false,
         })

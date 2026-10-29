@@ -1,4 +1,5 @@
 //! Shared application configuration and agent assembly. Core remains environment/UI independent.
+pub mod artifacts;
 mod config;
 mod environment;
 mod files;
@@ -131,6 +132,26 @@ impl Runtime {
     pub fn sessions(&self) -> Result<JsonlSessionRepository> {
         JsonlSessionRepository::new(self.session_dir()?)
     }
+    /// Workspace-scoped artifact storage under the trusted session root, lazily created.
+    pub fn artifact_store_for(
+        &self,
+        workspace: &Path,
+    ) -> Result<Option<Arc<artifacts::FileArtifactStore>>> {
+        let Some(root) = &self.config.session_dir else {
+            return Ok(None);
+        };
+        let workspace = workspace.canonicalize()?;
+        let mut hash = 0xcbf29ce484222325u64;
+        for byte in workspace.as_os_str().as_encoded_bytes() {
+            hash = (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+        }
+        // Footer validation compares the full canonical workspace even if namespace hashes collide.
+        Ok(Some(Arc::new(artifacts::FileArtifactStore::new(
+            root.join("artifacts").join(format!("{hash:016x}")),
+            &workspace,
+            Default::default(),
+        )?)))
+    }
     pub fn credential_provider(&self) -> Arc<dyn CredentialProvider> {
         Arc::new(RuntimeCredential {
             environment: self.environment.clone(),
@@ -167,6 +188,9 @@ impl Runtime {
         let mut registry = tools::registry_with_shell(BashTool::excluding_environment(
             self.config.credential_references.clone(),
         ))?;
+        if self.config.session_dir.is_some() {
+            registry.register(aicoder_core::artifacts::ReadArtifactTool)?;
+        }
         if let Some(resources) = resources {
             resources.register_tools(&mut registry)?;
         }
@@ -219,6 +243,9 @@ impl Runtime {
                 ),
                 ..Default::default()
             });
+        if let Some(store) = self.artifact_store_for(workspace)? {
+            builder = builder.artifact_store(store);
+        }
         if let Some(resources) = resources {
             builder = builder.input_context(resources);
         }

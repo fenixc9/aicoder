@@ -147,6 +147,7 @@ impl ExecutableTool for CommandTool {
         }
         self.executed.fetch_add(1, Ordering::SeqCst);
         Ok(ToolSuccess {
+            artifacts: Vec::new(),
             output: json!("changed"),
             truncated: false,
         })

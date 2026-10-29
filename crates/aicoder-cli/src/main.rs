@@ -49,7 +49,7 @@ struct Cli {
     #[arg(long, value_name = "ID", conflicts_with_all = ["continue_session", "no_session"])]
     session: Option<String>,
 
-    /// Run without creating or updating a session.
+    /// Run without persistent session or output-artifact storage.
     #[arg(long, conflicts_with_all = ["continue_session", "session"])]
     no_session: bool,
 
@@ -127,6 +127,14 @@ enum Command {
     },
     /// Upgrade a legacy session, preserving an exact backup before changing its format.
     MigrateSession { id: String },
+    /// Read a bounded saved-output page without resolving model credentials.
+    ReadArtifact {
+        id: String,
+        #[arg(long, default_value_t = 0)]
+        offset: u64,
+        #[arg(long, default_value_t = 8192)]
+        max_bytes: usize,
+    },
     /// Summarize this session branch without adding a user/coding turn; requires a context window.
     CompactSession { id: String },
     /// Permanently delete a session by its full ID.
@@ -200,6 +208,12 @@ impl AgentEventHandler for ConsoleEvents {
 
     fn on_tool_execution_ended(&self, event: ToolExecutionEndedEvent) {
         println!("[ToolExec]{:?}", event.name);
+        for artifact in event.artifacts {
+            eprintln!(
+                "[Artifact] {}: {} bytes, complete={}",
+                artifact.id, artifact.bytes, artifact.complete
+            );
+        }
     }
 
     fn on_context_compaction_completed(&self, event: ContextCompactionCompletedEvent) {
@@ -338,7 +352,8 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             Command::Config
             | Command::Resources
             | Command::ExpandPrompt { .. }
-            | Command::CompactSession { .. },
+            | Command::CompactSession { .. }
+            | Command::ReadArtifact { .. },
         )
         | None => Ok(false),
     }
@@ -399,6 +414,11 @@ async fn main() -> Result<()> {
                 },
                 ..Default::default()
             },
+            session_dir: if cli.no_session {
+                Setting::Clear
+            } else {
+                Setting::Inherit
+            },
             ..Default::default()
         },
         ConfigDiscovery {
@@ -424,6 +444,32 @@ async fn main() -> Result<()> {
             "{}",
             serde_json::to_string_pretty(&runtime.prepare_prompt(input)?)?
         );
+        return Ok(());
+    }
+    if let Some(Command::ReadArtifact {
+        id,
+        offset,
+        max_bytes,
+    }) = &cli.command
+    {
+        use aicoder_core::tools::ExecutableTool;
+        let store = runtime
+            .artifact_store_for(&runtime.config().workspace)?
+            .ok_or_else(|| anyhow::anyhow!("Artifact storage is disabled"))?;
+        let context = aicoder_core::tools::ToolContext::new(
+            &runtime.config().workspace,
+            std::time::Duration::from_secs(30),
+            64 * 1024,
+        )?
+        .with_artifact_store(store);
+        let page = aicoder_core::artifacts::ReadArtifactTool
+            .execute(
+                &context,
+                serde_json::json!({"id":id,"offset":offset,"max_bytes":max_bytes}),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{}: {}", error.code, error.message))?;
+        println!("{}", serde_json::to_string_pretty(&page.output)?);
         return Ok(());
     }
     if let Some(Command::CompactSession { id }) = &cli.command {

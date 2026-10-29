@@ -5,6 +5,7 @@ mod approval_sessions;
 mod context;
 mod core;
 mod dispatcher;
+mod output;
 mod registry;
 mod util;
 

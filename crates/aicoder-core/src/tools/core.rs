@@ -17,6 +17,7 @@ pub enum ToolCapability {
 pub struct ToolSuccess {
     pub output: Value,
     pub truncated: bool,
+    pub artifacts: Vec<crate::artifacts::ArtifactRef>,
 }
 
 impl ToolSuccess {
@@ -24,6 +25,7 @@ impl ToolSuccess {
         Self {
             output,
             truncated: false,
+            artifacts: Vec::new(),
         }
     }
 }
@@ -33,6 +35,7 @@ pub struct ToolFailure {
     pub code: String,
     pub message: String,
     pub details: Option<Value>,
+    pub artifacts: Vec<crate::artifacts::ArtifactRef>,
 }
 
 impl ToolFailure {
@@ -41,6 +44,7 @@ impl ToolFailure {
             code: code.into(),
             message: message.into(),
             details: None,
+            artifacts: Vec::new(),
         }
     }
 

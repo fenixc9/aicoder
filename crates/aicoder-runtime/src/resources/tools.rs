@@ -28,6 +28,7 @@ fn default_page() -> usize {
 }
 fn failure(error: anyhow::Error) -> ToolFailure {
     ToolFailure {
+        artifacts: Vec::new(),
         code: "resource_failed".into(),
         message: format!("{error:#}"),
         details: None,
@@ -61,6 +62,7 @@ impl ExecutableTool for LoadSkill {
             )));
         }
         Ok(ToolSuccess {
+            artifacts: Vec::new(),
             output,
             truncated: false,
         })
@@ -98,6 +100,7 @@ impl ExecutableTool for ReadSkillFile {
             )));
         }
         Ok(ToolSuccess {
+            artifacts: Vec::new(),
             output,
             truncated: false,
         })

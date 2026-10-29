@@ -37,6 +37,7 @@ impl ExecutableTool for Counter {
             .as_u64()
             .filter(|v| *v > 0)
             .ok_or_else(|| ToolFailure {
+                artifacts: Vec::new(),
                 code: "invalid_arguments".into(),
                 message: "amount must be positive".into(),
                 details: None,
@@ -47,12 +48,14 @@ impl ExecutableTool for Counter {
                 value.checked_add(amount)
             })
             .map_err(|_| ToolFailure {
+                artifacts: Vec::new(),
                 code: "overflow".into(),
                 message: "counter overflow".into(),
                 details: None,
             })?
             + amount;
         Ok(ToolSuccess {
+            artifacts: Vec::new(),
             output: json!({"value":value}),
             truncated: false,
         })

@@ -214,3 +214,8 @@ limit. See [the shell contract](shell-tools.md) for command/output limits and cl
 
 Semantic compaction and the CLI/TUI manual commands share the
 [summary contract](semantic-summary.md). Automatic pruning remains the default.
+
+Output archives use the trusted session root with workspace scoping and lazy creation.
+Clearing session storage or CLI `--no-session` disables persistent archives. The
+[artifact contract](output-artifacts.md) covers SDK policy limits, retention and the
+credential-free `read-artifact` command.

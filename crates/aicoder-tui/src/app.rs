@@ -447,8 +447,17 @@ impl App {
                 });
             }
             AgentRawEvent::ToolExecutionEnded {
-                call_id, outcome, ..
+                call_id,
+                outcome,
+                artifacts,
+                ..
             } => {
+                for artifact in artifacts {
+                    self.timeline.push(TimelineItem::Notice(format!(
+                        "Saved output: {} ({} bytes, complete={}); use read_artifact to inspect",
+                        artifact.id, artifact.bytes, artifact.complete
+                    )));
+                }
                 if let Some(index) = self.tool_indexes.get(call_id.as_ref()).copied()
                     && let Some(TimelineItem::Tool { status, output, .. }) =
                         self.timeline.get_mut(index)
@@ -759,6 +768,40 @@ mod tests {
     }
 
     #[test]
+    fn saved_output_reference_is_visible_even_when_the_tool_payload_is_only_a_preview() {
+        let mut app = App::new(vec![]);
+        let reference = aicoder_core::artifacts::ArtifactRef {
+            version: 1,
+            id: "00000000-0000-0000-0000-000000000001".into(),
+            media_type: "text/plain".into(),
+            bytes: 200000,
+            complete: true,
+        };
+        app.apply(event(
+            1,
+            AgentRawEvent::ToolExecutionStarted {
+                call_id: "call".into(),
+                name: "bash".into(),
+                arguments: "{}".into(),
+            },
+        ));
+        app.apply(event(
+            2,
+            AgentRawEvent::ToolExecutionEnded {
+                artifacts: vec![reference.clone()],
+                call_id: "call".into(),
+                name: "bash".into(),
+                outcome: ToolExecutionOutcome::Succeeded {
+                    output: json!({"stdout":"preview"}),
+                    truncated: true,
+                }
+                .into(),
+            },
+        ));
+        assert!(app.timeline.iter().any(|item|matches!(item,TimelineItem::Notice(text) if text.contains(&reference.id) && text.contains("200000"))));
+    }
+
+    #[test]
     fn manual_compaction_keeps_transcript_and_restores_durable_usage() {
         let mut app = App::new(vec![]);
         app.timeline
@@ -984,6 +1027,7 @@ mod tests {
         app.apply(event(
             5,
             AgentRawEvent::ToolExecutionEnded {
+                artifacts: Vec::new(),
                 call_id: Arc::from("call-1"),
                 name: Arc::from("read_file"),
                 outcome: Arc::new(ToolExecutionOutcome::Succeeded {

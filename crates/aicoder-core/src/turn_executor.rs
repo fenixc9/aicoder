@@ -1255,6 +1255,7 @@ pub struct TurnExecutorBuilder {
     completion_verifier: Arc<dyn CompletionVerifier>,
     context_compactor: Option<Arc<dyn ContextCompactor>>,
     dispatcher_config: DispatcherConfig,
+    artifact_store: Option<Arc<dyn crate::artifacts::ArtifactStore>>,
     input_context: Option<Arc<dyn crate::InputContextProvider>>,
     execution_config: TurnExecutionConfig,
 }
@@ -1276,6 +1277,7 @@ impl TurnExecutorBuilder {
             completion_verifier: Arc::new(AcceptAllCompletionVerifier),
             context_compactor: None,
             dispatcher_config: DispatcherConfig::default(),
+            artifact_store: None,
             input_context: None,
             execution_config: TurnExecutionConfig::default(),
         }
@@ -1340,6 +1342,12 @@ impl TurnExecutorBuilder {
         self
     }
 
+    /// Install explicit scoped artifact storage; no storage is created by core defaults.
+    pub fn artifact_store(mut self, store: Arc<dyn crate::artifacts::ArtifactStore>) -> Self {
+        self.artifact_store = Some(store);
+        self
+    }
+
     pub fn dispatcher_config(mut self, config: DispatcherConfig) -> Self {
         self.dispatcher_config = config;
         self
@@ -1356,12 +1364,15 @@ impl TurnExecutorBuilder {
             Some(registry) => registry,
             None => Arc::new(ToolRegistry::default()),
         };
-        let dispatcher = ToolDispatcher::new(
+        let mut dispatcher = ToolDispatcher::new(
             registry,
             self.workspace,
             self.approval,
             self.dispatcher_config,
         )?;
+        if let Some(store) = self.artifact_store {
+            dispatcher = dispatcher.with_artifact_store(store)?;
+        }
         Ok(TurnExecutor::new_with_verifier(
             self.provider,
             Arc::new(dispatcher),
@@ -1610,6 +1621,7 @@ mod tests {
             arguments: Value,
         ) -> std::result::Result<ToolSuccess, ToolFailure> {
             Ok(ToolSuccess {
+                artifacts: Vec::new(),
                 output: arguments,
                 truncated: false,
             })
@@ -1636,6 +1648,7 @@ mod tests {
             arguments: Value,
         ) -> std::result::Result<ToolSuccess, ToolFailure> {
             Ok(ToolSuccess {
+                artifacts: Vec::new(),
                 output: arguments,
                 truncated: false,
             })

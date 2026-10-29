@@ -181,6 +181,7 @@ impl ExecutableTool for Tool {
         self.done.fetch_add(1, Ordering::SeqCst);
         self.notify.notify_one();
         Ok(ToolSuccess {
+            artifacts: Vec::new(),
             output: json!("x".repeat(self.size)),
             truncated: false,
         })
@@ -523,6 +524,7 @@ impl ExecutableTool for ProtectedTool {
     async fn execute(&self, _: &ToolContext, _: Value) -> Result<ToolSuccess, ToolFailure> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(ToolSuccess {
+            artifacts: Vec::new(),
             output: json!("done"),
             truncated: false,
         })

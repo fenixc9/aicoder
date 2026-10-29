@@ -2004,6 +2004,13 @@
             },
             "outcome": {
               "$ref": "#/$defs/tool_outcome"
+            },
+            "artifacts": {
+              "type": "array",
+              "maxItems": 8,
+              "items": {
+                "$ref": "#/$defs/artifact_reference"
+              }
             }
           },
           "required": [
@@ -2274,6 +2281,41 @@
         "compactions",
         "last_request_messages",
         "last_input_token_estimate"
+      ]
+    },
+    "artifact_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f]*$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1073741824
+        },
+        "complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "version",
+        "id",
+        "media_type",
+        "bytes",
+        "complete"
       ]
     }
   }

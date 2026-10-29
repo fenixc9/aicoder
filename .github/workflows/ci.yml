@@ -54,6 +54,8 @@ jobs:
         run: cargo run --locked -p aicoder-runtime --example offline_context
       - name: Durable semantic summary example
         run: cargo run --locked -p aicoder-runtime --example offline_summary
+      - name: Recover full archived tool output
+        run: cargo run --locked -p aicoder-runtime --example offline_artifacts
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

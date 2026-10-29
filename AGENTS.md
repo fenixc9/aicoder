@@ -35,6 +35,9 @@
 - Semantic summaries must use bounded, tool-free requests and charge every attempt to
   run usage/budgets. Commit branch-anchored checkpoints before using reduced context;
   keep raw history, interruption uncertainty and restored authorization separate.
+- Output artifacts are explicit scoped host storage. Bound serialization, staging, disk
+  admission and pages; keep raw bytes and capture completeness separate from previews.
+  Archive failures must not repeat completed operations or publish partial data as complete.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 
