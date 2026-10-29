@@ -331,3 +331,29 @@ or omitted. Normal creation uses 0600; replacement preserves lower permission bi
 creates a new inode. A post-publication directory-sync error is `durability_uncertain`
 with `committed: true` and a receipt; inspect before retrying. See [the exact filesystem,
 lock, cancellation and UI rules](file-mutations.md) and [verification/cost review](s3-edits-acceptance.md).
+
+
+## S3: bounded shell lifecycle and output
+
+`bash` retains `command`, optional `timeout_seconds`, legacy stdout/stderr/exit_code
+and truncated fields. Optional timeouts now accept 1..86400 seconds and default to the
+host context deadline. The shared `execution.tool_timeout_ms` / `AICODER_TOOL_TIMEOUT_MS`
+setting (default 30000) is applied by CLI/TUI/bench factories and recorded in effective
+configuration. Explicit settings take precedence; null/zero/over-one-day values fail.
+Source literals of `ExecutionSettings`/`ResolvedExecution` need the new field or default
+update syntax where supported. Host run budgets can impose an earlier stop.
+
+Shell output is streamed into bounded prefix/tail storage; display truncation permits
+normal completion, while a separate combined scan limit stops excessive producers.
+The full output/details object fits the host cap (minimum 1024 bytes). New typed
+`ShellOutput`/`ShellStopReason` expose counts, omitted bytes, capture completeness,
+signal, stop reason and reaping/cleanup status. Nonzero exit, timeout and output-limit
+failures retain captured details when Bash returns them; core interruption paths keep
+their own existing outcome semantics. No JSONL or event-schema version changes occur.
+
+All normal and abnormal completion paths request same-group cleanup. Background work
+must be explicitly waited for; it no longer survives a successful shell leader by default.
+New SDK `ShellLimits`, `ConfiguredBash` and public `registry_with_shell` support host policy
+injection. Runtime credential-reference exclusions remain in place, with startup/function
+imports suppressed. See [the complete lifecycle and environment contract](shell-tools.md)
+and [acceptance evidence](s3-shell-acceptance.md).

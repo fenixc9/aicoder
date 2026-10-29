@@ -52,6 +52,8 @@ pub struct ModelSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct ExecutionSettings {
     #[serde(skip_serializing_if = "Setting::is_inherit")]
+    pub tool_timeout_ms: Setting<u64>,
+    #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub max_rounds: Setting<usize>,
     #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub stream: Setting<bool>,

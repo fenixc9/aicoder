@@ -172,7 +172,7 @@ S3 尚未整体完成；工具/存储迁移已完成，后续工具措施仍按�
 [配置增量验收](s3-runtime-acceptance.md) 保留 268 个测试的历史记录；
 [资源增量验收](s3-resources-acceptance.md) 保留 293 个测试及三次轻量采样的历史记录；
 拆包增量保留 294 个测试的历史记录；[文件工具增量](s3-file-tools-acceptance.md) 保留 308 个测试的历史记录；
-当前编辑增量覆盖 323 个测试。
+[编辑增量](s3-edits-acceptance.md) 保留 323 个测试的历史记录；当前 shell 增量覆盖 339 个测试。
 
 - [x] 新增 runtime，统一显式参数 > 环境变量 > 项目配置 > 用户配置 > 默认值；
   凭证使用独立来源，不混淆 provider 与默认 endpoint。
@@ -183,7 +183,8 @@ S3 尚未整体完成；工具/存储迁移已完成，后续工具措施仍按�
   见 [文件工具契约](file-tools.md) 与 [验收记录](s3-file-tools-acceptance.md)。
 - [x] 编辑支持精确匹配及并发修改检测；写入采用适当的原子策略；审批可展示 diff。
   见 [修改契约](file-mutations.md) 与 [验收/耗时取舍](s3-edits-acceptance.md)。
-- [ ] shell 的输出、超时、取消、进程组清理和凭证处理形成统一契约。
+- [x] shell 的输出、超时、取消、进程组清理和凭证处理形成统一契约。
+  见 [shell 契约](shell-tools.md) 与 [验收/内存采样](s3-shell-acceptance.md)。
 - [ ] 审批策略支持拒绝、单次、会话级授权；前端只负责展示和提交决定。
 
 验收：CLI/TUI/eval 可共享同一 runtime 配置；项目指令可追溯；大输出、路径逃逸、

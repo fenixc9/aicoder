@@ -14,6 +14,8 @@
   continuation cursors, and report exhausted budgets and stale file cursors explicitly.
   Mutation preparation must be read-only; approval must describe the same owned plan
   later committed. Preserve conflict checks and cleanup on denial/cancellation.
+  Shell capture must stay bounded while draining output; retain leader ownership until
+  group signalling, and keep dropped-future cleanup independent of runtime shutdown.
   Backend checkpoints must stay opaque, immutable and out of serialized domain history.
   Project settings may select trusted profiles but must not define credential routing
   or private storage paths. Keep credential values out of settings snapshots/errors.

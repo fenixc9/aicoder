@@ -202,3 +202,10 @@ This uses an injected scripted model and memory store with no credentials/networ
 The contract tests cover precedence/aliases, null vs missing, source tracking, redaction,
 refreshable credentials, regular-file/size guards, reload snapshots, explicit dotenv,
 managed shell exclusions and CLI/TUI inspection without a terminal or session writes.
+
+
+The shared per-tool deadline is `settings.execution.tool_timeout_ms`, or
+`AICODER_TOOL_TIMEOUT_MS` (default 30000; positive, at most one day). It applies to normal
+and isolated-case factories, is visible in `sources`, and is separate from the enclosing
+run-duration budget. Core phases and shell calls still obey the shorter applicable
+limit. See [the shell contract](shell-tools.md) for command/output limits and cleanup.

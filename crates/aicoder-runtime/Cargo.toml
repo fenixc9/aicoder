@@ -19,7 +19,7 @@ dotenvy.workspace = true
 libc = "0.2"
 fs2 = "0.4"
 uuid = { version = "1", features = ["v4"] }
-tokio = { version = "1", features = ["fs", "io-util", "process", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "process", "signal", "time"] }
 url = "2"
 shlex = "2"
 similar = { version = "3", default-features = false, features = ["std", "text"] }

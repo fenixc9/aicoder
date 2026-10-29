@@ -42,6 +42,7 @@ pub struct RuntimeConfig {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedExecution {
+    pub tool_timeout_ms: u64,
     pub max_rounds: usize,
     pub stream: bool,
     pub budget: RunBudget,
@@ -514,6 +515,15 @@ pub(crate) fn resolve(
         "top_p must be between 0 and 1"
     );
     let execution = ResolvedExecution {
+        tool_timeout_ms: required(
+            "tool_timeout_ms",
+            pick!(
+                "execution.tool_timeout_ms",
+                execution.tool_timeout_ms,
+                || env_setting::<u64>(env.as_ref(), "AICODER_TOOL_TIMEOUT_MS")
+            ),
+            30_000,
+        )?,
         max_rounds: required(
             "max_rounds",
             pick!(
@@ -572,6 +582,10 @@ pub(crate) fn resolve(
         )?,
     };
     ensure!(execution.max_rounds > 0, "max_rounds must be positive");
+    ensure!(
+        (1..=86_400_000).contains(&execution.tool_timeout_ms),
+        "tool_timeout_ms must be 1..86400000"
+    );
     execution.events.validate()?;
     if let Some(duration) = execution.budget.max_duration {
         ensure!(

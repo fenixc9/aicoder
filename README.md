@@ -37,7 +37,8 @@ bench traces. S0–S2 are complete; S3 shared runtime configuration and [project
 available; [concrete tools and storage](docs/runtime-backends.md) now live in runtime.
 [Bounded discovery/read/search pages](docs/file-tools.md) are available;
 [prepared edits and approval diffs](docs/file-mutations.md) are available.
-Shell and session approval improvements remain in progress. See [runtime settings](docs/runtime-configuration.md), including
+[Bounded shell execution](docs/shell-tools.md) is available; session approval improvements
+remain in progress. See [runtime settings](docs/runtime-configuration.md), including
 the explicit `--env-file` migration.
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs

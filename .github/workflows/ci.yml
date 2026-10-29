@@ -46,6 +46,8 @@ jobs:
         run: cargo run --locked -p aicoder-runtime --example offline_file_tools
       - name: Prepared edits and approval diffs example
         run: cargo run --locked -p aicoder-runtime --example offline_edits
+      - name: Bounded shell and timeout recovery example
+        run: cargo run --locked -p aicoder-runtime --example offline_shell
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

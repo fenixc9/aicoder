@@ -517,8 +517,8 @@ impl ToolDispatcher {
                 let error = ToolFailure::new(
                     "timeout",
                     format!(
-                        "Tool exceeded {} second timeout",
-                        self.config.tool_timeout.as_secs()
+                        "Tool exceeded {} ms timeout",
+                        self.config.tool_timeout.as_millis()
                     ),
                 );
                 (failure_envelope(error), ToolExecutionOutcome::TimedOut)

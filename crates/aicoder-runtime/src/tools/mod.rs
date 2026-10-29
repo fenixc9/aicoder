@@ -19,7 +19,7 @@ mod util;
 mod workspace;
 pub use workspace::WorkspacePaths;
 
-pub use bash::BashTool;
+pub use bash::{BashTool, ConfiguredBash, ShellLimits, ShellOutput, ShellStopReason};
 pub use edit_file::EditFileTool;
 pub use grep::GrepTool;
 pub use list::{GlobTool, ListDirectoryTool};
@@ -31,7 +31,8 @@ pub fn default_registry() -> Result<ToolRegistry> {
     registry_with_shell(BashTool)
 }
 
-pub(crate) fn registry_with_shell(shell: impl ExecutableTool + 'static) -> Result<ToolRegistry> {
+/// Assemble coding tools with a host-supplied shell implementation.
+pub fn registry_with_shell(shell: impl ExecutableTool + 'static) -> Result<ToolRegistry> {
     let mut registry = ToolRegistry::default();
     registry.register(ReadFileTool)?;
     registry.register(WriteFileTool)?;

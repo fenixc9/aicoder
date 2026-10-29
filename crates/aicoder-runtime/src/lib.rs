@@ -212,7 +212,13 @@ impl Runtime {
         let mut builder = TurnExecutor::builder_from_shared(provider)
             .workspace(workspace)
             .registry(self.registry_with_resources(resources.clone())?)
-            .config(self.config.execution.core_config());
+            .config(self.config.execution.core_config())
+            .dispatcher_config(aicoder_core::tools::DispatcherConfig {
+                tool_timeout: std::time::Duration::from_millis(
+                    self.config.execution.tool_timeout_ms,
+                ),
+                ..Default::default()
+            });
         if let Some(resources) = resources {
             builder = builder.input_context(resources);
         }

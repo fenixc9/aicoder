@@ -1,196 +1,385 @@
-use std::{os::unix::process::CommandExt, process::Stdio, time::Duration};
-
-use async_trait::async_trait;
-use serde::Deserialize;
-use serde_json::{Value, json};
-use tokio::{process::Command, time::timeout};
-
-use aicoder_core::model::ToolDefinition;
-
+//! Bounded shell capture and process-group ownership through exit, timeout and drop.
+mod capture;
+mod process;
 use super::{
-    ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess,
-    util::{parse_arguments, truncate_utf8},
+    ExecutableTool, ToolCapability, ToolContext, ToolFailure, ToolSuccess, util::parse_arguments,
+};
+use aicoder_core::model::ToolDefinition;
+use async_trait::async_trait;
+use capture::Captures;
+use process::{ManagedChild, Stop};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::{
+    os::unix::process::CommandExt,
+    process::{Command, Stdio},
+    time::Duration,
 };
 
-pub struct BashTool;
+pub use process::Stop as ShellStopReason;
 
+/// Structured text capture returned as tool output, or as failure details.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ShellOutput {
+    pub exit_code: Option<i32>,
+    pub signal: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
+    pub stdout_omitted_bytes: u64,
+    pub stderr_omitted_bytes: u64,
+    pub truncated: bool,
+    pub output_complete: bool,
+    pub stop_reason: ShellStopReason,
+    pub process_group_signal_requested: bool,
+    pub reaped: bool,
+    pub cleanup_ok: bool,
+    pub encoding: String,
+}
+
+pub struct BashTool;
+/// Host-owned limits, independent of the serialized tool-result cap.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ShellLimits {
+    pub max_command_bytes: usize,
+    pub max_output_bytes: u64,
+}
+impl Default for ShellLimits {
+    fn default() -> Self {
+        Self {
+            max_command_bytes: 64 * 1024,
+            max_output_bytes: 16 * 1024 * 1024,
+        }
+    }
+}
+impl ShellLimits {
+    fn validate(self) -> Result<(), ToolFailure> {
+        if !(1..=1024 * 1024).contains(&self.max_command_bytes)
+            || !(1..=1024 * 1024 * 1024).contains(&self.max_output_bytes)
+        {
+            return Err(ToolFailure::new(
+                "invalid_shell_configuration",
+                "Shell command limit must be 1..1 MiB and output scan limit 1..1 GiB",
+            ));
+        }
+        Ok(())
+    }
+}
+pub struct ConfiguredBash {
+    limits: ShellLimits,
+    variables: Vec<String>,
+}
+impl ConfiguredBash {
+    pub fn excluding_environment(mut self, variables: Vec<String>) -> Self {
+        self.variables = variables;
+        self
+    }
+}
+impl BashTool {
+    pub fn excluding_environment(variables: Vec<String>) -> ConfiguredBash {
+        ConfiguredBash {
+            limits: ShellLimits::default(),
+            variables,
+        }
+    }
+    pub fn with_limits(limits: ShellLimits) -> anyhow::Result<ConfiguredBash> {
+        limits
+            .validate()
+            .map_err(|error| anyhow::anyhow!(error.message))?;
+        Ok(ConfiguredBash {
+            limits,
+            variables: Vec::new(),
+        })
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct BashArguments {
+struct Arguments {
     command: String,
     timeout_seconds: Option<u64>,
+}
+fn definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "bash".into(),
+        description: Some("Run non-interactive Bash from the workspace with bounded prefix/tail output. Commands run with user permissions, not in a sandbox. Same-group background jobs are terminated when the command ends. timeout_seconds is capped by the host tool deadline.".into()),
+        parameters: json!({
+            "type": "object",
+            "properties": {
+                "command": {"type": "string"},
+                "timeout_seconds": {
+                    "type": "integer", "minimum": 1, "maximum": 86400,
+                    "description": "Optional active deadline in seconds; defaults to the host tool deadline"
+                }
+            },
+            "required": ["command"],
+            "additionalProperties": false
+        }),
+    }
 }
 
 #[async_trait]
 impl ExecutableTool for BashTool {
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {
-            name: "bash".to_string(),
-            description: Some(
-                "Run a non-interactive bash command from the workspace. This is not sandboxed."
-                    .to_string(),
-            ),
-            parameters: json!({
-                "type": "object",
-                "properties": {
-                    "command": {"type": "string"},
-                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 30}
-                },
-                "required": ["command"],
-                "additionalProperties": false
-            }),
-        }
+        definition()
     }
-
     fn capability(&self) -> ToolCapability {
         ToolCapability::Command
     }
-
     async fn execute(
         &self,
         context: &ToolContext,
-        arguments: Value,
+        args: Value,
     ) -> Result<ToolSuccess, ToolFailure> {
-        execute_bash(context, arguments, &[]).await
+        execute(context, args, ShellLimits::default(), &[]).await
     }
-}
-impl BashTool {
-    /// Add host-owned credential references to the standard inherited-environment exclusions.
-    pub fn excluding_environment(variables: Vec<String>) -> impl ExecutableTool {
-        ConfiguredBash { variables }
-    }
-}
-struct ConfiguredBash {
-    variables: Vec<String>,
 }
 #[async_trait]
 impl ExecutableTool for ConfiguredBash {
     fn definition(&self) -> ToolDefinition {
-        BashTool.definition()
+        definition()
     }
     fn capability(&self) -> ToolCapability {
-        BashTool.capability()
+        ToolCapability::Command
     }
     async fn execute(
         &self,
         context: &ToolContext,
-        arguments: Value,
+        args: Value,
     ) -> Result<ToolSuccess, ToolFailure> {
-        execute_bash(context, arguments, &self.variables).await
+        execute(context, args, self.limits, &self.variables).await
     }
 }
-async fn execute_bash(
+async fn execute(
     context: &ToolContext,
-    arguments: Value,
+    args: Value,
+    limits: ShellLimits,
     excluded: &[String],
 ) -> Result<ToolSuccess, ToolFailure> {
-    let arguments: BashArguments = parse_arguments(arguments)?;
-    if let Some(timeout_seconds) = arguments.timeout_seconds
-        && !(1..=30).contains(&timeout_seconds)
+    limits.validate()?;
+    let args: Arguments = parse_arguments(args)?;
+    if args.command.is_empty()
+        || args.command.len() > limits.max_command_bytes
+        || args.command.contains('\0')
+        || args
+            .timeout_seconds
+            .is_some_and(|seconds| !(1..=86_400).contains(&seconds))
     {
         return Err(ToolFailure::new(
             "invalid_arguments",
-            "timeout_seconds must be between 1 and 30",
+            "Nonempty command must fit the host command limit, contain no NUL, and timeout_seconds must be 1..86400",
         ));
     }
-    let requested_timeout = Duration::from_secs(arguments.timeout_seconds.unwrap_or(30));
-    let command_timeout = requested_timeout.min(context.tool_timeout());
-
+    if excluded.iter().any(|name| !valid_variable(name)) {
+        return Err(ToolFailure::new(
+            "invalid_shell_configuration",
+            "Credential exclusions must be environment variable names",
+        ));
+    }
+    let output_limit = context.max_output_bytes().min(64 * 1024);
+    if output_limit < 1024 {
+        return Err(ToolFailure::new(
+            "output_limit_too_small",
+            "Shell output budget must be at least 1024 bytes for a complete result",
+        ));
+    }
+    let mut captures = Captures::new(output_limit / 2);
+    if context.tool_timeout().is_zero() {
+        return finish(
+            captures,
+            process::Completion::tool_timeout(false),
+            output_limit,
+        );
+    }
+    let work = run(context, &args, limits, excluded, &mut captures);
+    let completion = match tokio::time::timeout(context.tool_timeout(), work).await {
+        Ok(Ok(completion)) => completion,
+        Ok(Err(error)) => return Err(error),
+        Err(_) => process::Completion::tool_timeout(captures.spawned),
+    };
+    finish(captures, completion, output_limit)
+}
+async fn run(
+    context: &ToolContext,
+    args: &Arguments,
+    limits: ShellLimits,
+    excluded: &[String],
+    captures: &mut Captures,
+) -> Result<process::Completion, ToolFailure> {
+    // Subscribe before spawn so even a fast child's SIGCHLD cannot be missed.
+    let mut exits = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())
+        .map_err(start_error)?;
+    let requested = args
+        .timeout_seconds
+        .map(Duration::from_secs)
+        .unwrap_or(context.tool_timeout());
+    let deadline = tokio::time::Instant::now()
+        .checked_add(requested)
+        .ok_or_else(|| ToolFailure::new("invalid_arguments", "Shell deadline is too large"))?;
     let mut command = Command::new("/bin/bash");
     command
-        .arg("-c")
-        .arg(&arguments.command)
+        .args(["--noprofile", "--norc", "-c"])
+        .arg(&args.command)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .current_dir(context.workspace_root())
-        .kill_on_drop(true);
-    command.as_std_mut().process_group(0);
+        .process_group(0);
     scrub_credentials(
         &mut command,
         std::env::var("AICODER_API_KEY_ENV").ok().as_deref(),
     );
-
     for variable in excluded {
         command.env_remove(variable);
     }
-    let child = command
-        .spawn()
-        .map_err(|error| ToolFailure::new("command_failed", error.to_string()))?;
-    let mut process_group = ProcessGroupGuard::new(child.id());
-    let output = timeout(command_timeout, child.wait_with_output()).await;
-    let output = match output {
-        Ok(Ok(output)) => {
-            process_group.disarm();
-            output
+    let mut managed = ManagedChild::new(command.spawn().map_err(start_error)?);
+    captures.spawned = true;
+    let mut stdout = tokio::process::ChildStdout::from_std(
+        managed.child_mut().stdout.take().expect("piped stdout"),
+    )
+    .map_err(start_error)?;
+    let mut stderr = tokio::process::ChildStderr::from_std(
+        managed.child_mut().stderr.take().expect("piped stderr"),
+    )
+    .map_err(start_error)?;
+    let stop = capture::drive(
+        &mut managed,
+        &mut exits,
+        &mut stdout,
+        &mut stderr,
+        captures,
+        limits.max_output_bytes,
+        deadline,
+    )
+    .await;
+    let signalled = managed.signal_group();
+    let completion = managed.reap(&mut exits, stop, signalled).await;
+    // Reaping the group leader is independent of inherited pipes. Drain only within
+    // the remaining scan budget and a bounded cleanup interval after group termination.
+    if completion.reaped
+        && !matches!(
+            completion.stop,
+            Stop::OutputLimit | Stop::CaptureError | Stop::WaitError
+        )
+    {
+        capture::drain(&mut stdout, &mut stderr, captures, limits.max_output_bytes).await;
+    }
+    Ok(completion)
+}
+fn start_error(error: std::io::Error) -> ToolFailure {
+    ToolFailure::new(
+        "command_failed",
+        format!("Cannot start shell capture: {error}"),
+    )
+}
+fn finish(
+    captures: Captures,
+    mut completion: process::Completion,
+    limit: usize,
+) -> Result<ToolSuccess, ToolFailure> {
+    if captures.limit_hit {
+        completion.stop = Stop::OutputLimit;
+    } else if matches!(completion.stop, Stop::Exit) && completion.cleanup_ok && !captures.complete()
+    {
+        completion.stop = Stop::CaptureError;
+    }
+    let make = |bytes: usize| {
+        let mut out_quota = bytes / 2;
+        let mut err_quota = bytes - out_quota;
+        if captures.stderr.seen < err_quota as u64 {
+            out_quota += err_quota - captures.stderr.seen as usize;
+            err_quota = captures.stderr.seen as usize;
+        } else if captures.stdout.seen < out_quota as u64 {
+            err_quota += out_quota - captures.stdout.seen as usize;
+            out_quota = captures.stdout.seen as usize;
         }
-        Ok(Err(error)) => {
-            return Err(ToolFailure::new("command_failed", error.to_string()));
-        }
-        Err(_) => {
-            return Err(ToolFailure::new(
-                "timeout",
-                format!(
-                    "Command exceeded {} second timeout",
-                    command_timeout.as_secs()
-                ),
-            ));
-        }
+        let stdout = captures.stdout.view(out_quota);
+        let stderr = captures.stderr.view(err_quota);
+        serde_json::to_value(ShellOutput {
+            exit_code: completion.exit_code,
+            signal: completion.signal,
+            stdout: stdout.text,
+            stderr: stderr.text,
+            stdout_bytes: captures.stdout.seen,
+            stderr_bytes: captures.stderr.seen,
+            stdout_omitted_bytes: stdout.omitted,
+            stderr_omitted_bytes: stderr.omitted,
+            truncated: stdout.omitted > 0 || stderr.omitted > 0 || !captures.complete(),
+            output_complete: captures.complete(),
+            stop_reason: completion.stop,
+            process_group_signal_requested: completion.signal_requested,
+            reaped: completion.reaped,
+            cleanup_ok: completion.cleanup_ok,
+            encoding: "utf8_lossy".into(),
+        })
+        .expect("shell result is serializable")
     };
-
-    let per_stream_limit = (context.max_output_bytes() / 2).max(1);
-    let (stdout, stdout_truncated) =
-        truncate_utf8(&String::from_utf8_lossy(&output.stdout), per_stream_limit);
-    let (stderr, stderr_truncated) =
-        truncate_utf8(&String::from_utf8_lossy(&output.stderr), per_stream_limit);
-    let details = json!({
-        "exit_code": output.status.code(),
-        "stdout": stdout,
-        "stderr": stderr,
-        "truncated": stdout_truncated || stderr_truncated,
-    });
-
-    if !output.status.success() {
+    let (mut low, mut high) = (0, limit);
+    while low < high {
+        let mid = low + (high - low).div_ceil(2);
+        if make(mid).to_string().len() <= limit {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    let details = make(low);
+    if details.to_string().len() > limit {
         return Err(ToolFailure::new(
-            "command_failed",
-            format!("Command exited with status {}", output.status),
+            "output_limit_too_small",
+            "Output budget cannot hold the shell result",
+        ));
+    }
+    if !completion.cleanup_ok && matches!(completion.stop, Stop::Exit) {
+        return Err(ToolFailure::new(
+            "cleanup_failed",
+            "Shell process cleanup could not be confirmed; inspect the workspace before retrying",
         )
         .with_details(details));
     }
-
+    let failure = match completion.stop {
+        Stop::Timeout => Some((
+            "timeout",
+            "Command exceeded its active time limit; partial output retained",
+        )),
+        Stop::ToolTimeout => Some((
+            "timeout",
+            "Shell tool exceeded the host deadline; cleanup requested and partial output retained",
+        )),
+        Stop::OutputLimit => Some((
+            "output_limit",
+            "Command exceeded the combined stdout/stderr scan limit",
+        )),
+        Stop::CaptureError => Some((
+            "capture_failed",
+            "Shell output could not be completely captured; inspect before retrying",
+        )),
+        Stop::WaitError => Some((
+            "process_wait_failed",
+            "Shell child exit could not be observed",
+        )),
+        Stop::Exit if completion.exit_code != Some(0) => {
+            Some(("command_failed", "Command exited unsuccessfully"))
+        }
+        Stop::Exit => None,
+    };
+    if let Some((code, message)) = failure {
+        return Err(ToolFailure::new(code, message).with_details(details));
+    }
     Ok(ToolSuccess {
+        truncated: details["truncated"] == true,
         output: details,
-        truncated: stdout_truncated || stderr_truncated,
     })
 }
-
-struct ProcessGroupGuard {
-    process_group: Option<i32>,
+fn valid_variable(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+        && bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
-
-impl ProcessGroupGuard {
-    fn new(child_id: Option<u32>) -> Self {
-        Self {
-            process_group: child_id.and_then(|id| i32::try_from(id).ok()),
-        }
-    }
-
-    fn disarm(&mut self) {
-        self.process_group = None;
-    }
-}
-
-impl Drop for ProcessGroupGuard {
-    fn drop(&mut self) {
-        if let Some(process_group) = self.process_group {
-            // The shell is its own process-group leader, so a negative pid targets all descendants.
-            unsafe {
-                libc::kill(-process_group, libc::SIGKILL);
-            }
-        }
-    }
-}
-
 fn scrub_credentials(command: &mut Command, referenced: Option<&str>) {
     for name in [
         "OPENAI_API_KEY",
@@ -202,14 +391,25 @@ fn scrub_credentials(command: &mut Command, referenced: Option<&str>) {
         "DASHSCOPE_API_KEY",
         "ZHIPU_API_KEY",
         "BASH_ENV",
+        "ENV",
+        "SHELLOPTS",
+        "BASHOPTS",
+        "CDPATH",
+        "GLOBIGNORE",
+        "BASH_XTRACEFD",
+        "BASH_COMPAT",
+        "POSIXLY_CORRECT",
     ] {
         command.env_remove(name);
     }
-    if let Some(name) = referenced
-        && !name.is_empty()
-        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-    {
+    if let Some(name) = referenced.filter(|name| valid_variable(name)) {
         command.env_remove(name);
+    }
+    // Only names are inspected; values are never copied to diagnostics or results.
+    for (name, _) in std::env::vars_os() {
+        if name.as_encoded_bytes().starts_with(b"BASH_FUNC_") {
+            command.env_remove(name);
+        }
     }
 }
 
@@ -241,7 +441,6 @@ mod tests {
         ] {
             assert!(
                 command
-                    .as_std()
                     .get_envs()
                     .any(|(key, value)| key == name && value.is_none())
             );

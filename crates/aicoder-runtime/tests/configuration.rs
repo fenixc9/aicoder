@@ -641,3 +641,192 @@ fn preserved_context_must_fit_the_actual_requested_output_capacity() {
     let runtime = load(workspace.path(), root.path(), Default::default(), &[]);
     assert!(runtime.config().context.preserve_recent_tokens < 10000 - 4096);
 }
+
+#[test]
+fn tool_deadlines_resolve_with_sources_and_reject_null_or_invalid_ranges() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    write(
+        &root.path().join("settings.json"),
+        json!({"version":1,"settings":{"execution":{"tool_timeout_ms":60000}}}),
+    );
+    write(
+        &workspace.path().join(".aicoder/settings.json"),
+        json!({"version":1,"settings":{"execution":{"tool_timeout_ms":120000}}}),
+    );
+    let project = load(workspace.path(), root.path(), Default::default(), &[]);
+    assert_eq!(project.config().execution.tool_timeout_ms, 120000);
+    assert!(matches!(
+        project.config().sources["execution.tool_timeout_ms"],
+        ConfigSource::Project { .. }
+    ));
+    let env = load(
+        workspace.path(),
+        root.path(),
+        Default::default(),
+        &[("AICODER_TOOL_TIMEOUT_MS", "90000")],
+    );
+    assert_eq!(env.config().execution.tool_timeout_ms, 90000);
+    assert!(matches!(
+        env.config().sources["execution.tool_timeout_ms"],
+        ConfigSource::Environment { .. }
+    ));
+    let override_for = |value| RuntimeOverrides {
+        settings: Settings {
+            execution: ExecutionSettings {
+                tool_timeout_ms: value,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let explicit = load(
+        workspace.path(),
+        root.path(),
+        override_for(Setting::Value(180000)),
+        &[("AICODER_TOOL_TIMEOUT_MS", "invalid-shadowed")],
+    );
+    assert_eq!(explicit.config().execution.tool_timeout_ms, 180000);
+    assert_eq!(
+        explicit.config().sources["execution.tool_timeout_ms"],
+        ConfigSource::Explicit
+    );
+    for value in [Setting::Clear, Setting::Value(0), Setting::Value(86400001)] {
+        assert!(
+            Runtime::load_with_environment(
+                workspace.path(),
+                override_for(value),
+                Default::default(),
+                environment(root.path(), &[])
+            )
+            .is_err()
+        );
+    }
+}
+struct DeadlineProbe;
+#[async_trait]
+impl aicoder_core::tools::ExecutableTool for DeadlineProbe {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "probe".into(),
+            description: None,
+            parameters: json!({"type":"object"}),
+        }
+    }
+    fn capability(&self) -> aicoder_core::tools::ToolCapability {
+        aicoder_core::tools::ToolCapability::ReadOnly
+    }
+    async fn execute(
+        &self,
+        context: &aicoder_core::tools::ToolContext,
+        _: serde_json::Value,
+    ) -> Result<aicoder_core::tools::ToolSuccess, aicoder_core::tools::ToolFailure> {
+        Ok(aicoder_core::tools::ToolSuccess::new(
+            json!({"tool_timeout_ms":context.tool_timeout().as_millis()}),
+        ))
+    }
+}
+struct ProbeModel;
+#[async_trait]
+impl ModelProvider for ProbeModel {
+    fn model_spec(&self, model: &str) -> Result<ModelSpec, ProviderError> {
+        let mut spec = ModelSpec::new("offline", model);
+        spec.capabilities.tools = true;
+        Ok(spec)
+    }
+    async fn generate(
+        &self,
+        request: ModelRequest,
+        sink: Arc<dyn ModelEventSink>,
+        _: TurnExecutionContext,
+    ) -> Result<ModelResponse, ProviderError> {
+        let done = request
+            .messages
+            .iter()
+            .any(|message| message.tool_result().is_some());
+        let message = if done {
+            Message::text(MessageRole::Assistant, "deadline observed")
+        } else {
+            Message {
+                role: MessageRole::Assistant,
+                content: vec![ContentBlock::ToolCall {
+                    call: ModelToolCall {
+                        id: "probe".into(),
+                        name: "probe".into(),
+                        arguments: json!({}),
+                    },
+                }],
+            }
+        };
+        let response = ModelResponse {
+            id: None,
+            model: request.model,
+            message,
+            stop_reason: if done {
+                StopReason::Complete
+            } else {
+                StopReason::ToolCalls
+            },
+            usage: ModelUsage::default(),
+        };
+        emit_response(&response, sink.as_ref());
+        Ok(response)
+    }
+}
+#[tokio::test]
+async fn runtime_and_isolated_case_factories_inject_the_same_frozen_tool_deadline() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let case = tempfile::tempdir().unwrap();
+    write(
+        &case.path().join(".aicoder/settings.json"),
+        json!({"version":1,"settings":{"execution":{"tool_timeout_ms":1}}}),
+    );
+    let runtime = load(
+        workspace.path(),
+        root.path(),
+        RuntimeOverrides {
+            settings: Settings {
+                execution: ExecutionSettings {
+                    tool_timeout_ms: Setting::Value(250),
+                    ..Default::default()
+                },
+                resources: resources::ResourceSettings {
+                    enabled: Setting::Value(false),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &[],
+    );
+    for isolated in [false, true] {
+        let builder = if isolated {
+            runtime.executor_builder_for(Arc::new(ProbeModel), case.path())
+        } else {
+            runtime.executor_builder(Arc::new(ProbeModel))
+        }
+        .unwrap();
+        let mut registry = aicoder_core::tools::ToolRegistry::default();
+        registry.register(DeadlineProbe).unwrap();
+        let result = builder
+            .registry(registry)
+            .build()
+            .unwrap()
+            .run(ModelRequest::new(
+                "offline",
+                vec![Message::text(MessageRole::User, "probe")],
+            ))
+            .await
+            .unwrap();
+        let output = result
+            .messages
+            .iter()
+            .find_map(Message::tool_result)
+            .unwrap()
+            .1;
+        assert_eq!(output["output"]["tool_timeout_ms"], 250);
+    }
+}
