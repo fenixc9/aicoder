@@ -469,3 +469,23 @@ actual followed model. Model-selection reports are separate metadata-operation r
 not invented coding runs. Existing full `session-tree --json` output remains; bounded
 inspection is `session-branches`. Scope checks now also cover old tree/migrate/delete CLI
 commands. See [navigation/model constraints](session-navigation.md).
+
+## S4 token counters and ContextPolicy
+
+Core adds TokenCounter/TextTokenizer/TokenCounting and host ContextPolicy APIs; default
+execution uses the same heuristic counts through a streaming writer. ContextCompactor
+gains default supports_counting/compact_counted methods; old implementations still compile
+and retain their trigger estimate. Their returned contexts are remeasured and must honor
+counted targets/prefixes, or fail with preserved usage. Built-ins share the injected counter.
+
+ModelContextInfo source literals need last_input_count/context_count/context_policy/
+context_decision optional fields. Legacy JSON defaults them to None; actual SDK output
+now reports provenance. ModelSelectionReport's existing optional token_count/decision fields
+are populated. Event envelopes stay v1 and JSONL stays v3; the main event fixture now records
+count/policy fields. Unknown-usage accounting remains estimated even with exact text
+encoding; contradictory reported totals are floored by known reported component usage.
+
+Runtime adds context.tokenizer/AICODER_TOKENIZER with heuristic/auto/cl100k_base/o200k_base.
+Heuristic remains default. Explicit BPE requires tokenizer-tiktoken; auto exposes fallback
+when unavailable or missing a model hint. Optional tiktoken-rs is lockfile-pinned and has no
+runtime downloads. See [scope, accuracy and build costs](context-policy.md).

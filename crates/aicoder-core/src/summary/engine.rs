@@ -68,23 +68,9 @@ impl Meter {
         }
     }
     fn account(&mut self, usage: &ModelUsage, estimate: u64) {
-        let reported = usage.total_tokens.or_else(|| {
-            usage
-                .input_tokens
-                .zip(usage.output_tokens)
-                .and_then(|(a, b)| a.checked_add(b))
-        });
-        self.tokens.used = self.tokens.used.saturating_add(
-            reported.unwrap_or(
-                estimate.max(
-                    usage
-                        .input_tokens
-                        .unwrap_or(0)
-                        .saturating_add(usage.output_tokens.unwrap_or(0)),
-                ),
-            ),
-        );
-        self.tokens.estimated |= reported.is_none();
+        let accounted = TokenAccounting::from_usage(usage, estimate);
+        self.tokens.used = self.tokens.used.saturating_add(accounted.used);
+        self.tokens.estimated |= accounted.estimated;
         self.usage.accumulate(usage);
     }
     fn remaining(&self) -> Option<u64> {
@@ -127,7 +113,11 @@ impl SemanticContextCompactor {
                 .max(max_output.unwrap_or(0) as usize),
         )
     }
-    fn boundary(&self, request: &CompactionRequest<'_>) -> Result<usize> {
+    fn boundary(
+        &self,
+        request: &CompactionRequest<'_>,
+        measure: Option<&crate::context::ContextMeasure>,
+    ) -> Result<usize> {
         let messages = request.input.messages;
         let prefix = request.system_prefix_len;
         ensure!(prefix <= messages.len(), "invalid protected prefix");
@@ -139,15 +129,19 @@ impl SemanticContextCompactor {
         let mut start = messages.len();
         let mut kept = 0;
         for unit in units.iter().rev() {
-            let cost =
-                estimate_context_tokens(&messages[prefix + unit.start..prefix + unit.end], None);
+            let unit_messages = &messages[prefix + unit.start..prefix + unit.end];
+            let cost = measure.map_or_else(
+                || estimate_context_tokens(unit_messages, None),
+                |measure| measure.unit_cost(unit_messages),
+            );
             if start == messages.len()
                 || kept + cost
-                    <= self
-                        .config
-                        .window
-                        .preserve_recent_tokens
-                        .min(self.target(request.input.max_output_tokens) / 2)
+                    <= self.config.window.preserve_recent_tokens.min(
+                        measure.map_or_else(
+                            || self.target(request.input.max_output_tokens),
+                            |measure| measure.target_tokens,
+                        ) / 2,
+                    )
             {
                 start = prefix + unit.start;
                 kept += cost;
@@ -175,6 +169,7 @@ impl SemanticContextCompactor {
         older: &[Message],
         meter: &mut Meter,
         context: &TurnExecutionContext,
+        measure: Option<&crate::context::ContextMeasure>,
     ) -> Result<ConversationSummary, SummaryFailure> {
         let spec = self.provider.model_spec(&self.model).map_err(|_| {
             meter.failure(
@@ -182,6 +177,14 @@ impl SemanticContextCompactor {
                 "summary model metadata unavailable",
             )
         })?;
+        let summary_measure = measure.map(|measure| crate::context::ContextMeasure {
+            counting: measure.counting.clone(),
+            spec: spec.clone(),
+            response_format: None,
+            tool_choice: ModelToolChoice::None,
+            target_tokens: self.config.max_input_tokens,
+        });
+        let summary_measure = summary_measure.as_ref();
         let output = self
             .config
             .output_tokens
@@ -241,6 +244,9 @@ impl SemanticContextCompactor {
                 cost = cost.saturating_add(costs[end]);
                 end += 1;
             }
+            if summary_measure.is_some_and(|measure| !measure.counting.additive_input()) {
+                end = units.len();
+            }
             if end == position {
                 return Err(meter.failure(
                     SummaryFailureKind::SourceLimit,
@@ -249,15 +255,20 @@ impl SemanticContextCompactor {
             }
             let payload = serde_json::json!({"previous_summary":previous,
                 "conversation":&older[units[position].start..units[end-1].end]});
-            let messages = vec![
+            let mut messages = vec![
                 Message::text(MessageRole::System, INSTRUCTIONS),
                 Message::text(MessageRole::User, payload.to_string()),
             ];
-            if estimate_context_tokens(&messages, None) > input_limit {
-                return Err(meter.failure(
-                    SummaryFailureKind::SourceLimit,
-                    "summary chunk exceeds input budget",
-                ));
+            while measured(summary_measure, &messages, Some(&[])) > input_limit {
+                if end - position <= 1 {
+                    return Err(meter.failure(
+                        SummaryFailureKind::SourceLimit,
+                        "summary chunk exceeds input budget",
+                    ));
+                }
+                end = position + (end - position).div_ceil(2);
+                let payload = serde_json::json!({"previous_summary":previous,"conversation":&older[units[position].start..units[end-1].end]});
+                messages[1] = Message::text(MessageRole::User, payload.to_string());
             }
             let mut accepted = None;
             for _ in 0..self.config.max_attempts {
@@ -270,7 +281,7 @@ impl SemanticContextCompactor {
                         "summary call limit exceeded",
                     ));
                 }
-                let estimate = estimate_context_tokens(&messages, None) as u64;
+                let estimate = measured(summary_measure, &messages, Some(&[])) as u64;
                 let available = meter.remaining().unwrap_or(u64::MAX);
                 if available <= estimate {
                     return Err(
@@ -283,7 +294,7 @@ impl SemanticContextCompactor {
                     Some(output.min((available - estimate).min(u64::from(u32::MAX)) as u32));
                 let charged_output = request.options.max_output_tokens.unwrap_or(output);
                 request.stream = false;
-                request.validate(&spec).map_err(|_| {
+                self.provider.validate_request(&request).map_err(|_| {
                     meter.failure(
                         SummaryFailureKind::Provider,
                         "summary request is unsupported by its model",
@@ -363,6 +374,7 @@ impl SemanticContextCompactor {
         input: ContextCompactionInput<'_>,
         meter: Meter,
         error: SummaryFailure,
+        measure: Option<&crate::context::ContextMeasure>,
     ) -> Result<RecordedCompaction> {
         if matches!(
             error.kind,
@@ -372,10 +384,20 @@ impl SemanticContextCompactor {
         {
             return Err(error.into());
         }
-        let mut fallback = PruningContextCompactor::new(self.config.window)?
-            .compact(input)
-            .await
-            .map_err(|_| error.clone())?;
+        let pruner = PruningContextCompactor::new(self.config.window)?;
+        let mut fallback = if let Some(measure) = measure {
+            pruner
+                .compact_counted(
+                    CompactionRequest { input, ..*request },
+                    measure.clone(),
+                    TurnExecutionContext::new(),
+                )
+                .await
+                .map(|recorded| recorded.compaction)
+        } else {
+            pruner.compact(input).await
+        }
+        .map_err(|_| error.clone())?;
         fallback.usage = meter.usage.clone();
         Ok(RecordedCompaction {
             compaction: fallback,
@@ -389,9 +411,14 @@ impl SemanticContextCompactor {
         &self,
         request: CompactionRequest<'_>,
         context: TurnExecutionContext,
+        measure: Option<crate::context::ContextMeasure>,
     ) -> Result<RecordedCompaction> {
-        let before = self.estimate_tokens(request.input);
-        let target = self.target(request.input.max_output_tokens);
+        let measure = measure.as_ref();
+        let before = measured(measure, request.input.messages, request.input.tools);
+        let target = measure.map_or_else(
+            || self.target(request.input.max_output_tokens),
+            |measure| measure.target_tokens,
+        );
         if !request.force && before <= target {
             return Ok(RecordedCompaction::transient(ContextCompaction {
                 messages: request.input.messages.to_vec(),
@@ -434,7 +461,7 @@ impl SemanticContextCompactor {
             ..request
         };
         let mut meter = Meter::new(request.token_budget);
-        let boundary = match self.boundary(&request) {
+        let boundary = match self.boundary(&request, measure) {
             Ok(boundary) => boundary,
             Err(_) => {
                 let failure = meter.failure(
@@ -442,7 +469,7 @@ impl SemanticContextCompactor {
                     "no safe summary boundary; newest unit must remain",
                 );
                 return self
-                    .fallback(&request, fallback_input, meter, failure)
+                    .fallback(&request, fallback_input, meter, failure, measure)
                     .await;
             }
         };
@@ -452,7 +479,13 @@ impl SemanticContextCompactor {
             source.to_mut().insert(0, super::recovery_notice());
         }
         let older = source.as_ref();
-        let key = format!("{}:{}", self.model, super::digest(older));
+        let source_count = measure.map(|measure| measure.count(older, None));
+        let key = format!(
+            "{}:{}:{target}:{:?}",
+            self.model,
+            super::digest(older),
+            source_count
+        );
         let cached = !request.force
             && self
                 .failed
@@ -465,7 +498,7 @@ impl SemanticContextCompactor {
                 "unchanged failed summary source; explicit manual retry is available",
             ))
         } else {
-            self.generate(older, &mut meter, &context).await
+            self.generate(older, &mut meter, &context, measure).await
         };
         let uncertain = uncertain_all || super::uncertain(older);
         let result = generated.and_then(|summary| {
@@ -475,7 +508,7 @@ impl SemanticContextCompactor {
             }
             messages.push(summary.message());
             messages.extend_from_slice(&request.input.messages[boundary..]);
-            let after = estimate_context_tokens(&messages, request.input.tools);
+            let after = measured(measure, &messages, request.input.tools);
             if after > target || after >= before {
                 return Err(meter.failure(
                     SummaryFailureKind::InvalidResponse,
@@ -531,13 +564,26 @@ impl SemanticContextCompactor {
                         failed.push_back(key);
                     }
                 }
-                self.fallback(&request, fallback_input, meter, error).await
+                self.fallback(&request, fallback_input, meter, error, measure)
+                    .await
             }
         }
     }
 }
 #[async_trait]
 impl ContextCompactor for SemanticContextCompactor {
+    fn supports_counting(&self) -> bool {
+        true
+    }
+    async fn compact_counted(
+        &self,
+        request: CompactionRequest<'_>,
+        measure: crate::context::ContextMeasure,
+        context: TurnExecutionContext,
+    ) -> Result<RecordedCompaction> {
+        self.recorded(request, context, Some(measure)).await
+    }
+
     fn name(&self) -> &'static str {
         "semantic_summary_v1"
     }
@@ -567,6 +613,7 @@ impl ContextCompactor for SemanticContextCompactor {
                 token_budget: None,
             },
             TurnExecutionContext::new(),
+            None,
         )
         .await
         .map(|result| result.compaction)
@@ -576,6 +623,17 @@ impl ContextCompactor for SemanticContextCompactor {
         request: CompactionRequest<'_>,
         context: TurnExecutionContext,
     ) -> Result<RecordedCompaction> {
-        self.recorded(request, context).await
+        self.recorded(request, context, None).await
     }
+}
+
+fn measured(
+    measure: Option<&crate::context::ContextMeasure>,
+    messages: &[Message],
+    tools: Option<&[ToolDefinition]>,
+) -> usize {
+    measure.map_or_else(
+        || estimate_context_tokens(messages, tools),
+        |measure| measure.count(messages, tools).tokens.min(usize::MAX as u64) as usize,
+    )
 }

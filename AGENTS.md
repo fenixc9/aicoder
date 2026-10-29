@@ -42,6 +42,10 @@
   workspace/run lease, retain old branches, and reject stale cursors. Validate model,
   adapter and projected-context compatibility before writing a selection or turn;
   history may select a model only inside an explicitly host-selected provider route.
+- Token counts must identify scope, precision and fallback. Exact text encoding is not
+  exact provider framing or billed usage. Share counting across preflight, compaction and
+  budgets; custom policies cannot bypass known windows, protected prefixes or tool units.
+  Keep optional vocabularies/dependencies outside default core/runtime builds.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

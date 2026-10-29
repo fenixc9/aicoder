@@ -2271,6 +2271,43 @@
             "string",
             "null"
           ]
+        },
+        "last_input_count": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/token_count"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context_count": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/token_count"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "context_policy": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "context_decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/context_decision"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -2316,6 +2353,132 @@
         "media_type",
         "bytes",
         "complete"
+      ]
+    },
+    "token_count": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "scope": {
+          "enum": [
+            "request",
+            "output",
+            "text"
+          ]
+        },
+        "accuracy": {
+          "enum": [
+            "estimated",
+            "exact"
+          ]
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[\\x20-\\x7e]+$"
+        },
+        "fallback": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "missing_tokenizer",
+            "tokenizer_unavailable",
+            "unsupported_tokenizer",
+            "unsupported_content",
+            "input_limit",
+            "counter_failed",
+            "invalid_count",
+            null
+          ]
+        }
+      },
+      "required": [
+        "tokens",
+        "scope",
+        "accuracy",
+        "method"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "fallback"
+            ],
+            "properties": {
+              "fallback": {
+                "type": "string"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "accuracy": {
+                "const": "estimated"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "context_decision": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "const": "keep"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "const": "compact"
+            },
+            "target_tokens": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 18446744073709551615
+            }
+          },
+          "required": [
+            "action",
+            "target_tokens"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "const": "reject"
+            },
+            "code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[\\x20-\\x7e]+$"
+            }
+          },
+          "required": [
+            "action",
+            "code"
+          ]
+        }
       ]
     }
   }

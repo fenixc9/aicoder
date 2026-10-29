@@ -58,6 +58,13 @@ jobs:
         run: cargo run --locked -p aicoder-runtime --example offline_artifacts
       - name: Branch navigation and validated model selection
         run: cargo run --locked -p aicoder-runtime --example offline_navigation
+      - name: Context policy and default token counter
+        run: cargo run --locked -p aicoder-runtime --example offline_context_policy
+      - name: Optional local tokenizers
+        run: |
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-features
+          cargo run --locked -p aicoder-runtime --features tokenizer-tiktoken --example offline_context_policy -- cl100k_base
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

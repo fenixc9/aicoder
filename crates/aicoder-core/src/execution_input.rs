@@ -20,6 +20,14 @@ pub struct ModelContextInfo {
     pub summary_fallbacks: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_summary_checkpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_input_count: Option<crate::tokens::TokenCount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_count: Option<crate::tokens::TokenCount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_decision: Option<crate::context_policy::ContextDecision>,
 }
 #[derive(Debug, Clone)]
 pub struct ExecutionInput {

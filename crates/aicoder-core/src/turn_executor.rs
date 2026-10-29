@@ -52,6 +52,8 @@ pub struct TurnExecutor {
     pub(crate) context_compactor: Option<Arc<dyn ContextCompactor>>,
     pub(crate) input_context: Option<Arc<dyn crate::InputContextProvider>>,
     pub(crate) config: TurnExecutionConfig,
+    pub(crate) counting: crate::tokens::TokenCounting,
+    pub(crate) context_policy: Arc<dyn crate::context_policy::ContextPolicy>,
 }
 
 impl TurnExecutor {
@@ -96,6 +98,8 @@ impl TurnExecutor {
             context_compactor,
             input_context,
             config,
+            counting: crate::tokens::TokenCounting::default(),
+            context_policy: Arc::new(crate::context_policy::WindowContextPolicy),
         }
     }
 
@@ -116,12 +120,37 @@ impl TurnExecutor {
         context: TurnExecutionContext,
     ) -> crate::summary::ManualCompactionReport {
         template.tools = self.dispatcher.registry().definitions();
+        let spec = self
+            .provider
+            .model_spec(&template.model)
+            .unwrap_or_else(|_| crate::model::ModelSpec::new("unavailable", &template.model));
+        let compaction_input = ContextCompactionInput {
+            model: &template.model,
+            messages: &template.messages,
+            tools: Some(&template.tools),
+            max_output_tokens: template.options.max_output_tokens,
+        };
+        let target_tokens = self
+            .context_compactor
+            .as_ref()
+            .map_or(usize::MAX, |compactor| {
+                compactor.target_tokens(compaction_input)
+            });
+        let measure = crate::context::ContextMeasure {
+            counting: self.counting.clone(),
+            spec,
+            response_format: template.options.response_format.clone(),
+            tool_choice: template.tool_choice.clone(),
+            target_tokens,
+        };
         crate::summary::manual::compact(
             crate::summary::manual::ManualHost {
                 compactor: self.context_compactor.clone(),
                 input_context: self.input_context.clone(),
                 workspace: self.workspace_root(),
                 budget: self.config.budget.clone(),
+                measure,
+                policy: self.context_policy.clone(),
             },
             repository,
             id,
@@ -211,6 +240,23 @@ impl TurnExecutor {
         self.run_with_journal(request, handler, control.context.clone(), journal)
             .await
     }
+    fn count_partial(
+        &self,
+        spec: &crate::model::ModelSpec,
+        partial: &crate::run::PartialModelResponse,
+    ) -> u64 {
+        let mut count = self
+            .counting
+            .text(spec, &partial.text)
+            .tokens
+            .saturating_add(self.counting.text(spec, &partial.reasoning).tokens);
+        for call in &partial.tool_calls {
+            count = count
+                .saturating_add(self.counting.text(spec, &call.arguments).tokens)
+                .saturating_add(self.counting.text(spec, &call.name).tokens);
+        }
+        count
+    }
     pub fn model_spec(
         &self,
         model: &str,
@@ -298,6 +344,10 @@ impl TurnExecutor {
             summary_attempts: 0,
             summary_fallbacks: 0,
             last_summary_checkpoint: None,
+            last_input_count: None,
+            context_count: None,
+            context_policy: None,
+            context_decision: None,
         });
         let RunScope { events, mut state } = scope;
         let mut execution = match self.config.events.validate() {
@@ -536,6 +586,38 @@ impl TurnExecutor {
                 &round_events,
             )
             .await?;
+            progress.stage = RunStage::Compaction;
+            let context_spec = self.provider.model_spec(&request.model)?;
+            let decision_messages = crate::tokens::model_messages(&context_messages, &context_spec);
+            let measured = self
+                .counting
+                .request_view(&request, &context_spec, &decision_messages);
+            let decision = match self.decide_context_view(
+                &request,
+                &decision_messages,
+                &context_spec,
+                &measured,
+            ) {
+                Ok(decision) => decision,
+                Err(error) => {
+                    round_events.emit(AgentRawEvent::RoundCompleted {
+                        outcome: RoundOutcome::Failed,
+                    });
+                    return Err(error);
+                }
+            };
+            if let Some(info) = &mut progress.model_context {
+                info.context_count = Some(measured.clone());
+                info.context_policy = Some(self.context_policy.name().into());
+                info.context_decision = Some(decision.clone());
+            }
+            if let crate::context_policy::ContextDecision::Reject { code } = &decision {
+                round_events.emit(AgentRawEvent::RoundCompleted {
+                    outcome: RoundOutcome::Failed,
+                });
+                anyhow::bail!("context policy rejected request: {code}");
+            }
+            drop(decision_messages);
             if let Some(compactor) = &self.context_compactor {
                 let input = ContextCompactionInput {
                     model: &request.model,
@@ -543,9 +625,14 @@ impl TurnExecutor {
                     tools: Some(request.tools.as_slice()),
                     max_output_tokens: request.options.max_output_tokens,
                 };
-                let estimated_tokens = compactor.estimate_tokens(input);
-                let target_tokens = compactor.target_tokens(input);
-                if estimated_tokens > target_tokens {
+                let estimated_tokens = if compactor.supports_counting() {
+                    measured.tokens.min(usize::MAX as u64) as usize
+                } else {
+                    compactor.estimate_tokens(input)
+                };
+                if let crate::context_policy::ContextDecision::Compact { target_tokens } = decision
+                {
+                    let target_tokens = target_tokens.min(usize::MAX as u64) as usize;
                     transition_state(state, &round_events, AgentRunState::Compacting { round })?;
                     round_events.emit(AgentRawEvent::ContextCompactionStarted {
                         strategy: compactor.name().into(),
@@ -557,7 +644,7 @@ impl TurnExecutor {
                         ensure_token_capacity(limits, estimated_tokens as u64)?;
                     }
                     let recorded = compactor
-                        .compact_recorded(
+                        .compact_counted(
                             crate::summary::CompactionRequest {
                                 input,
                                 history: &progress.messages,
@@ -571,24 +658,49 @@ impl TurnExecutor {
                                 force: false,
                                 token_budget: limits.remaining_tokens(),
                             },
+                            crate::context::ContextMeasure {
+                                counting: self.counting.clone(),
+                                spec: context_spec.clone(),
+                                response_format: request.options.response_format.clone(),
+                                tool_choice: request.tool_choice.clone(),
+                                target_tokens,
+                            },
                             context.clone(),
                         )
                         .await
                         .and_then(|recorded| {
-                            if let Err(error) =
+                            let prefix = progress
+                                .messages
+                                .iter()
+                                .take_while(|message| {
+                                    message.role == crate::model::MessageRole::System
+                                })
+                                .count();
+                            let validated =
                                 ensure_valid_compaction(&recorded.compaction, target_tokens)
-                            {
-                                if let Some(tokens) = &recorded.accounting {
-                                    return Err(crate::summary::SummaryFailure {
-                                        kind: crate::summary::SummaryFailureKind::InvalidResponse,
-                                        message: error.to_string(),
-                                        usage: recorded.compaction.usage.clone(),
-                                        tokens: tokens.clone(),
-                                        attempts: recorded.attempts,
-                                    }
-                                    .into());
+                                    .and_then(|()| {
+                                        anyhow::ensure!(
+                                            recorded.compaction.messages.get(..prefix)
+                                                == input.messages.get(..prefix),
+                                            "context compactor changed the protected system prefix"
+                                        );
+                                        Ok(())
+                                    });
+                            if let Err(error) = validated {
+                                return Err(crate::summary::SummaryFailure {
+                                    kind: crate::summary::SummaryFailureKind::InvalidResponse,
+                                    message: error.to_string(),
+                                    usage: recorded.compaction.usage.clone(),
+                                    tokens: recorded.accounting.clone().unwrap_or_else(|| {
+                                        crate::run::TokenAccounting::from_usage(
+                                            &recorded.compaction.usage,
+                                            (estimated_tokens as u64)
+                                                .saturating_add(target_tokens as u64),
+                                        )
+                                    }),
+                                    attempts: recorded.attempts,
                                 }
-                                return Err(error);
+                                .into());
                             }
                             Ok(recorded)
                         });
@@ -774,9 +886,8 @@ impl TurnExecutor {
                 .validate_request(&request)
                 .map_err(anyhow::Error::from)?;
             progress.stage = RunStage::Model;
-            let input_estimate =
-                crate::context::estimate_context_tokens(&request.messages, Some(&request.tools))
-                    as u64;
+            let input_count = self.counting.request(&request, &model_spec);
+            let input_estimate = input_count.tokens;
             ensure_token_capacity(limits, input_estimate)?;
             let original_output_limit = request.options.max_output_tokens;
             let mut budget_clamped = false;
@@ -805,6 +916,7 @@ impl TurnExecutor {
                 info.requests += 1;
                 info.last_request_messages = Some(request.messages.len());
                 info.last_input_token_estimate = Some(input_estimate);
+                info.last_input_count = Some(input_count);
             }
             let messages = std::mem::take(&mut request.messages);
             let mut model_request = request.clone();
@@ -822,7 +934,7 @@ impl TurnExecutor {
                 Ok(response) => response,
                 Err(error) if error.downcast_ref::<TurnCancelled>().is_some() => {
                     let (usage,partial)=sink.abort(&context.reason());
-                    progress.reported_usage|=crate::run::usage_reported(&usage);progress.usage.accumulate(&usage);limits.account_tokens(&usage,input_estimate.saturating_add(estimate_partial(&partial)));
+                    progress.reported_usage|=crate::run::usage_reported(&usage);progress.usage.accumulate(&usage);limits.account_tokens(&usage,input_estimate.saturating_add(self.count_partial(&model_spec,&partial)));
                     progress.partial_response=(!partial.is_empty()).then_some(partial);
                     round_events.emit(AgentRawEvent::ModelResponseFailed {
                         message: context.reason(),
@@ -834,7 +946,7 @@ impl TurnExecutor {
                 }
                 Err(error) => {
                     let (usage,partial)=sink.abort(&error.to_string());
-                    progress.reported_usage|=crate::run::usage_reported(&usage);progress.usage.accumulate(&usage);limits.account_tokens(&usage,input_estimate.saturating_add(estimate_partial(&partial)));
+                    progress.reported_usage|=crate::run::usage_reported(&usage);progress.usage.accumulate(&usage);limits.account_tokens(&usage,input_estimate.saturating_add(self.count_partial(&model_spec,&partial)));
                     progress.partial_response=(!partial.is_empty()).then_some(partial);
                     round_events.emit(AgentRawEvent::ModelResponseFailed {
                         message: format!("{error:#}").into(),
@@ -852,7 +964,7 @@ impl TurnExecutor {
                 progress.usage.accumulate(&usage);
                 limits.account_tokens(
                     &usage,
-                    input_estimate.saturating_add(estimate_partial(&partial)),
+                    input_estimate.saturating_add(self.count_partial(&model_spec, &partial)),
                 );
                 progress.partial_response = (!partial.is_empty()).then_some(partial);
                 return Err(error.into());
@@ -862,7 +974,8 @@ impl TurnExecutor {
             progress.usage.accumulate(&sink.usage());
             limits.account_tokens(
                 &response.usage,
-                input_estimate.saturating_add(estimate_message(&response.message)),
+                input_estimate
+                    .saturating_add(self.counting.output(&model_spec, &response.message).tokens),
             );
             progress.last_model_stop = Some(response.stop_reason.clone());
             request.options.max_output_tokens = original_output_limit;
@@ -1205,37 +1318,6 @@ fn ensure_token_capacity(limits: &RunLimiter, input: u64) -> Result<()> {
     }
     limits.check()
 }
-fn estimate_text(text: &str) -> u64 {
-    let ascii = text.chars().filter(char::is_ascii).count() as u64;
-    ascii
-        .div_ceil(4)
-        .saturating_add((text.chars().count() as u64 - ascii).saturating_mul(2))
-}
-fn estimate_message(message: &Message) -> u64 {
-    message
-        .content
-        .iter()
-        .map(|block| match block {
-            crate::model::ContentBlock::Text { text }
-            | crate::model::ContentBlock::Reasoning { text } => estimate_text(text),
-            other => estimate_text(&serde_json::to_string(other).unwrap_or_default()),
-        })
-        .sum()
-}
-fn estimate_partial(partial: &crate::run::PartialModelResponse) -> u64 {
-    estimate_text(&partial.text)
-        .saturating_add(estimate_text(&partial.reasoning))
-        .saturating_add(
-            partial
-                .tool_calls
-                .iter()
-                .map(|call| {
-                    estimate_text(&call.arguments).saturating_add(estimate_text(&call.name))
-                })
-                .sum::<u64>(),
-        )
-}
-
 fn transition_state(
     state: &mut AgentRunStateMachine,
     events: &AgentEventEmitter,
@@ -1271,6 +1353,8 @@ pub struct TurnExecutorBuilder {
     artifact_store: Option<Arc<dyn crate::artifacts::ArtifactStore>>,
     input_context: Option<Arc<dyn crate::InputContextProvider>>,
     execution_config: TurnExecutionConfig,
+    counting: crate::tokens::TokenCounting,
+    context_policy: Arc<dyn crate::context_policy::ContextPolicy>,
 }
 
 impl TurnExecutorBuilder {
@@ -1293,6 +1377,8 @@ impl TurnExecutorBuilder {
             artifact_store: None,
             input_context: None,
             execution_config: TurnExecutionConfig::default(),
+            counting: crate::tokens::TokenCounting::default(),
+            context_policy: Arc::new(crate::context_policy::WindowContextPolicy),
         }
     }
 
@@ -1361,6 +1447,15 @@ impl TurnExecutorBuilder {
         self
     }
 
+    pub fn token_counter(mut self, counter: Arc<dyn crate::tokens::TokenCounter>) -> Self {
+        self.counting = crate::tokens::TokenCounting::new(counter);
+        self
+    }
+    pub fn context_policy(mut self, policy: Arc<dyn crate::context_policy::ContextPolicy>) -> Self {
+        self.context_policy = policy;
+        self
+    }
+
     pub fn dispatcher_config(mut self, config: DispatcherConfig) -> Self {
         self.dispatcher_config = config;
         self
@@ -1386,14 +1481,17 @@ impl TurnExecutorBuilder {
         if let Some(store) = self.artifact_store {
             dispatcher = dispatcher.with_artifact_store(store)?;
         }
-        Ok(TurnExecutor::new_with_verifier(
+        let mut executor = TurnExecutor::new_with_verifier(
             self.provider,
             Arc::new(dispatcher),
             self.completion_verifier,
             self.context_compactor,
             self.input_context,
             self.execution_config,
-        ))
+        );
+        executor.counting = self.counting;
+        executor.context_policy = self.context_policy;
+        Ok(executor)
     }
 }
 

@@ -202,7 +202,8 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
   见 [产物契约](output-artifacts.md) 与 [验收记录](s4-artifacts-acceptance.md)。
 - [x] 分支、标签、搜索、重命名、恢复和模型切换；切换时验证上下文能力。
   见 [会话契约](session-navigation.md) 与 [验收记录](s4-navigation-acceptance.md)。
-- [ ] 可选精确 tokenizer，缺少时显式使用估计；支持自定义 ContextPolicy。
+- [x] 可选精确 tokenizer，缺少时显式使用估计；支持自定义 ContextPolicy。
+  精确性区分文本编码与完整请求，见 [计数/策略契约](context-policy.md) 与 [验收记录](s4-policy-acceptance.md)。
 - [ ] 为长会话存储/视图增加分页或加载预算，避免为构建有限上下文加载全量归档；
   当前 snapshot 仍保留完整历史，不能据此宣称 S4 的内存验收已通过。
 

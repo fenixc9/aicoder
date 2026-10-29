@@ -2,7 +2,6 @@
 
 use anyhow::{Result, bail, ensure};
 use async_trait::async_trait;
-use serde::Serialize;
 
 use crate::model::{Message, MessageRole, ModelUsage, ToolDefinition};
 
@@ -27,6 +26,32 @@ pub struct ContextCompaction {
 #[async_trait]
 pub trait ContextCompactor: Send + Sync {
     fn name(&self) -> &'static str;
+    /// Built-ins honor counted targets. Legacy implementations retain their own trigger estimate.
+    fn supports_counting(&self) -> bool {
+        false
+    }
+    async fn compact_counted(
+        &self,
+        request: crate::summary::CompactionRequest<'_>,
+        measure: ContextMeasure,
+        context: crate::TurnExecutionContext,
+    ) -> Result<crate::summary::RecordedCompaction> {
+        let mut recorded = self.compact_recorded(request, context).await?;
+        {
+            recorded.compaction.estimated_tokens_before = measure
+                .count(request.input.messages, request.input.tools)
+                .tokens
+                .min(usize::MAX as u64)
+                as usize;
+            recorded.compaction.estimated_tokens_after = measure
+                .count(&recorded.compaction.messages, request.input.tools)
+                .tokens
+                .min(usize::MAX as u64)
+                as usize;
+        }
+        Ok(recorded)
+    }
+
     /// Whether compaction may consume model tokens. Unknown implementations are accounted conservatively.
     fn uses_model(&self) -> bool {
         true
@@ -51,6 +76,57 @@ pub trait ContextCompactor: Send + Sync {
     fn target_tokens(&self, input: ContextCompactionInput<'_>) -> usize;
 
     async fn compact(&self, input: ContextCompactionInput<'_>) -> Result<ContextCompaction>;
+}
+
+/// Shared request measurement and the host policy's selected input target.
+#[derive(Clone)]
+pub struct ContextMeasure {
+    pub counting: crate::tokens::TokenCounting,
+    pub spec: crate::model::ModelSpec,
+    pub response_format: Option<crate::model::ResponseFormat>,
+    pub tool_choice: crate::model::ModelToolChoice,
+    pub target_tokens: usize,
+}
+impl ContextMeasure {
+    pub fn count(
+        &self,
+        messages: &[Message],
+        tools: Option<&[ToolDefinition]>,
+    ) -> crate::tokens::TokenCount {
+        let adapted = crate::tokens::model_messages(messages, &self.spec);
+        self.counting.count(crate::tokens::TokenInput {
+            provider: &self.spec.provider,
+            model: &self.spec.id,
+            tokenizer: self.spec.tokenizer.as_deref(),
+            content: crate::tokens::TokenContent::Request {
+                messages: &adapted,
+                tools,
+                response_format: self.response_format.as_ref(),
+                tool_choice: Some(&self.tool_choice),
+            },
+        })
+    }
+    pub(crate) fn unit_cost(&self, messages: &[Message]) -> usize {
+        let adapted = crate::tokens::model_messages(messages, &self.spec);
+        let count = |messages| {
+            self.counting
+                .count(crate::tokens::TokenInput {
+                    provider: &self.spec.provider,
+                    model: &self.spec.id,
+                    tokenizer: self.spec.tokenizer.as_deref(),
+                    content: crate::tokens::TokenContent::Request {
+                        messages,
+                        tools: None,
+                        response_format: None,
+                        tool_choice: None,
+                    },
+                })
+                .tokens
+        };
+        count(&adapted)
+            .saturating_sub(count(&[]))
+            .min(usize::MAX as u64) as usize
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +176,105 @@ impl PruningContextCompactor {
         self.config
     }
 
+    fn prune_counted(
+        &self,
+        input: ContextCompactionInput<'_>,
+        measure: &ContextMeasure,
+    ) -> Result<ContextCompaction> {
+        let before = measure
+            .count(input.messages, input.tools)
+            .tokens
+            .min(usize::MAX as u64) as usize;
+        let target = measure.target_tokens;
+        ensure!(target > 0, "no input capacity");
+        if before <= target {
+            return Ok(ContextCompaction {
+                messages: input.messages.to_vec(),
+                estimated_tokens_before: before,
+                estimated_tokens_after: before,
+                removed_messages: 0,
+                usage: ModelUsage::zero(),
+            });
+        }
+        let units = message_units(input.messages);
+        let mut mandatory = vec![false; units.len()];
+        let mut recent = 0usize;
+        let mut newest = true;
+        let mut closed = false;
+        for (index, unit) in units.iter().enumerate().rev() {
+            if !unit.removable {
+                mandatory[index] = true;
+                continue;
+            }
+            let cost = measure.unit_cost(&input.messages[unit.start..unit.end]);
+            if newest
+                || !closed && recent.saturating_add(cost) <= self.config.preserve_recent_tokens
+            {
+                mandatory[index] = true;
+                recent = recent.saturating_add(cost);
+                newest = false;
+            } else {
+                closed = true;
+            }
+        }
+        let removable = units
+            .iter()
+            .enumerate()
+            .filter_map(|(index, unit)| (unit.removable && !mandatory[index]).then_some(index))
+            .collect::<Vec<_>>();
+        let mut removed = vec![false; units.len()];
+        let mut position = 0;
+        let mut remaining = before;
+        let mut removed_count = 0usize;
+        // An additive counter can choose its first candidate in one pass. Other counters
+        // remove geometrically and recount whole valid units, never subtract BPE guesses.
+        if measure.counting.additive_input() {
+            while position < removable.len() {
+                let index = removable[position];
+                removed[index] = true;
+                position += 1;
+                remaining = remaining.saturating_sub(
+                    measure.unit_cost(&input.messages[units[index].start..units[index].end]),
+                );
+                removed_count = removed_count.saturating_add(units[index].end - units[index].start);
+                if remaining.saturating_add(measure.unit_cost(&[compaction_marker(removed_count)]))
+                    <= target
+                {
+                    break;
+                }
+            }
+        }
+        loop {
+            if position == 0 && position < removable.len() {
+                removed[removable[position]] = true;
+                position += 1;
+            }
+            let messages = rebuild_messages(input.messages, &units, &removed);
+            let after = measure
+                .count(&messages, input.tools)
+                .tokens
+                .min(usize::MAX as u64) as usize;
+            if after <= target && after < before {
+                return Ok(ContextCompaction {
+                    messages,
+                    estimated_tokens_before: before,
+                    estimated_tokens_after: after,
+                    removed_messages: removed_message_count(&units, &removed),
+                    usage: ModelUsage::zero(),
+                });
+            }
+            ensure!(
+                position < removable.len(),
+                "context cannot fit without removing system or recent messages"
+            );
+            let additional = (removable.len() - position).div_ceil(2).max(1);
+            for index in &removable[position..position + additional] {
+                removed[*index] = true;
+            }
+            position += additional;
+        }
+    }
+
     fn input_budget(&self, max_output_tokens: Option<u32>) -> usize {
         let requested_output = max_output_tokens
             .and_then(|tokens| usize::try_from(tokens).ok())
@@ -112,6 +287,20 @@ impl PruningContextCompactor {
 
 #[async_trait]
 impl ContextCompactor for PruningContextCompactor {
+    fn supports_counting(&self) -> bool {
+        true
+    }
+    async fn compact_counted(
+        &self,
+        request: crate::summary::CompactionRequest<'_>,
+        measure: ContextMeasure,
+        _context: crate::TurnExecutionContext,
+    ) -> Result<crate::summary::RecordedCompaction> {
+        Ok(crate::summary::RecordedCompaction::transient(
+            self.prune_counted(request.input, &measure)?,
+        ))
+    }
+
     fn uses_model(&self) -> bool {
         false
     }
@@ -268,26 +457,23 @@ fn compaction_marker(removed_messages: usize) -> Message {
 /// Conservative model-independent estimate. Provider-specific compactors can replace it with an
 /// exact tokenizer while preserving the same executor contract.
 pub fn estimate_context_tokens(messages: &[Message], tools: Option<&[ToolDefinition]>) -> usize {
-    estimate_messages(messages) + tools.map_or(0, estimate_serialized) + 16
+    crate::tokens::TokenCounting::default()
+        .count(crate::tokens::TokenInput {
+            provider: "",
+            model: "",
+            tokenizer: None,
+            content: crate::tokens::TokenContent::Request {
+                messages,
+                tools,
+                response_format: None,
+                tool_choice: None,
+            },
+        })
+        .tokens
+        .min(usize::MAX as u64) as usize
 }
-
 fn estimate_messages(messages: &[Message]) -> usize {
-    messages.iter().map(estimate_serialized).sum::<usize>() + messages.len() * 4
-}
-
-fn estimate_serialized<T: Serialize + ?Sized>(value: &T) -> usize {
-    let encoded = serde_json::to_string(value).unwrap_or_default();
-    let (ascii, non_ascii): (usize, usize) =
-        encoded
-            .chars()
-            .fold((0_usize, 0_usize), |(ascii, non_ascii), character| {
-                if character.is_ascii() {
-                    (ascii + 1, non_ascii)
-                } else {
-                    (ascii, non_ascii + 1)
-                }
-            });
-    ascii.div_ceil(4) + non_ascii * 2
+    estimate_context_tokens(messages, None).saturating_sub(16)
 }
 
 #[cfg(test)]

@@ -10,6 +10,10 @@ pub struct ModelSelectionReport {
     pub context_limit: Option<u64>,
     pub needs_compaction: bool,
     pub omitted_reasoning_blocks: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_count: Option<crate::tokens::TokenCount>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_decision: Option<crate::context_policy::ContextDecision>,
 }
 impl TurnExecutor {
     /// Freeze host instructions once before any session mutation or model call.
@@ -96,6 +100,55 @@ impl TurnExecutor {
         }
         Ok(())
     }
+    pub(crate) fn decide_context(
+        &self,
+        request: &ModelRequest,
+        spec: &ModelSpec,
+        count: &crate::tokens::TokenCount,
+    ) -> Result<crate::context_policy::ContextDecision> {
+        self.decide_context_view(request, &request.messages, spec, count)
+    }
+    pub(crate) fn decide_context_view(
+        &self,
+        request: &ModelRequest,
+        messages: &[Message],
+        spec: &ModelSpec,
+        count: &crate::tokens::TokenCount,
+    ) -> Result<crate::context_policy::ContextDecision> {
+        let input = ContextCompactionInput {
+            model: &request.model,
+            messages,
+            tools: Some(&request.tools),
+            max_output_tokens: request.options.max_output_tokens,
+        };
+        crate::context_policy::decide(
+            self.context_policy.as_ref(),
+            &crate::context_policy::ContextPolicyInput {
+                spec,
+                messages,
+                tools: &request.tools,
+                options: &request.options,
+                tool_choice: &request.tool_choice,
+                count,
+                compactor_target: self
+                    .context_compactor
+                    .as_ref()
+                    .map(|compactor| compactor.target_tokens(input) as u64),
+                legacy_compactor_estimate: self
+                    .context_compactor
+                    .as_ref()
+                    .filter(|compactor| !compactor.supports_counting())
+                    .map(|compactor| compactor.estimate_tokens(input) as u64),
+                output_reservation: u64::from(
+                    request
+                        .options
+                        .max_output_tokens
+                        .or(spec.max_output_tokens)
+                        .unwrap_or(0),
+                ),
+            },
+        )
+    }
     /// Validate capabilities on the projected view, preserving all canonical history.
     /// No model call, compaction generation, tool execution or journal mutation occurs.
     pub fn validate_model_selection(&self, input: &ExecutionInput) -> Result<ModelSelectionReport> {
@@ -138,7 +191,8 @@ impl TurnExecutor {
                 .messages
                 .retain(|message| !message.content.is_empty());
         }
-        let estimate = estimate_context_tokens(&request.messages, Some(&request.tools)) as u64;
+        let measured = self.counting.request(&request, &spec);
+        let estimate = measured.tokens;
         let output = u64::from(
             request
                 .options
@@ -153,31 +207,13 @@ impl TurnExecutor {
             ));
         }
         self.provider.validate_request(&request)?;
-        let compaction_input = ContextCompactionInput {
-            model: &input.request.model,
-            messages: &input.request.messages,
-            tools: Some(&input.request.tools),
-            max_output_tokens: input.request.options.max_output_tokens,
-        };
-        let needs_compaction = self.context_compactor.as_ref().is_some_and(|compactor| {
-            compactor.estimate_tokens(compaction_input) > compactor.target_tokens(compaction_input)
-        });
-        if let Some(window) = spec.context_tokens {
-            ensure!(
-                output < window,
-                "output reservation leaves no model context"
-            );
-            if let Some(compactor) = &self.context_compactor {
-                ensure!(
-                    (compactor.target_tokens(compaction_input) as u64).saturating_add(output)
-                        <= window,
-                    "context policy exceeds the selected model window; rebuild the host policy"
-                );
-            }
-            ensure!(
-                estimate.saturating_add(output) <= window || needs_compaction,
-                "projected history exceeds the selected model window and no compaction is configured"
-            );
+        let decision = self.decide_context(&request, &spec, &measured)?;
+        let needs_compaction = matches!(
+            decision,
+            crate::context_policy::ContextDecision::Compact { .. }
+        );
+        if let crate::context_policy::ContextDecision::Reject { code } = &decision {
+            anyhow::bail!("context policy rejected model selection: {code}");
         }
         Ok(ModelSelectionReport {
             context_limit: spec.context_tokens,
@@ -186,6 +222,8 @@ impl TurnExecutor {
             output_reservation: output,
             needs_compaction,
             omitted_reasoning_blocks: omitted,
+            token_count: Some(measured),
+            context_decision: Some(decision),
         })
     }
 }

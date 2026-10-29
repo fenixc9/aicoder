@@ -84,9 +84,31 @@ impl std::str::FromStr for ContextStrategy {
         }
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenizerMode {
+    Heuristic,
+    Auto,
+    Cl100kBase,
+    O200kBase,
+}
+impl std::str::FromStr for TokenizerMode {
+    type Err = anyhow::Error;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "heuristic" => Ok(Self::Heuristic),
+            "auto" => Ok(Self::Auto),
+            "cl100k_base" => Ok(Self::Cl100kBase),
+            "o200k_base" => Ok(Self::O200kBase),
+            _ => anyhow::bail!("tokenizer must be heuristic, auto, cl100k_base or o200k_base"),
+        }
+    }
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ContextSettings {
+    #[serde(skip_serializing_if = "Setting::is_inherit")]
+    pub tokenizer: Setting<TokenizerMode>,
     #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub strategy: Setting<ContextStrategy>,
     #[serde(skip_serializing_if = "Setting::is_inherit")]

@@ -27,7 +27,11 @@ regex = "1"
 globset = "0.4"
 ignore = "0.4"
 yaml-rust2 = { version = "0.12", default-features = false }
+tiktoken-rs = { version = "0.12.0", default-features = false, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[features]
+tokenizer-tiktoken = ["dep:tiktoken-rs"]

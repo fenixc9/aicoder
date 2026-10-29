@@ -7,6 +7,7 @@ pub mod resources;
 pub mod session;
 mod session_client;
 mod settings;
+pub mod tokenizers;
 pub use session_client::SessionModelClient;
 pub mod tools;
 pub mod verification;
@@ -25,7 +26,7 @@ pub use config::{
 pub use environment::{Environment, ProcessEnvironment, environment_file};
 pub use settings::{
     ConfigDiscovery, ContextSettings, ContextStrategy, ExecutionSettings, ModelSettings,
-    ProviderProfile, RuntimeOverrides, Setting, Settings,
+    ProviderProfile, RuntimeOverrides, Setting, Settings, TokenizerMode,
 };
 use std::{
     path::Path,
@@ -249,6 +250,7 @@ impl Runtime {
                 ),
                 ..Default::default()
             });
+        builder = builder.token_counter(tokenizers::counter(self.config.context.tokenizer));
         if let Some(store) = self.artifact_store_for(workspace)? {
             builder = builder.artifact_store(store);
         }

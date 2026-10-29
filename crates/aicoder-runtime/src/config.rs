@@ -60,6 +60,7 @@ impl ResolvedExecution {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedContext {
+    pub tokenizer: TokenizerMode,
     pub strategy: ContextStrategy,
     pub summary_output_tokens: u32,
     pub window_tokens: Option<usize>,
@@ -655,7 +656,23 @@ pub(crate) fn resolve(
         strategy != ContextStrategy::Semantic || window_tokens.is_some(),
         "semantic context requires an explicit context window"
     );
+    let tokenizer = required(
+        "context.tokenizer",
+        pick!("context.tokenizer", context.tokenizer, || env_setting::<
+            TokenizerMode,
+        >(
+            env.as_ref(),
+            "AICODER_TOKENIZER"
+        )),
+        TokenizerMode::Heuristic,
+    )?;
+    #[cfg(not(feature = "tokenizer-tiktoken"))]
+    ensure!(
+        matches!(tokenizer, TokenizerMode::Heuristic | TokenizerMode::Auto),
+        "explicit BPE tokenizers require the tokenizer-tiktoken Cargo feature"
+    );
     let context = ResolvedContext {
+        tokenizer,
         strategy,
         summary_output_tokens,
         window_tokens,

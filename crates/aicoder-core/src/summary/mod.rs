@@ -71,6 +71,7 @@ pub struct SummaryDraft {
     pub attempts: usize,
     pub uncertain_operations: bool,
 }
+#[derive(Clone, Copy)]
 pub struct CompactionRequest<'a> {
     pub input: ContextCompactionInput<'a>,
     pub history: &'a [Message],

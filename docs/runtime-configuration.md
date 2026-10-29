@@ -225,3 +225,9 @@ using the fixed trusted service profile and shared HTTP pool. Explicit CLI model
 selection overrides continuation; history never chooses credentials or endpoints. Local
 model compatibility checks and the new metadata commands are described in
 [session navigation](session-navigation.md).
+
+`context.tokenizer` / `AICODER_TOKENIZER` selects `heuristic` (default), `auto`,
+`cl100k_base` or `o200k_base`. Explicit BPE requires the optional `tokenizer-tiktoken`
+Cargo feature; auto reports estimated fallback when a hint/encoder is missing.
+[Token counting and ContextPolicy](context-policy.md) separates text precision, request
+framing estimates and provider-reported usage.

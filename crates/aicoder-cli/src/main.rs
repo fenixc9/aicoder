@@ -694,6 +694,19 @@ async fn main() -> Result<()> {
             serde_json::to_string(&progress.event_delivery)?
         );
     }
+    if let Some(info) = &progress.model_context
+        && let Some(count) = &info.last_input_count
+    {
+        eprintln!(
+            "[Context] input={} {:?}, {}{}",
+            count.tokens,
+            count.accuracy,
+            count.method,
+            count
+                .fallback
+                .map_or(String::new(), |reason| format!(", fallback={reason:?}"))
+        );
+    }
     let count = |value: Option<u64>| {
         value
             .map(|n| n.to_string())

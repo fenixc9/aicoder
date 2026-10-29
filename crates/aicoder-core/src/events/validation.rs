@@ -202,6 +202,50 @@ impl EventTraceValidator {
                             && info.last_input_token_estimate.is_some() == (info.requests > 0),
                         "model context request metadata is incomplete"
                     );
+                    if let Some(policy) = &info.context_policy {
+                        ensure!(
+                            !policy.is_empty()
+                                && policy.len() <= 128
+                                && policy.is_ascii()
+                                && !policy.chars().any(char::is_control),
+                            "invalid context policy metadata"
+                        );
+                    }
+                    if let Some(decision) = &info.context_decision {
+                        ensure!(
+                            info.context_policy.is_some() && info.context_count.is_some(),
+                            "context decision is missing policy/count provenance"
+                        );
+                        match decision {
+                            crate::context_policy::ContextDecision::Compact { target_tokens } => {
+                                ensure!(*target_tokens > 0, "invalid compaction target")
+                            }
+                            crate::context_policy::ContextDecision::Reject { code } => ensure!(
+                                !code.is_empty()
+                                    && code.len() <= 128
+                                    && code.is_ascii()
+                                    && !code.chars().any(char::is_control),
+                                "invalid context rejection"
+                            ),
+                            _ => {}
+                        }
+                    }
+                    for count in [&info.last_input_count, &info.context_count]
+                        .into_iter()
+                        .flatten()
+                    {
+                        count.validate()?;
+                        ensure!(
+                            count.scope == crate::tokens::TokenScope::Request,
+                            "input count has the wrong scope"
+                        );
+                    }
+                    if let Some(count) = &info.last_input_count {
+                        ensure!(
+                            info.last_input_token_estimate == Some(count.tokens),
+                            "input count differs from legacy estimate field"
+                        );
+                    }
                     if let Some(source) = &info.source
                         && let Some((session, _)) = &self.session
                     {

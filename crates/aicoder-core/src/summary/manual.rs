@@ -63,6 +63,8 @@ pub(crate) struct ManualHost<'a> {
     pub input_context: Option<Arc<dyn crate::InputContextProvider>>,
     pub workspace: &'a Path,
     pub budget: RunBudget,
+    pub measure: crate::context::ContextMeasure,
+    pub policy: Arc<dyn crate::context_policy::ContextPolicy>,
 }
 pub(crate) async fn compact(
     host: ManualHost<'_>,
@@ -123,8 +125,40 @@ pub(crate) async fn compact(
             input.request.messages = prepared.system_prefix;
             input.request.messages.extend(messages);
         }
+        let mut measure = host.measure.clone();
+        let count = measure.count(&input.request.messages, Some(&input.request.tools));
+        let decision = crate::context_policy::decide(
+            host.policy.as_ref(),
+            &crate::context_policy::ContextPolicyInput {
+                spec: &measure.spec,
+                messages: &input.request.messages,
+                tools: &input.request.tools,
+                options: &input.request.options,
+                tool_choice: &input.request.tool_choice,
+                count: &count,
+                compactor_target: Some(measure.target_tokens as u64),
+                legacy_compactor_estimate: None,
+                output_reservation: u64::from(
+                    input
+                        .request
+                        .options
+                        .max_output_tokens
+                        .or(measure.spec.max_output_tokens)
+                        .unwrap_or(0),
+                ),
+            },
+        )?;
+        match decision {
+            crate::context_policy::ContextDecision::Compact { target_tokens } => {
+                measure.target_tokens = target_tokens.min(usize::MAX as u64) as usize
+            }
+            crate::context_policy::ContextDecision::Reject { code } => {
+                anyhow::bail!("context policy rejected manual summary: {code}")
+            }
+            crate::context_policy::ContextDecision::Keep => {}
+        }
         compactor
-            .compact_recorded(
+            .compact_counted(
                 CompactionRequest {
                     input: ContextCompactionInput {
                         model: &input.request.model,
@@ -137,6 +171,7 @@ pub(crate) async fn compact(
                     force: true,
                     token_budget: host.budget.max_tokens,
                 },
+                measure,
                 context.clone(),
             )
             .await

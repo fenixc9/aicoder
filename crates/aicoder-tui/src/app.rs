@@ -348,9 +348,13 @@ impl App {
                             Some(format!("{}/{}", report.spec.provider, report.spec.id));
                         self.state = AgentRunState::Completed { rounds: 0 };
                         self.timeline.push(TimelineItem::Notice(format!(
-                            "Model selected: {}; estimated input {} tokens",
+                            "Model selected: {}; input {} tokens ({})",
                             self.model_label.as_deref().unwrap_or_default(),
-                            report.input_token_estimate
+                            report.input_token_estimate,
+                            report.token_count.as_ref().map_or(
+                                "legacy estimate".into(),
+                                |count| format!("{:?}, {}", count.accuracy, count.method)
+                            )
                         )));
                     }
                     Err(error) => {
@@ -854,6 +858,8 @@ mod tests {
             context_limit: Some(1000),
             needs_compaction: false,
             omitted_reasoning_blocks: 0,
+            token_count: None,
+            context_decision: None,
         };
         app.begin_model_selection(TurnExecutionContext::new());
         app.apply(AppEvent::ModelSelected(Box::new(Ok(report))));

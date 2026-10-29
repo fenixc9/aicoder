@@ -64,3 +64,7 @@ S4 separates canonical history from provider-facing inputs through
 the working view; it is transient, and stored Compaction records remain metadata until
 semantic summary policies are implemented. Progress/terminal context reports expose
 initial and outgoing counts without copying the whole provider request into outcomes.
+
+Counted built-ins and custom trigger/target policies are now available through
+[TokenCounter and ContextPolicy](context-policy.md). Existing compactor APIs remain as
+compatibility entry points; injected counters flow through the executor's counted path.

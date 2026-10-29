@@ -161,6 +161,31 @@ pub struct TokenAccounting {
     pub used: u64,
     pub estimated: bool,
 }
+impl TokenAccounting {
+    pub fn from_usage(usage: &ModelUsage, estimate: u64) -> Self {
+        let reported = usage.total_tokens.or_else(|| {
+            usage
+                .input_tokens
+                .zip(usage.output_tokens)
+                .and_then(|(input, output)| input.checked_add(output))
+        });
+        let floor = usage
+            .input_tokens
+            .unwrap_or(0)
+            .saturating_add(usage.output_tokens.unwrap_or(0));
+        Self {
+            used: reported.map(|reported| reported.max(floor)).unwrap_or(
+                estimate.max(
+                    usage
+                        .input_tokens
+                        .unwrap_or(0)
+                        .saturating_add(usage.output_tokens.unwrap_or(0)),
+                ),
+            ),
+            estimated: reported.is_none() || reported.is_some_and(|reported| reported < floor),
+        }
+    }
+}
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PartialToolCall {
     pub index: u32,
@@ -438,24 +463,7 @@ impl RunLimiter {
         })
     }
     pub fn account_tokens(&self, usage: &ModelUsage, estimate: u64) {
-        let reported = usage.total_tokens.or_else(|| {
-            usage
-                .input_tokens
-                .zip(usage.output_tokens)
-                .and_then(|(a, b)| a.checked_add(b))
-        });
-        let mut state = self.state.lock().expect("run budget poisoned");
-        state.tokens.used = state.tokens.used.saturating_add(
-            reported.unwrap_or(
-                estimate.max(
-                    usage
-                        .input_tokens
-                        .unwrap_or(0)
-                        .saturating_add(usage.output_tokens.unwrap_or(0)),
-                ),
-            ),
-        );
-        state.tokens.estimated |= reported.is_none();
+        self.account_compaction(&TokenAccounting::from_usage(usage, estimate));
     }
     pub fn account_compaction(&self, accounting: &TokenAccounting) {
         let mut state = self.state.lock().expect("run budget poisoned");
