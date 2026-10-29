@@ -37,6 +37,7 @@ pub struct RuntimeConfig {
     pub system_prompt: Option<String>,
     pub execution: ResolvedExecution,
     pub context: ResolvedContext,
+    pub resources: crate::resources::ResourcePolicy,
     pub sources: BTreeMap<String, ConfigSource>,
 }
 #[derive(Debug, Clone, Serialize)]
@@ -661,6 +662,127 @@ pub(crate) fn resolve(
         )
     };
     selector.sources.insert("session_dir".into(), source);
+    let defaults = crate::resources::ResourcePolicy::default();
+    let resources = crate::resources::ResourcePolicy {
+        enabled: required(
+            "resources.enabled",
+            pick!(
+                "resources.enabled",
+                resources.enabled,
+                || env_setting::<bool>(env.as_ref(), "AICODER_RESOURCES")
+            ),
+            defaults.enabled,
+        )?,
+        global: required(
+            "resources.global",
+            pick!(
+                "resources.global",
+                resources.global,
+                || env_setting::<bool>(env.as_ref(), "AICODER_GLOBAL_CONTEXT")
+            ),
+            defaults.global,
+        )?,
+        parents: required(
+            "resources.parents",
+            pick!(
+                "resources.parents",
+                resources.parents,
+                || env_setting::<bool>(env.as_ref(), "AICODER_PARENT_CONTEXT")
+            ),
+            defaults.parents,
+        )?,
+        nested: required(
+            "resources.nested",
+            pick!(
+                "resources.nested",
+                resources.nested,
+                || env_setting::<bool>(env.as_ref(), "AICODER_NESTED_CONTEXT")
+            ),
+            defaults.nested,
+        )?,
+        instructions: required(
+            "resources.instructions",
+            pick!("resources.instructions", resources.instructions, || {
+                env_setting::<bool>(env.as_ref(), "AICODER_INSTRUCTIONS")
+            }),
+            defaults.instructions,
+        )?,
+        system: required(
+            "resources.system",
+            pick!(
+                "resources.system",
+                resources.system,
+                || env_setting::<bool>(env.as_ref(), "AICODER_SYSTEM_FILES")
+            ),
+            defaults.system,
+        )?,
+        skills: required(
+            "resources.skills",
+            pick!(
+                "resources.skills",
+                resources.skills,
+                || env_setting::<bool>(env.as_ref(), "AICODER_SKILLS")
+            ),
+            defaults.skills,
+        )?,
+        prompts: required(
+            "resources.prompts",
+            pick!(
+                "resources.prompts",
+                resources.prompts,
+                || env_setting::<bool>(env.as_ref(), "AICODER_PROMPTS")
+            ),
+            defaults.prompts,
+        )?,
+        max_file_bytes: required(
+            "resources.max_file_bytes",
+            pick!("resources.max_file_bytes", resources.max_file_bytes, || Ok(
+                None
+            )),
+            defaults.max_file_bytes,
+        )?,
+        max_total_bytes: required(
+            "resources.max_total_bytes",
+            pick!(
+                "resources.max_total_bytes",
+                resources.max_total_bytes,
+                || Ok(None)
+            ),
+            defaults.max_total_bytes,
+        )?,
+        max_scan_bytes: required(
+            "resources.max_scan_bytes",
+            pick!("resources.max_scan_bytes", resources.max_scan_bytes, || Ok(
+                None
+            )),
+            defaults.max_scan_bytes,
+        )?,
+        max_files: required(
+            "resources.max_files",
+            pick!("resources.max_files", resources.max_files, || Ok(None)),
+            defaults.max_files,
+        )?,
+        max_entries: required(
+            "resources.max_entries",
+            pick!("resources.max_entries", resources.max_entries, || Ok(None)),
+            defaults.max_entries,
+        )?,
+        max_depth: required(
+            "resources.max_depth",
+            pick!("resources.max_depth", resources.max_depth, || Ok(None)),
+            defaults.max_depth,
+        )?,
+        excluded_directories: required(
+            "resources.excluded_directories",
+            pick!(
+                "resources.excluded_directories",
+                resources.excluded_directories,
+                || Ok(None)
+            ),
+            defaults.excluded_directories,
+        )?,
+    };
+    resources.validate()?;
     let mut credential_references = profiles
         .values()
         .map(|profile| profile.api_key_env.clone())
@@ -686,6 +808,7 @@ pub(crate) fn resolve(
         system_prompt,
         execution,
         context,
+        resources,
         sources: selector.sources,
     })
 }

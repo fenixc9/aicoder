@@ -10,6 +10,8 @@
   and default assembly. Keep terminal/Web types out; core must not depend on it.
   Project settings may select trusted profiles but must not define credential routing
   or private storage paths. Keep credential values out of settings snapshots/errors.
+  Resource snapshots must preserve user/tool history, keep skill assets inside pinned
+  package roots, and load benchmark rules only from base checkouts with frozen globals.
 - `crates/aicoder-cli` and `crates/aicoder-tui` are frontends over core/runtime;
   do not duplicate agent execution logic in either frontend.
 - `crates/aicoder-eval` owns evaluation and SWE-bench integration. Do not

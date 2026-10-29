@@ -269,26 +269,31 @@ impl App {
         self.approval = None;
     }
 
-    pub fn queue_input(&mut self, kind: RunInputKind, prompt: String) {
+    pub fn queue_input(&mut self, kind: RunInputKind, prompt: String) -> bool {
         let Some(handle) = &self.active_handle else {
             self.input.replace(prompt);
-            return;
+            return false;
         };
         let message = Message::text(MessageRole::User, prompt.clone());
         let result = match kind {
             RunInputKind::Steer => handle.steer(message),
             RunInputKind::FollowUp => handle.follow_up(message),
         };
-        match result {
-            Ok(id) => self.timeline.push(TimelineItem::Notice(format!(
-                "Queued {kind:?} #{id}: {prompt}"
-            ))),
+        let accepted = match result {
+            Ok(id) => {
+                self.timeline.push(TimelineItem::Notice(format!(
+                    "Queued {kind:?} #{id}: {prompt}"
+                )));
+                true
+            }
             Err(error) => {
                 self.input.replace(prompt);
                 self.timeline.push(TimelineItem::Error(error.to_string()));
+                false
             }
-        }
+        };
         self.scroll_back = 0;
+        accepted
     }
     pub fn resolve_approval(&mut self, approved: bool) {
         if let Some(approval) = self.approval.take()
@@ -851,7 +856,7 @@ mod tests {
     fn slash_menu_tracks_filtering_selection_and_dismissal() {
         let mut app = App::new(Vec::new());
         app.input.insert('/');
-        assert_eq!(app.slash_suggestions().len(), 1);
+        assert_eq!(app.slash_suggestions().len(), 3);
         assert_eq!(app.selected_slash_command().unwrap().name, "exit");
 
         app.dismiss_slash_menu();

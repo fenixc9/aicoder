@@ -252,6 +252,10 @@ struct CaseCheckpoint {
     model_contract_version: u32,
     #[serde(default)]
     event_schema_version: u32,
+    #[serde(default)]
+    input_context_version: u32,
+    #[serde(default)]
+    base_commit: String,
     run_id: String,
     dataset: String,
     model: String,
@@ -268,7 +272,9 @@ impl CaseCheckpoint {
         adapter: &SweBenchAdapter,
         options: &SweBenchBatchOptions,
     ) -> bool {
-        self.model_contract_version == 2
+        self.input_context_version == 1
+            && self.base_commit == case.instance.base_commit
+            && self.model_contract_version == 2
             && self.event_schema_version == aicoder_core::events::EVENT_SCHEMA_VERSION
             && self.run_id == options.run_id
             && self.dataset == options.dataset
@@ -329,6 +335,8 @@ where
         write_json_atomic(&report_path, &report)?;
         write_trace_atomic(&trace_path, &report)?;
         let checkpoint = CaseCheckpoint {
+            input_context_version: 1,
+            base_commit: case.instance.base_commit.clone(),
             model_contract_version: 2,
             event_schema_version: aicoder_core::events::EVENT_SCHEMA_VERSION,
             run_id: options.run_id.clone(),

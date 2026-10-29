@@ -14,6 +14,7 @@ use aicoder_core::{
     session::{JsonlSessionRepository, SessionEntryData, SessionRepository},
     tools::{AllowAllApproval, ApprovalHandler, ToolInvocation},
 };
+use aicoder_runtime::resources::ResourceSettings;
 use aicoder_runtime::{
     ConfigDiscovery, ContextSettings, ExecutionSettings, ModelSettings, Runtime, RuntimeOverrides,
     Setting, Settings, environment_file,
@@ -71,6 +72,15 @@ struct Cli {
     /// Load an explicitly trusted dotenv file without mutating process variables.
     #[arg(long)]
     env_file: Option<PathBuf>,
+    /// Disable all instruction, skill and template discovery.
+    #[arg(long)]
+    no_resources: bool,
+    #[arg(long)]
+    no_parent_context: bool,
+    #[arg(long)]
+    no_skills: bool,
+    #[arg(long)]
+    no_templates: bool,
     /// Maximum total tool invocations in one turn.
     #[arg(long)]
     max_tool_calls: Option<usize>,
@@ -92,6 +102,10 @@ struct Cli {
 enum Command {
     /// Print effective settings and their sources without resolving credentials or making requests.
     Config,
+    /// List resource sources and fingerprints without exposing document bodies.
+    Resources,
+    /// Inspect a template or explicit /skill expansion without making a model request.
+    ExpandPrompt { input: String },
     /// List sessions belonging to the selected workspace.
     Sessions,
     /// Show every branch and entry; --json emits metadata and entries for other hosts.
@@ -297,7 +311,9 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             println!("已删除 session {id}");
             Ok(true)
         }
-        Some(Command::Config) | None => Ok(false),
+        Some(Command::Config | Command::Resources | Command::ExpandPrompt { .. }) | None => {
+            Ok(false)
+        }
     }
 }
 
@@ -327,6 +343,29 @@ async fn main() -> Result<()> {
                     max_output_bytes: Setting::from_option(cli.output_budget_bytes),
                     ..Default::default()
                 },
+                resources: ResourceSettings {
+                    enabled: if cli.no_resources {
+                        Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    parents: if cli.no_parent_context {
+                        Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    skills: if cli.no_skills {
+                        Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    prompts: if cli.no_templates {
+                        Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    ..Default::default()
+                },
                 context: ContextSettings {
                     window_tokens: Setting::from_option(cli.context_window),
                     ..Default::default()
@@ -344,6 +383,20 @@ async fn main() -> Result<()> {
     )?;
     if matches!(cli.command, Some(Command::Config)) {
         println!("{}", serde_json::to_string_pretty(runtime.config())?);
+        return Ok(());
+    }
+    if matches!(cli.command, Some(Command::Resources)) {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(runtime.resources()?.manifest())?
+        );
+        return Ok(());
+    }
+    if let Some(Command::ExpandPrompt { input }) = &cli.command {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&runtime.prepare_prompt(input)?)?
+        );
         return Ok(());
     }
     if cli.command.is_some() {
@@ -364,15 +417,12 @@ async fn main() -> Result<()> {
         builder.approval(ConsoleApproval).build()?
     };
     let agent = Agent::new(executor, runtime.agent_config());
+    let prompt = runtime.prepare_prompt(&cli.prompt)?.text;
     let handler = Arc::new(ConsoleEvents);
     let outcome = match &repository {
         None => {
             agent
-                .run_outcome(
-                    cli.prompt,
-                    handler,
-                    aicoder_core::TurnExecutionContext::new(),
-                )
+                .run_outcome(prompt, handler, aicoder_core::TurnExecutionContext::new())
                 .await
         }
         Some(repository) => {
@@ -387,7 +437,7 @@ async fn main() -> Result<()> {
                 .run_with_session_outcome(
                     repository,
                     selection,
-                    cli.prompt,
+                    prompt,
                     handler,
                     aicoder_core::TurnExecutionContext::new(),
                 )

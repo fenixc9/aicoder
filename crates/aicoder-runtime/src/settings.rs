@@ -88,6 +88,7 @@ pub struct Settings {
     pub options: ModelSettings,
     pub execution: ExecutionSettings,
     pub context: ContextSettings,
+    pub resources: crate::resources::ResourceSettings,
 }
 /// Trusted routing descriptor. API keys belong to a credential source, never this file.
 #[derive(Clone, Deserialize)]

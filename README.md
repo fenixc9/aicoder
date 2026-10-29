@@ -32,8 +32,8 @@ cover branches, durable tool checkpoints, interrupted turns and backed-up v1/v2 
 [RunHandle controls](docs/run-control.md) add bounded steer/follow-up queues and scoped
 asynchronous approvals over the same execution loop. [Versioned events](docs/events.md)
 provide bounded subscriptions, explicit overflow/disconnect reports, and structured
-bench traces. S0–S2 are complete; S3 shared runtime configuration is available; project-resource loading and tool improvements
-are still in progress. See [runtime settings](docs/runtime-configuration.md), including
+bench traces. S0–S2 are complete; S3 shared runtime configuration and [project resources](docs/project-resources.md) are
+available; concrete tool/storage extraction and tool improvements remain in progress. See [runtime settings](docs/runtime-configuration.md), including
 the explicit `--env-file` migration.
 
 An application constructs a TurnExecutor and wraps it in Agent when it needs

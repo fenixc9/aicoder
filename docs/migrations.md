@@ -239,3 +239,32 @@ Core BashTool::excluding_environment lets host assembly add managed credential r
 names. Runtime's registry uses it for selected/configured profiles; core's default unit
 BashTool behavior remains compatible. Custom registries/credential providers retain their
 own explicit environment policy.
+
+## S3: project resource snapshots
+
+Runtime resources are enabled by default on first resource/agent assembly; plain config
+inspection remains lazy. AGENTS/SYSTEM/skill/template discovery is bounded and explicit
+about roots, links, exclusions and source metadata. Use --no-resources or category flags
+when automatic project context is unwanted. --no-config alone disables JSON settings,
+not resources. See [resource rules and limits](project-resources.md).
+
+Runtime prepares new user template/skill invocations before Agent/session submission.
+Use prepare_prompt in SDK hosts; Core does not reinterpret historical user content.
+TUI adds /resources and idle-only /reload. Existing agents retain their old generation;
+changed SKILL.md bodies require a new snapshot. Directory handles/relative asset reads
+replace arbitrary global-file access and do not execute scripts or grant permissions.
+
+Core gains InputContextProvider/PreparedInput.system_prefix and optional input_context
+metadata on RunProgress/RunTermination (serde default/omitted when absent). Literal users
+must add the field. Only system prefixes may be supplied, preserving recovery/history
+messages and avoiding history payload clones. RunJournal::record_input_context defaults
+to no additional storage; custom journals can persist provenance. The bundled journal
+adds aicoder.input_context extensions before model work. ToolContext::max_output_bytes
+is public so injected bounded tools can honor the existing dispatcher capacity.
+
+Runtime executor_builder binds its resource workspace. Bench/SDK callers previously
+rebinding .workspace afterward should use executor_builder_for instead. SWE-bench uses
+isolated base-checkout context, frozen globals and full source metadata; checkpoints now
+also match base_commit and input_context_version. Incompatible historical checkpoints
+regenerate rather than silently mixing contexts. Four Rust packages are added for real
+bounded YAML parsing; shlex is reused and no script runtime is required.

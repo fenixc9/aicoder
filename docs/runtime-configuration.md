@@ -4,8 +4,8 @@
 agent/tool/session assembly and context-pruning setup. CLI, TUI and the SWE-bench
 entry point use it. Core keeps the single execution loop and does not gain a runtime,
 HTTP or frontend dependency. Builtin tool implementations and JSONL storage still live
-in core during this migration; their extraction, project-instruction discovery, skills,
-templates and tool improvements remain open S3 items.
+in core during this migration; their extraction and remaining tool improvements remain open S3 items.
+[Project instructions, skills and templates](project-resources.md) are now available.
 
 ## Files and precedence
 
@@ -80,8 +80,8 @@ profile defaults, even when the profile name was explicitly selected.
 values and files over 256 KiB fail. Errors identify the path/line/column without echoing
 file content or parsed credential values. Only regular files are read; symlinks are
 resolved and duplicate canonical user/project paths are loaded once as the user file.
-This is not recursive parent/nested configuration discovery. That belongs to the
-upcoming resource/instruction loader.
+JSON configuration is workspace-only; [resource discovery](project-resources.md) has
+separate parent/nested rules.
 
 `--config PATH` and `--user-config PATH` choose alternative files. Runtime discovery
 paths and explicit/env storage paths are relative to the resolved workspace; session
@@ -182,7 +182,8 @@ semantics and must support the configured/requested model and options.
 `reload()` produces a new immutable effective snapshot. Existing agents retain their
 old model/options/budgets; chosen process credential values may rotate independently
 through the same variable reference. No active run is reconfigured automatically.
-Project resources/hot-reload UI are separate forthcoming S3 work.
+[Resource snapshots](project-resources.md) provide separate resource-only reload and
+TUI source/reload commands.
 
 SWE-bench freezes the invocation workspace's effective settings, records their non-secret
 snapshot in parameters, and applies them to every case executor/request. Case tool

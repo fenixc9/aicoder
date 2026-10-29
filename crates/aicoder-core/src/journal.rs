@@ -9,6 +9,10 @@ pub trait RunJournal: Send + Sync {
     async fn input(&self, index: usize, input: &crate::RunInput) -> anyhow::Result<()> {
         self.checkpoint(index, &input.message).await
     }
+    /// Persist source metadata before the first model call; defaults to no additional storage.
+    async fn record_input_context(&self, _provenance: &serde_json::Value) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Called before terminal run events. Must retain the stop even when execution was cancelled.
     async fn finish(&self, outcome: &RunOutcome) -> anyhow::Result<()>;
 }

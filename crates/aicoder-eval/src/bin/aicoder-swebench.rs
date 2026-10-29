@@ -6,6 +6,7 @@ use aicoder_eval::{
     SweBenchHarnessConfig, SweBenchHarnessReport, SweBenchRepositoryCache,
     SweBenchRepositorySource, run_swebench_harness,
 };
+use aicoder_runtime::resources::ResourceSettings;
 use aicoder_runtime::{
     ConfigDiscovery, ExecutionSettings, ModelSettings, Runtime, RuntimeOverrides, Setting,
     Settings, environment_file,
@@ -89,6 +90,8 @@ struct RunArgs {
     no_config: bool,
     #[arg(long)]
     env_file: Option<PathBuf>,
+    #[arg(long)]
+    no_resources: bool,
     /// Permit a final answer even when the agent produced no workspace changes.
     #[arg(long)]
     allow_empty_patch: bool,
@@ -139,6 +142,14 @@ async fn run(arguments: RunArgs) -> Result<()> {
             settings: Settings {
                 provider_profile: Setting::from_option(arguments.profile.clone()),
                 model: Setting::from_option(arguments.model.clone()),
+                resources: ResourceSettings {
+                    enabled: if arguments.no_resources {
+                        Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    ..Default::default()
+                },
                 options: ModelSettings {
                     max_output_tokens: Setting::from_option(arguments.max_tokens),
                     temperature: Setting::from_option(arguments.temperature),
@@ -208,6 +219,8 @@ async fn run(arguments: RunArgs) -> Result<()> {
             "max_rounds": runtime.config().execution.max_rounds,
             "budget": budget,
             "runtime": runtime.config(),
+            "global_resources":runtime.global_resources()?.manifest(),
+            "resource_scope":"isolated_case_workspace_with_frozen_globals",
             "stream": runtime.config().execution.stream,
             "require_workspace_change": !arguments.allow_empty_patch,
         }));
@@ -217,8 +230,7 @@ async fn run(arguments: RunArgs) -> Result<()> {
     let report = SweBenchBatchRunner::new(adapter, options)
         .run(cases, move |workspace| {
             let builder = runtime
-                .executor_builder(provider.clone())?
-                .workspace(workspace)
+                .executor_builder_for(provider.clone(), workspace)?
                 .approval(AllowAllApproval);
             if allow_empty_patch {
                 builder.build()

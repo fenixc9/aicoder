@@ -106,6 +106,16 @@ impl RunJournal for SessionJournal<'_> {
         state.saved.insert(index, entry_id);
         Ok(())
     }
+    async fn record_input_context(&self, provenance: &serde_json::Value) -> Result<()> {
+        let mut state = self.state.lock().expect("session journal poisoned");
+        self.write(
+            &mut state,
+            vec![SessionEntryData::Extension {
+                namespace: "aicoder.input_context".into(),
+                data: provenance.clone(),
+            }],
+        )
+    }
     async fn finish(&self, outcome: &RunOutcome) -> Result<()> {
         let mut state = self.state.lock().expect("session journal poisoned");
         let progress = outcome.progress();

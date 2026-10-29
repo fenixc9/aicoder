@@ -3,6 +3,8 @@ use std::{error::Error, fmt};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashCommand {
     Exit,
+    Resources,
+    Reload,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,13 +21,29 @@ pub struct CommandSpec {
     pub arguments: ArgumentPolicy,
 }
 
-const COMMANDS: &[CommandSpec] = &[CommandSpec {
-    command: SlashCommand::Exit,
-    name: "exit",
-    usage: "/exit",
-    description: "Exit the TUI",
-    arguments: ArgumentPolicy::None,
-}];
+const COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        command: SlashCommand::Exit,
+        name: "exit",
+        usage: "/exit",
+        description: "Exit the TUI",
+        arguments: ArgumentPolicy::None,
+    },
+    CommandSpec {
+        command: SlashCommand::Resources,
+        name: "resources",
+        usage: "/resources",
+        description: "Show active resource sources",
+        arguments: ArgumentPolicy::None,
+    },
+    CommandSpec {
+        command: SlashCommand::Reload,
+        name: "reload",
+        usage: "/reload",
+        description: "Reload resources for the next run",
+        arguments: ArgumentPolicy::None,
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlashCommandError {
@@ -91,7 +109,7 @@ mod tests {
 
     #[test]
     fn registry_exposes_metadata_for_every_command() {
-        assert_eq!(all().len(), 1);
+        assert_eq!(all().len(), 3);
         assert_eq!(all()[0].usage, "/exit");
         assert!(!all()[0].description.is_empty());
     }
@@ -103,7 +121,7 @@ mod tests {
                 .iter()
                 .map(|spec| spec.name)
                 .collect::<Vec<_>>(),
-            vec!["exit"]
+            vec!["exit", "resources", "reload"]
         );
         assert_eq!(
             suggestions("/ex")

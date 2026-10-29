@@ -40,22 +40,54 @@ pub struct AgentRuntime {
     agent: Arc<Agent>,
     repository: Arc<JsonlSessionRepository>,
     workspace: PathBuf,
+    runtime: aicoder_runtime::Runtime,
+    provider: Arc<dyn aicoder_core::ModelProvider>,
 }
 
 impl AgentRuntime {
     pub fn new(runtime: aicoder_runtime::Runtime) -> Result<Self> {
         let repository = Arc::new(runtime.sessions()?);
-        let executor = runtime
-            .executor_builder(Arc::new(runtime.client()?))?
-            .build()?;
+        let provider: Arc<dyn aicoder_core::ModelProvider> = Arc::new(runtime.client()?);
+        let executor = runtime.executor_builder(provider.clone())?.build()?;
         let agent = Arc::new(Agent::new(executor, runtime.agent_config()));
         Ok(Self {
             agent,
             repository,
             workspace: runtime.config().workspace.clone(),
+            runtime,
+            provider,
         })
     }
 
+    pub fn prepare_prompt(
+        &self,
+        prompt: &str,
+    ) -> Result<aicoder_runtime::resources::PreparedPrompt> {
+        self.runtime.prepare_prompt(prompt)
+    }
+    pub fn resource_summary(&self) -> Result<String> {
+        let resources = self.runtime.resources()?;
+        let manifest = resources.manifest();
+        let files = manifest
+            .files
+            .iter()
+            .filter(|file| file.active)
+            .map(|file| format!("{:?}: {}", file.kind, file.path.display()))
+            .collect::<Vec<_>>();
+        Ok(format!(
+            "Resource generation {}\n{}",
+            manifest.generation,
+            files.join("\n")
+        ))
+    }
+    pub fn reload_resources(&mut self) -> Result<()> {
+        let runtime = self.runtime.reload_resources()?;
+        let executor = runtime.executor_builder(self.provider.clone())?.build()?;
+        let agent = Arc::new(Agent::new(executor, runtime.agent_config()));
+        self.agent = agent;
+        self.runtime = runtime;
+        Ok(())
+    }
     pub fn sessions(&self) -> Result<Vec<SessionInfo>> {
         self.repository.list(&self.workspace)
     }

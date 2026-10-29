@@ -41,7 +41,7 @@ impl ToolContext {
         self.tool_timeout
     }
 
-    pub(crate) fn max_output_bytes(&self) -> usize {
+    pub fn max_output_bytes(&self) -> usize {
         self.max_output_bytes
     }
 

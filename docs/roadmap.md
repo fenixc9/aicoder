@@ -166,12 +166,14 @@ S2 的版本化事件和有界订阅已落地，见 [事件契约](events.md)。
 ### S3：共享 runtime、项目上下文与可靠工具
 
 共享配置/默认装配已接入 CLI、TUI、SWE-bench，见 [配置契约](runtime-configuration.md)。
-S3 尚未整体完成；项目资源加载、具体工具/存储迁移和后续工具措施仍按下列项推进。
-[本次验收](s3-runtime-acceptance.md) 记录了 268 个测试及三次轻量采样。
+项目资源加载与快照重载已接通，见 [资源契约](project-resources.md)。
+S3 尚未整体完成；具体工具/存储迁移和后续工具措施仍按下列项推进。
+[配置增量验收](s3-runtime-acceptance.md) 保留 268 个测试的历史记录；
+[资源增量验收](s3-resources-acceptance.md) 覆盖当前 293 个测试及三次轻量采样。
 
 - [x] 新增 runtime，统一显式参数 > 环境变量 > 项目配置 > 用户配置 > 默认值；
   凭证使用独立来源，不混淆 provider 与默认 endpoint。
-- [ ] 加载 AGENTS.md、SYSTEM.md、skills、提示词模板；确定全局、父目录、
+- [x] 加载 AGENTS.md、SYSTEM.md、skills、提示词模板；确定全局、父目录、
   工作区与嵌套目录规则，去重、大小限制、来源展示、关闭开关和热重载边界。
 - [ ] 内置文件/搜索/shell 工具和 JSONL store 由 runtime 提供，core 只保留接口。
 - [ ] 补目录枚举与 glob 搜索；read/grep 以有界方式读取；明确截断与结果分页。

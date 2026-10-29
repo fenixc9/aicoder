@@ -38,6 +38,8 @@ jobs:
         run: cargo run --locked -p aicoder-core --example event_stream -- --overflow
       - name: Shared offline runtime example
         run: cargo run --locked -p aicoder-runtime --example offline_runtime
+      - name: Offline project resources example
+        run: cargo run --locked -p aicoder-runtime --example offline_resources
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

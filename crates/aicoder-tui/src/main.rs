@@ -11,6 +11,7 @@ use std::{
 };
 
 use aicoder_core::{RunControlConfig, RunHandle, RunInputKind, TurnExecutionContext};
+use aicoder_runtime::resources::ResourceSettings;
 use aicoder_runtime::{
     ConfigDiscovery, ContextSettings, Runtime, RuntimeOverrides, Setting, Settings,
     environment_file,
@@ -52,6 +53,14 @@ struct Cli {
 
     #[arg(long)]
     env_file: Option<PathBuf>,
+    #[arg(long)]
+    no_resources: bool,
+    #[arg(long)]
+    no_parent_context: bool,
+    #[arg(long)]
+    no_skills: bool,
+    #[arg(long)]
+    no_templates: bool,
     /// Open an existing session by its full ID.
     #[arg(long, value_name = "ID")]
     session: Option<String>,
@@ -86,6 +95,29 @@ async fn main() -> Result<()> {
             settings: Settings {
                 provider_profile: Setting::from_option(cli.profile.clone()),
                 model: Setting::from_option(cli.model.clone()),
+                resources: ResourceSettings {
+                    enabled: if cli.no_resources {
+                        Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    parents: if cli.no_parent_context {
+                        Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    skills: if cli.no_skills {
+                        Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    prompts: if cli.no_templates {
+                        Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    ..Default::default()
+                },
                 context: ContextSettings {
                     window_tokens: Setting::from_option(cli.context_window),
                     ..Default::default()
@@ -129,7 +161,7 @@ async fn main() -> Result<()> {
 async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     mut app: App,
-    runtime: AgentRuntime,
+    mut runtime: AgentRuntime,
     model: &str,
 ) -> Result<()> {
     let mut terminal_events = EventStream::new();
@@ -163,7 +195,7 @@ async fn run(
             }
             Action::Terminal(event) => match event {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                    handle_key(&mut app, &runtime, key)?
+                    handle_key(&mut app, &mut runtime, key)?
                 }
                 Some(Ok(_)) => {}
                 Some(Err(error)) => return Err(error).context("Failed to read terminal event"),
@@ -177,7 +209,7 @@ async fn run(
     Ok(())
 }
 
-fn handle_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) -> Result<()> {
+fn handle_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) -> Result<()> {
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         if app.is_running() {
             app.cancel("Ctrl-C pressed");
@@ -262,7 +294,7 @@ fn handle_session_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) -> R
     Ok(())
 }
 
-fn handle_input_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) {
+fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
     match key.code {
         KeyCode::Enter => {
             if app.selected_slash_command().is_some() {
@@ -273,16 +305,55 @@ fn handle_input_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) {
             if prompt.trim().is_empty() {
                 return;
             }
-            if handle_slash_command(app, &prompt) {
-                return;
+            match commands::parse(&prompt) {
+                Some(Ok(commands::SlashCommand::Exit)) => {
+                    handle_slash_command(app, &prompt);
+                    return;
+                }
+                Some(Ok(commands::SlashCommand::Resources)) => {
+                    match runtime.resource_summary() {
+                        Ok(summary) => app.timeline.push(TimelineItem::Notice(summary)),
+                        Err(error) => app.timeline.push(TimelineItem::Error(error.to_string())),
+                    }
+                    return;
+                }
+                Some(Ok(commands::SlashCommand::Reload)) => {
+                    if app.is_running() {
+                        app.input.replace(prompt);
+                        app.timeline.push(TimelineItem::Notice(
+                            "Wait for the current run before reloading resources.".into(),
+                        ));
+                    } else {
+                        match runtime.reload_resources() {
+                            Ok(()) => app.timeline.push(TimelineItem::Notice(
+                                "Resources reloaded for the next run.".into(),
+                            )),
+                            Err(error) => app.timeline.push(TimelineItem::Error(error.to_string())),
+                        }
+                    }
+                    return;
+                }
+                _ => {}
             }
+            let raw_prompt = prompt.clone();
+            let prepared = match runtime.prepare_prompt(&prompt) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    app.input.replace(prompt);
+                    app.timeline.push(TimelineItem::Error(error.to_string()));
+                    return;
+                }
+            };
+            let prompt = prepared.text;
             if app.is_running() {
                 let kind = if key.modifiers.contains(KeyModifiers::ALT) {
                     RunInputKind::FollowUp
                 } else {
                     RunInputKind::Steer
                 };
-                app.queue_input(kind, prompt);
+                if !app.queue_input(kind, prompt) {
+                    app.input.replace(raw_prompt);
+                }
                 return;
             }
             let selection = app.session_selection.clone();
@@ -302,7 +373,7 @@ fn handle_input_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) {
                     app.run = Some(run);
                 }
                 Err(error) => {
-                    app.input.replace(prompt);
+                    app.input.replace(raw_prompt);
                     app.timeline.push(TimelineItem::Error(error.to_string()));
                 }
             }
@@ -339,6 +410,7 @@ fn handle_slash_command(app: &mut App, input: &str) -> bool {
     };
     match command {
         Ok(commands::SlashCommand::Exit) => app.should_quit = true,
+        Ok(commands::SlashCommand::Resources | commands::SlashCommand::Reload) => {}
         Err(error) => {
             app.timeline.push(TimelineItem::Error(error.to_string()));
             app.scroll_back = 0;
@@ -387,6 +459,92 @@ mod tests {
         assert_eq!(
             cli.session.as_deref(),
             Some("58ed33e6-26fc-4688-81ad-909d63af5ad7")
+        );
+    }
+
+    #[test]
+    fn rejected_template_steering_preserves_the_original_invocation() {
+        use std::{collections::BTreeMap, sync::Arc};
+        let workspace = tempfile::tempdir().unwrap();
+        let global = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(workspace.path().join(".aicoder/prompts")).unwrap();
+        std::fs::write(
+            workspace.path().join(".aicoder/prompts/review.md"),
+            "Review $1",
+        )
+        .unwrap();
+        let application = Runtime::load_with_environment(
+            workspace.path(),
+            Default::default(),
+            ConfigDiscovery::default(),
+            Arc::new(BTreeMap::from([
+                (
+                    "AICODER_HOME".into(),
+                    global.path().to_string_lossy().to_string(),
+                ),
+                ("AICODER_PROXY".into(), "disabled".into()),
+            ])),
+        )
+        .unwrap();
+        let mut runtime = AgentRuntime::new(application).unwrap();
+        let (handle, _control) = RunHandle::channel(
+            TurnExecutionContext::new(),
+            RunControlConfig {
+                max_pending_inputs: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        handle
+            .steer(aicoder_core::model::Message::text(
+                aicoder_core::model::MessageRole::User,
+                "already queued",
+            ))
+            .unwrap();
+        let mut app = App::new(vec![]);
+        app.begin_turn("active".into(), TurnExecutionContext::new());
+        app.active_handle = Some(handle);
+        app.input.replace("/review file.rs".into());
+        handle_input_key(
+            &mut app,
+            &mut runtime,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(app.input.value(), "/review file.rs");
+    }
+
+    #[test]
+    fn reload_command_is_refused_during_a_run_without_erasing_the_draft() {
+        use std::{collections::BTreeMap, sync::Arc};
+        let workspace = tempfile::tempdir().unwrap();
+        let global = tempfile::tempdir().unwrap();
+        let application = Runtime::load_with_environment(
+            workspace.path(),
+            Default::default(),
+            ConfigDiscovery::default(),
+            Arc::new(BTreeMap::from([
+                (
+                    "AICODER_HOME".into(),
+                    global.path().to_string_lossy().to_string(),
+                ),
+                ("AICODER_PROXY".into(), "disabled".into()),
+            ])),
+        )
+        .unwrap();
+        let mut runtime = AgentRuntime::new(application).unwrap();
+        let mut app = App::new(vec![]);
+        app.begin_turn("active".into(), TurnExecutionContext::new());
+        app.input.replace("/reload".into());
+        handle_input_key(
+            &mut app,
+            &mut runtime,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        assert_eq!(app.input.value(), "/reload");
+        assert!(
+            app.timeline.iter().any(
+                |item| matches!(item,TimelineItem::Notice(text) if text.contains("current run"))
+            )
         );
     }
 

@@ -53,6 +53,7 @@ pub struct TurnExecutor {
     dispatcher: Arc<ToolDispatcher>,
     completion_verifier: Arc<dyn CompletionVerifier>,
     context_compactor: Option<Arc<dyn ContextCompactor>>,
+    input_context: Option<Arc<dyn crate::InputContextProvider>>,
     config: TurnExecutionConfig,
 }
 
@@ -78,6 +79,7 @@ impl TurnExecutor {
             dispatcher,
             Arc::new(AcceptAllCompletionVerifier),
             None,
+            None,
             config,
         )
     }
@@ -87,6 +89,7 @@ impl TurnExecutor {
         dispatcher: Arc<ToolDispatcher>,
         completion_verifier: Arc<dyn CompletionVerifier>,
         context_compactor: Option<Arc<dyn ContextCompactor>>,
+        input_context: Option<Arc<dyn crate::InputContextProvider>>,
         config: TurnExecutionConfig,
     ) -> Self {
         Self {
@@ -94,6 +97,7 @@ impl TurnExecutor {
             dispatcher,
             completion_verifier,
             context_compactor,
+            input_context,
             config,
         }
     }
@@ -375,6 +379,32 @@ impl TurnExecutor {
             return Err(context.error().into());
         }
         limits.check()?;
+
+        if let Some(provider) = &self.input_context {
+            let prepared = tokio::select! {
+                biased;
+                cancelled=context.cancelled()=>return Err(cancelled.into()),
+                prepared=provider.prepare(self.workspace_root(),&progress.messages)=>prepared?,
+            };
+            crate::input_context::validate_prefix(&prepared.system_prefix)?;
+            let prefix_length = progress
+                .messages
+                .iter()
+                .take_while(|message| message.role == crate::model::MessageRole::System)
+                .count();
+            let history = progress.messages.split_off(prefix_length);
+            progress.messages = prepared.system_prefix;
+            progress.messages.extend(history);
+            progress.input_messages = progress.messages.len();
+            progress.input_context = Some(prepared.provenance);
+            tokio::select! {
+                biased;
+                cancelled=context.cancelled()=>return Err(cancelled.into()),
+                result=journal.record_input_context(progress.input_context.as_ref().expect("prepared context"))=>{
+                    result.map_err(|error|anyhow::Error::from(RunFailure::from_error(RunStage::Persistence,&error)))?;
+                }
+            }
+        }
 
         request.stream = self.config.stream;
         let definitions = self.dispatcher.registry().definitions();
@@ -1007,6 +1037,7 @@ pub struct TurnExecutorBuilder {
     completion_verifier: Arc<dyn CompletionVerifier>,
     context_compactor: Option<Arc<dyn ContextCompactor>>,
     dispatcher_config: DispatcherConfig,
+    input_context: Option<Arc<dyn crate::InputContextProvider>>,
     execution_config: TurnExecutionConfig,
 }
 
@@ -1027,6 +1058,7 @@ impl TurnExecutorBuilder {
             completion_verifier: Arc::new(AcceptAllCompletionVerifier),
             context_compactor: None,
             dispatcher_config: DispatcherConfig::default(),
+            input_context: None,
             execution_config: TurnExecutionConfig::default(),
         }
     }
@@ -1085,6 +1117,11 @@ impl TurnExecutorBuilder {
         self
     }
 
+    pub fn input_context(mut self, provider: Arc<dyn crate::InputContextProvider>) -> Self {
+        self.input_context = Some(provider);
+        self
+    }
+
     pub fn dispatcher_config(mut self, config: DispatcherConfig) -> Self {
         self.dispatcher_config = config;
         self
@@ -1112,6 +1149,7 @@ impl TurnExecutorBuilder {
             Arc::new(dispatcher),
             self.completion_verifier,
             self.context_compactor,
+            self.input_context,
             self.execution_config,
         ))
     }

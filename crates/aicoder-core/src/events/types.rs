@@ -236,6 +236,8 @@ pub enum AgentRawEvent {
 /// Small authoritative terminal summary; transcript bodies stay in the run result/session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunTermination {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_context: Option<Value>,
     pub stop: Option<crate::RunStop>,
     pub persistence_error: Option<Box<crate::RunFailure>>,
     pub usage: ModelUsage,
@@ -256,6 +258,7 @@ impl From<&crate::RunOutcome> for RunTermination {
     fn from(outcome: &crate::RunOutcome) -> Self {
         let progress = outcome.progress();
         Self {
+            input_context: progress.input_context.clone(),
             stop: outcome.stop().cloned(),
             persistence_error: match outcome {
                 crate::RunOutcome::Interrupted(turn) => turn.persistence_error.clone(),

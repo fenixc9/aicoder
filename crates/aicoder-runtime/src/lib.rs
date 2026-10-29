@@ -2,6 +2,7 @@
 mod config;
 mod environment;
 mod files;
+pub mod resources;
 mod settings;
 use aicoder_core::{
     AgentConfig, ModelProvider, PruningContextCompactor, TurnExecutor, TurnExecutorBuilder,
@@ -20,7 +21,10 @@ pub use settings::{
     ConfigDiscovery, ContextSettings, ExecutionSettings, ModelSettings, ProviderProfile,
     RuntimeOverrides, Setting, Settings,
 };
-use std::{path::Path, sync::Arc};
+use std::{
+    path::Path,
+    sync::{Arc, OnceLock},
+};
 
 /// Immutable effective settings plus request-time credentials. Reload creates a new snapshot.
 pub struct Runtime {
@@ -28,6 +32,8 @@ pub struct Runtime {
     environment: Arc<dyn Environment>,
     overrides: RuntimeOverrides,
     discovery: ConfigDiscovery,
+    resources: OnceLock<Result<Arc<resources::ResourceSnapshot>, String>>,
+    global_resources: OnceLock<Result<Arc<resources::ResourceSnapshot>, String>>,
 }
 impl std::fmt::Debug for Runtime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -62,6 +68,8 @@ impl Runtime {
             environment,
             overrides,
             discovery,
+            resources: OnceLock::new(),
+            global_resources: OnceLock::new(),
         })
     }
     pub fn config(&self) -> &RuntimeConfig {
@@ -74,6 +82,45 @@ impl Runtime {
             self.discovery.clone(),
             self.environment.clone(),
         )
+    }
+    pub fn global_resources(&self) -> Result<Arc<resources::ResourceSnapshot>> {
+        self.global_resources
+            .get_or_init(|| {
+                resources::ResourceSnapshot::load_global(&self.config)
+                    .map(Arc::new)
+                    .map_err(|error| format!("{error:#}"))
+            })
+            .clone()
+            .map_err(anyhow::Error::msg)
+    }
+    pub fn resources(&self) -> Result<Arc<resources::ResourceSnapshot>> {
+        self.resources
+            .get_or_init(|| {
+                self.global_resources()
+                    .and_then(|global| {
+                        resources::ResourceSnapshot::load_with_global(&self.config, &global)
+                    })
+                    .map(Arc::new)
+                    .map_err(|error| format!("{error:#}"))
+            })
+            .clone()
+            .map_err(anyhow::Error::msg)
+    }
+    /// Refresh resources only; current model/options/storage and existing agents remain unchanged.
+    pub fn reload_resources(&self) -> Result<Self> {
+        let next = Self {
+            config: self.config.clone(),
+            environment: self.environment.clone(),
+            overrides: self.overrides.clone(),
+            discovery: self.discovery.clone(),
+            resources: OnceLock::new(),
+            global_resources: OnceLock::new(),
+        };
+        next.resources()?;
+        Ok(next)
+    }
+    pub fn prepare_prompt(&self, prompt: &str) -> Result<resources::PreparedPrompt> {
+        self.resources()?.prepare_prompt(prompt)
     }
     pub fn session_dir(&self) -> Result<&Path> {
         self.config.session_dir.as_deref().context("Session storage is disabled or has no path; set AICODER_HOME, HOME or an explicit session directory")
@@ -104,6 +151,16 @@ impl Runtime {
     }
     /// Default capabilities are assembled here; callers can override tools, approval and policies.
     pub fn default_registry(&self) -> Result<ToolRegistry> {
+        self.registry_with_resources(if self.config.resources.enabled {
+            Some(self.resources()?)
+        } else {
+            None
+        })
+    }
+    fn registry_with_resources(
+        &self,
+        resources: Option<Arc<resources::ResourceSnapshot>>,
+    ) -> Result<ToolRegistry> {
         let mut registry = ToolRegistry::default();
         registry.register(ReadFileTool)?;
         registry.register(WriteFileTool)?;
@@ -112,16 +169,55 @@ impl Runtime {
             self.config.credential_references.clone(),
         ))?;
         registry.register(GrepTool)?;
+        if let Some(resources) = resources {
+            resources.register_tools(&mut registry)?;
+        }
         Ok(registry)
     }
     pub fn executor_builder(
         &self,
         provider: Arc<dyn ModelProvider>,
     ) -> Result<TurnExecutorBuilder> {
+        let resources = if self.config.resources.enabled {
+            Some(self.resources()?)
+        } else {
+            None
+        };
+        self.builder_for(provider, &self.config.workspace, resources)
+    }
+    /// Case/tool workspace differs from invocation settings: isolate parents and reuse frozen globals.
+    pub fn executor_builder_for(
+        &self,
+        provider: Arc<dyn ModelProvider>,
+        workspace: &Path,
+    ) -> Result<TurnExecutorBuilder> {
+        let workspace = workspace.canonicalize()?;
+        let resources = if self.config.resources.enabled {
+            let mut config = self.config.clone();
+            config.workspace = workspace.clone();
+            config.resources.parents = false;
+            Some(Arc::new(resources::ResourceSnapshot::load_with_global(
+                &config,
+                self.global_resources()?.as_ref(),
+            )?))
+        } else {
+            None
+        };
+        self.builder_for(provider, &workspace, resources)
+    }
+    fn builder_for(
+        &self,
+        provider: Arc<dyn ModelProvider>,
+        workspace: &Path,
+        resources: Option<Arc<resources::ResourceSnapshot>>,
+    ) -> Result<TurnExecutorBuilder> {
         let mut builder = TurnExecutor::builder_from_shared(provider)
-            .workspace(&self.config.workspace)
-            .registry(self.default_registry()?)
+            .workspace(workspace)
+            .registry(self.registry_with_resources(resources.clone())?)
             .config(self.config.execution.core_config());
+        if let Some(resources) = resources {
+            builder = builder.input_context(resources);
+        }
         if let Some(context) = self.config.context.core_config() {
             builder = builder.context_compactor(PruningContextCompactor::new(context)?);
         }
