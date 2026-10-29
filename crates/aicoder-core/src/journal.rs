@@ -13,6 +13,16 @@ pub trait RunJournal: Send + Sync {
     async fn record_input_context(&self, _provenance: &serde_json::Value) -> anyhow::Result<()> {
         Ok(())
     }
+    /// Persist a summary before its reduced context reaches the next model call.
+    /// Retained messages form an exact canonical suffix. None means a transient host.
+    async fn record_summary(
+        &self,
+        _draft: &crate::summary::SummaryDraft,
+        _input_messages: usize,
+        _history_messages: usize,
+    ) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
     /// Called before terminal run events. Must retain the stop even when execution was cancelled.
     async fn finish(&self, outcome: &RunOutcome) -> anyhow::Result<()>;
 }

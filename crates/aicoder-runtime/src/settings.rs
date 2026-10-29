@@ -68,9 +68,29 @@ pub struct ExecutionSettings {
     #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub events: Setting<EventDeliveryConfig>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextStrategy {
+    Prune,
+    Semantic,
+}
+impl std::str::FromStr for ContextStrategy {
+    type Err = anyhow::Error;
+    fn from_str(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "prune" => Ok(Self::Prune),
+            "semantic" => Ok(Self::Semantic),
+            _ => anyhow::bail!("context strategy must be prune or semantic"),
+        }
+    }
+}
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ContextSettings {
+    #[serde(skip_serializing_if = "Setting::is_inherit")]
+    pub strategy: Setting<ContextStrategy>,
+    #[serde(skip_serializing_if = "Setting::is_inherit")]
+    pub summary_output_tokens: Setting<u32>,
     #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub window_tokens: Setting<usize>,
     #[serde(skip_serializing_if = "Setting::is_inherit")]

@@ -18,9 +18,13 @@ struct State {
     saved: HashMap<usize, String>,
     failure: Option<RunFailure>,
     finished: bool,
+    initial_leaf: Option<String>,
+    initial_message_count: usize,
 }
 impl<'a> SessionJournal<'a> {
     pub fn new(repository: &'a dyn SessionRepository, session: Session, turn_id: String) -> Self {
+        let initial_leaf = session.metadata().leaf_id.clone();
+        let initial_message_count = session.selected_branch().messages().count();
         Self {
             repository,
             turn_id,
@@ -29,6 +33,8 @@ impl<'a> SessionJournal<'a> {
                 saved: HashMap::new(),
                 failure: None,
                 finished: false,
+                initial_leaf,
+                initial_message_count,
             }),
         }
     }
@@ -115,6 +121,56 @@ impl RunJournal for SessionJournal<'_> {
                 data: provenance.clone(),
             }],
         )
+    }
+    async fn record_summary(
+        &self,
+        draft: &crate::summary::SummaryDraft,
+        input_messages: usize,
+        history_messages: usize,
+    ) -> Result<Option<String>> {
+        let mut state = self.state.lock().expect("session journal poisoned");
+        ensure!(
+            !state.finished && state.failure.is_none(),
+            "session journal cannot record a summary"
+        );
+        let offset = history_messages
+            .checked_sub(draft.keep_messages)
+            .ok_or_else(|| anyhow::anyhow!("invalid summary tail"))?;
+        let first = if offset >= input_messages {
+            state
+                .saved
+                .get(&offset)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("summary tail is not checkpointed"))?
+        } else {
+            let remaining = input_messages - offset;
+            let position = state
+                .initial_message_count
+                .checked_sub(remaining)
+                .ok_or_else(|| anyhow::anyhow!("summary would replace runtime instructions"))?;
+            state
+                .session
+                .branch(state.initial_leaf.as_deref())?
+                .messages()
+                .nth(position)
+                .ok_or_else(|| anyhow::anyhow!("initial summary anchor missing"))?
+                .id
+                .to_string()
+        };
+        match crate::summary::session::commit_summary(
+            self.repository,
+            &mut state.session,
+            draft.clone(),
+            first,
+            Some(self.turn_id.clone()),
+        ) {
+            Ok(id) => Ok(Some(id)),
+            Err(error) => {
+                let failure = RunFailure::from_error(RunStage::Persistence, &error);
+                state.failure = Some(failure.clone());
+                Err(failure.into())
+            }
+        }
     }
     async fn finish(&self, outcome: &RunOutcome) -> Result<()> {
         let mut state = self.state.lock().expect("session journal poisoned");

@@ -127,6 +127,8 @@ enum Command {
     },
     /// Upgrade a legacy session, preserving an exact backup before changing its format.
     MigrateSession { id: String },
+    /// Summarize this session branch without adding a user/coding turn; requires a context window.
+    CompactSession { id: String },
     /// Permanently delete a session by its full ID.
     DeleteSession {
         /// Session ID shown by `aicoder sessions`.
@@ -332,9 +334,13 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             println!("已删除 session {id}");
             Ok(true)
         }
-        Some(Command::Config | Command::Resources | Command::ExpandPrompt { .. }) | None => {
-            Ok(false)
-        }
+        Some(
+            Command::Config
+            | Command::Resources
+            | Command::ExpandPrompt { .. }
+            | Command::CompactSession { .. },
+        )
+        | None => Ok(false),
     }
 }
 
@@ -418,6 +424,20 @@ async fn main() -> Result<()> {
             "{}",
             serde_json::to_string_pretty(&runtime.prepare_prompt(input)?)?
         );
+        return Ok(());
+    }
+    if let Some(Command::CompactSession { id }) = &cli.command {
+        let repository = runtime.sessions()?;
+        let agent = runtime.summary_agent(Arc::new(runtime.client()?))?;
+        let report = agent
+            .compact_session(&repository, id, aicoder_core::TurnExecutionContext::new())
+            .await;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        if !report.succeeded() {
+            anyhow::bail!(
+                "Manual compaction did not commit a summary; inspect the report before retrying"
+            );
+        }
         return Ok(());
     }
     if cli.command.is_some() {

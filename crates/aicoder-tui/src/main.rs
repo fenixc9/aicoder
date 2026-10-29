@@ -341,6 +341,30 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                     }
                     return;
                 }
+                Some(Ok(commands::SlashCommand::Compact)) => {
+                    if app.is_running() {
+                        app.input.replace(prompt);
+                        app.timeline.push(TimelineItem::Notice(
+                            "Finish or cancel the current operation before compacting.".into(),
+                        ));
+                    } else if let aicoder_core::SessionSelection::Existing(id) =
+                        &app.session_selection
+                    {
+                        let context = runtime.execution_context();
+                        match runtime.start_compaction(id.clone(), context.clone()) {
+                            Ok(run) => {
+                                app.begin_compaction(context);
+                                app.run = Some(run);
+                            }
+                            Err(error) => app.timeline.push(TimelineItem::Error(error.to_string())),
+                        }
+                    } else {
+                        app.timeline.push(TimelineItem::Notice(
+                            "Select a stored session before compacting.".into(),
+                        ));
+                    }
+                    return;
+                }
                 Some(Ok(commands::SlashCommand::Permissions | commands::SlashCommand::Revoke)) => {
                     if app.is_running() {
                         app.input.replace(prompt);
@@ -478,7 +502,8 @@ fn handle_slash_command(app: &mut App, input: &str) -> bool {
             commands::SlashCommand::Resources
             | commands::SlashCommand::Reload
             | commands::SlashCommand::Permissions
-            | commands::SlashCommand::Revoke,
+            | commands::SlashCommand::Revoke
+            | commands::SlashCommand::Compact,
         ) => {}
         Err(error) => {
             app.timeline.push(TimelineItem::Error(error.to_string()));

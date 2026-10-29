@@ -2176,6 +2176,12 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 18446744073709551615
+        },
+        "summary_checkpoint": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -2243,6 +2249,20 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "summary_attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "summary_fallbacks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_summary_checkpoint": {
+          "type": [
+            "string",
+            "null"
           ]
         }
       },

@@ -7,7 +7,9 @@ mod memory;
 mod projection;
 mod repository;
 mod types;
-pub use projection::{ContextOrigin, SessionBranch, SessionContext, SessionContextSource};
+pub use projection::{
+    BranchAccounting, ContextOrigin, SessionBranch, SessionContext, SessionContextSource,
+};
 
 pub use memory::MemorySessionRepository;
 pub use repository::{SessionConflict, SessionRepository, SessionRunLease};

@@ -21,8 +21,8 @@ pub use config::{
 };
 pub use environment::{Environment, ProcessEnvironment, environment_file};
 pub use settings::{
-    ConfigDiscovery, ContextSettings, ExecutionSettings, ModelSettings, ProviderProfile,
-    RuntimeOverrides, Setting, Settings,
+    ConfigDiscovery, ContextSettings, ContextStrategy, ExecutionSettings, ModelSettings,
+    ProviderProfile, RuntimeOverrides, Setting, Settings,
 };
 use std::{
     path::Path,
@@ -209,7 +209,7 @@ impl Runtime {
         workspace: &Path,
         resources: Option<Arc<resources::ResourceSnapshot>>,
     ) -> Result<TurnExecutorBuilder> {
-        let mut builder = TurnExecutor::builder_from_shared(provider)
+        let mut builder = TurnExecutor::builder_from_shared(provider.clone())
             .workspace(workspace)
             .registry(self.registry_with_resources(resources.clone())?)
             .config(self.config.execution.core_config())
@@ -223,9 +223,46 @@ impl Runtime {
             builder = builder.input_context(resources);
         }
         if let Some(context) = self.config.context.core_config() {
-            builder = builder.context_compactor(PruningContextCompactor::new(context)?);
+            builder = match self.config.context.strategy {
+                ContextStrategy::Prune => {
+                    builder.context_compactor(PruningContextCompactor::new(context)?)
+                }
+                ContextStrategy::Semantic => {
+                    builder.context_compactor(self.semantic_compactor(provider)?)
+                }
+            };
         }
         Ok(builder)
+    }
+    fn semantic_compactor(
+        &self,
+        provider: Arc<dyn ModelProvider>,
+    ) -> Result<aicoder_core::summary::SemanticContextCompactor> {
+        let window = self
+            .config
+            .context
+            .core_config()
+            .context("Set a known context window before semantic compaction")?;
+        let mut config = aicoder_core::summary::SummaryConfig::new(window);
+        config.output_tokens = self.config.context.summary_output_tokens;
+        config.max_input_tokens = window
+            .max_context_tokens
+            .saturating_sub(config.output_tokens as usize)
+            .clamp(512, 32768);
+        aicoder_core::summary::SemanticContextCompactor::new(
+            provider,
+            self.config.provider.model.clone(),
+            config,
+        )
+    }
+    pub fn summary_agent(&self, provider: Arc<dyn ModelProvider>) -> Result<aicoder_core::Agent> {
+        let compactor = self.semantic_compactor(provider.clone())?;
+        Ok(aicoder_core::Agent::new(
+            self.executor_builder(provider)?
+                .context_compactor(compactor)
+                .build()?,
+            self.agent_config(),
+        ))
     }
     pub fn agent_config(&self) -> AgentConfig {
         AgentConfig {

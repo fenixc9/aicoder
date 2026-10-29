@@ -108,6 +108,28 @@ impl TurnExecutor {
             .await
     }
 
+    pub(crate) async fn compact_saved_session(
+        &self,
+        repository: &dyn crate::session::SessionRepository,
+        id: &str,
+        mut template: ModelRequest,
+        context: TurnExecutionContext,
+    ) -> crate::summary::ManualCompactionReport {
+        template.tools = self.dispatcher.registry().definitions();
+        crate::summary::manual::compact(
+            crate::summary::manual::ManualHost {
+                compactor: self.context_compactor.clone(),
+                input_context: self.input_context.clone(),
+                workspace: self.workspace_root(),
+                budget: self.config.budget.clone(),
+            },
+            repository,
+            id,
+            template,
+            context,
+        )
+        .await
+    }
     pub async fn run_input(&self, input: crate::ExecutionInput) -> Result<TurnExecutionResult> {
         self.run_input_outcome(input, Arc::new(()), TurnExecutionContext::new())
             .await
@@ -266,6 +288,9 @@ impl TurnExecutor {
             last_request_messages: None,
             last_input_token_estimate: None,
             compactions: 0,
+            summary_attempts: 0,
+            summary_fallbacks: 0,
+            last_summary_checkpoint: None,
         });
         let RunScope { events, mut state } = scope;
         let mut execution = match self.config.events.validate() {
@@ -517,17 +542,46 @@ impl TurnExecutor {
                         target_tokens,
                     });
                     progress.stage = RunStage::Compaction;
-                    if compactor.uses_model() {
+                    if compactor.uses_model() && !compactor.manages_budget() {
                         ensure_token_capacity(limits, estimated_tokens as u64)?;
                     }
-                    let compacted = match tokio::select! {
-                        biased;
-                        cancelled = context.cancelled() => Err(cancelled.into()),
-                        compacted = compactor.compact(input) => compacted.and_then(|compacted| {
-                            ensure_valid_compaction(&compacted, target_tokens)?;
-                            Ok(compacted)
-                        }),
-                    } {
+                    let recorded = compactor
+                        .compact_recorded(
+                            crate::summary::CompactionRequest {
+                                input,
+                                history: &progress.messages,
+                                system_prefix_len: progress
+                                    .messages
+                                    .iter()
+                                    .take_while(|message| {
+                                        message.role == crate::model::MessageRole::System
+                                    })
+                                    .count(),
+                                force: false,
+                                token_budget: limits.remaining_tokens(),
+                            },
+                            context.clone(),
+                        )
+                        .await
+                        .and_then(|recorded| {
+                            if let Err(error) =
+                                ensure_valid_compaction(&recorded.compaction, target_tokens)
+                            {
+                                if let Some(tokens) = &recorded.accounting {
+                                    return Err(crate::summary::SummaryFailure {
+                                        kind: crate::summary::SummaryFailureKind::InvalidResponse,
+                                        message: error.to_string(),
+                                        usage: recorded.compaction.usage.clone(),
+                                        tokens: tokens.clone(),
+                                        attempts: recorded.attempts,
+                                    }
+                                    .into());
+                                }
+                                return Err(error);
+                            }
+                            Ok(recorded)
+                        });
+                    let recorded = match recorded {
                         Ok(compacted) => compacted,
                         Err(error) if error.downcast_ref::<TurnCancelled>().is_some() => {
                             if compactor.uses_model() {
@@ -549,6 +603,45 @@ impl TurnExecutor {
                             return Err(error);
                         }
                         Err(error) => {
+                            if let Some(failure) =
+                                error.downcast_ref::<crate::summary::SummaryFailure>()
+                            {
+                                if let Some(info) = &mut progress.model_context {
+                                    info.summary_attempts += failure.attempts;
+                                }
+                                progress.usage.accumulate(&failure.usage);
+                                progress.reported_usage |=
+                                    crate::run::usage_reported(&failure.usage);
+                                limits.account_compaction(&failure.tokens);
+                                round_events.emit(AgentRawEvent::ContextCompactionFailed {
+                                    strategy: compactor.name().into(),
+                                    message: failure.message.clone().into(),
+                                });
+                                if failure.kind == crate::summary::SummaryFailureKind::Budget {
+                                    limits.snapshot(progress);
+                                    limits.stop(BudgetExceeded {
+                                        resource: BudgetResource::Tokens,
+                                        limit: limits.budget.max_tokens.unwrap_or(0),
+                                        used: progress.tokens.used,
+                                        requested: None,
+                                    });
+                                }
+                                let cancelled = context.is_cancelled()
+                                    || failure.kind
+                                        == crate::summary::SummaryFailureKind::Cancelled;
+                                round_events.emit(AgentRawEvent::RoundCompleted {
+                                    outcome: if cancelled {
+                                        RoundOutcome::Aborted
+                                    } else {
+                                        RoundOutcome::Failed
+                                    },
+                                });
+                                return Err(if cancelled {
+                                    context.error().into()
+                                } else {
+                                    error
+                                });
+                            }
                             if compactor.uses_model() {
                                 progress
                                     .usage
@@ -570,6 +663,17 @@ impl TurnExecutor {
                             });
                         }
                     };
+                    if let Some(info) = &mut progress.model_context {
+                        info.summary_attempts += recorded.attempts;
+                        info.summary_fallbacks += usize::from(!recorded.diagnostics.is_empty());
+                    }
+                    for message in &recorded.diagnostics {
+                        round_events.emit(AgentRawEvent::ContextCompactionFailed {
+                            strategy: compactor.name().into(),
+                            message: message.clone().into(),
+                        });
+                    }
+                    let compacted = recorded.compaction;
                     if compacted.usage.total_tokens != Some(0) {
                         round_events.emit(AgentRawEvent::UsageUpdated {
                             usage: compacted.usage.clone().into(),
@@ -578,11 +682,48 @@ impl TurnExecutor {
                     progress.reported_usage |= compacted.usage != crate::model::ModelUsage::zero()
                         && crate::run::usage_reported(&compacted.usage);
                     progress.usage.accumulate(&compacted.usage);
-                    limits.account_tokens(
-                        &compacted.usage,
-                        (compacted.estimated_tokens_before as u64)
-                            .saturating_add(compacted.estimated_tokens_after as u64),
-                    );
+                    if let Some(accounting) = &recorded.accounting {
+                        limits.account_compaction(accounting);
+                    } else {
+                        limits.account_tokens(
+                            &compacted.usage,
+                            (compacted.estimated_tokens_before as u64)
+                                .saturating_add(compacted.estimated_tokens_after as u64),
+                        );
+                    }
+                    if let Some(draft) = &recorded.checkpoint {
+                        progress.stage = RunStage::Persistence;
+                        let checkpoint = tokio::select! {biased;cancelled=context.cancelled()=>Err(anyhow::Error::from(cancelled)),result=journal.record_summary(draft,progress.input_messages,progress.messages.len())=>result};
+                        match checkpoint {
+                            Ok(id) => {
+                                if let Some(info) = &mut progress.model_context {
+                                    info.last_summary_checkpoint = id;
+                                }
+                            }
+                            Err(error) => {
+                                round_events.emit(AgentRawEvent::ContextCompactionFailed {
+                                    strategy: compactor.name().into(),
+                                    message: "summary checkpoint could not be committed".into(),
+                                });
+                                let cancelled = context.is_cancelled();
+                                round_events.emit(AgentRawEvent::RoundCompleted {
+                                    outcome: if cancelled {
+                                        RoundOutcome::Aborted
+                                    } else {
+                                        RoundOutcome::Failed
+                                    },
+                                });
+                                return Err(if cancelled {
+                                    context.error().into()
+                                } else {
+                                    anyhow::Error::from(RunFailure::from_error(
+                                        RunStage::Persistence,
+                                        &error,
+                                    ))
+                                });
+                            }
+                        }
+                    }
                     context_messages = compacted.messages;
                     if let Some(info) = &mut progress.model_context {
                         info.compactions += 1;

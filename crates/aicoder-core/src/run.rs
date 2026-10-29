@@ -457,6 +457,11 @@ impl RunLimiter {
         );
         state.tokens.estimated |= reported.is_none();
     }
+    pub fn account_compaction(&self, accounting: &TokenAccounting) {
+        let mut state = self.state.lock().expect("run budget poisoned");
+        state.tokens.used = state.tokens.used.saturating_add(accounting.used);
+        state.tokens.estimated |= accounting.estimated;
+    }
     pub fn snapshot(&self, progress: &mut RunProgress) {
         let state = self.state.lock().expect("run budget poisoned");
         progress.tool_calls = state.tool_calls;

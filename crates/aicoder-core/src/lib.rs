@@ -19,6 +19,7 @@ pub mod redaction;
 pub mod run;
 pub mod session;
 pub mod state;
+pub mod summary;
 pub mod tools;
 pub mod turn_executor;
 

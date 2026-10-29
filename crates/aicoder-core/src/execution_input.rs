@@ -14,6 +14,12 @@ pub struct ModelContextInfo {
     pub last_request_messages: Option<usize>,
     pub last_input_token_estimate: Option<u64>,
     pub compactions: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub summary_attempts: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub summary_fallbacks: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_summary_checkpoint: Option<String>,
 }
 #[derive(Debug, Clone)]
 pub struct ExecutionInput {
@@ -98,4 +104,8 @@ impl ExecutionInput {
     pub fn history(&self) -> &[Message] {
         &self.history
     }
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }

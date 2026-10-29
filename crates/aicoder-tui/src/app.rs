@@ -17,6 +17,7 @@ use crate::commands::{self, CommandSpec};
 pub enum AppEvent {
     Agent(AgentRawEventEnvelope),
     TurnFinished(Box<AgentTurnOutcome>),
+    CompactionFinished(Box<aicoder_core::summary::ManualCompactionReport>),
     ObservationFailed(String),
     RunDropped,
 }
@@ -247,6 +248,15 @@ impl App {
         self.slash_menu_dismissed = true;
     }
 
+    pub fn begin_compaction(&mut self, context: TurnExecutionContext) {
+        self.active_context = Some(context);
+        self.active_handle = None;
+        self.started_at = Some(Instant::now());
+        self.state = AgentRunState::Compacting { round: 0 };
+        self.timeline.push(TimelineItem::Notice(
+            "Summarizing session context...".into(),
+        ));
+    }
     pub fn begin_turn(&mut self, prompt: String, context: TurnExecutionContext) {
         self.observation_incomplete = false;
         self.timeline.push(TimelineItem::User(prompt));
@@ -316,6 +326,33 @@ impl App {
         match event {
             AppEvent::Agent(envelope) => self.apply_agent_event(envelope),
             AppEvent::TurnFinished(outcome) => self.finish_turn(*outcome),
+            AppEvent::CompactionFinished(report) => {
+                self.run = None;
+                self.active_context = None;
+                self.active_handle = None;
+                self.started_at = None;
+                if let Some(usage) = &report.branch_usage {
+                    self.usage = usage.clone();
+                } else {
+                    self.usage.accumulate(&report.usage);
+                }
+                self.state = if report.succeeded() {
+                    AgentRunState::Completed { rounds: 0 }
+                } else {
+                    AgentRunState::Failed { round: None }
+                };
+                self.timeline.push(TimelineItem::Notice(format!(
+                    "Manual compaction: {} -> {} estimated tokens; {} attempts; {}",
+                    report.before,
+                    report.after,
+                    report.attempts,
+                    if report.succeeded() {
+                        "complete".into()
+                    } else {
+                        format!("{:?} {:?}", report.stop, report.persistence_error)
+                    }
+                )));
+            }
             AppEvent::ObservationFailed(error) => {
                 self.observation_incomplete = true;
                 self.timeline.push(TimelineItem::Notice(format!("Live observation ended: {error}. The run continues; its result will restore the transcript.")));
@@ -532,7 +569,11 @@ impl App {
     pub fn load_session(&mut self, session: &Session) {
         self.timeline.clear();
         self.tool_indexes.clear();
-        self.usage = ModelUsage::zero();
+        self.usage = session
+            .selected_branch()
+            .accounting()
+            .map(|accounting| accounting.usage)
+            .unwrap_or_else(|_| ModelUsage::zero());
         for entry in session.active_entries() {
             match &entry.data {
                 SessionEntryData::Message { message } => push_message(&mut self.timeline, message),
@@ -544,9 +585,6 @@ impl App {
                             input.id,
                             input.message.text_content()
                         )));
-                    }
-                    if let Some(statistics) = &record.statistics {
-                        self.usage.accumulate(&statistics.usage);
                     }
                     if let Some(stop) = &record.stop {
                         self.timeline
@@ -721,6 +759,42 @@ mod tests {
     }
 
     #[test]
+    fn manual_compaction_keeps_transcript_and_restores_durable_usage() {
+        let mut app = App::new(vec![]);
+        app.timeline
+            .push(TimelineItem::User("existing user message".into()));
+        app.begin_compaction(TurnExecutionContext::new());
+        assert!(app.is_running());
+        let usage = ModelUsage {
+            total_tokens: Some(12),
+            ..ModelUsage::zero()
+        };
+        let report = aicoder_core::summary::ManualCompactionReport {
+            session: None,
+            checkpoint_entry_id: Some("checkpoint".into()),
+            usage: usage.clone(),
+            branch_usage: Some(usage),
+            tokens: Default::default(),
+            attempts: 1,
+            before: 200,
+            after: 80,
+            stop: None,
+            persistence_error: None,
+        };
+        app.apply(AppEvent::CompactionFinished(Box::new(report)));
+        assert!(!app.is_running());
+        assert_eq!(app.usage.total_tokens, Some(12));
+        assert_eq!(
+            app.timeline
+                .iter()
+                .filter(|item| matches!(item, TimelineItem::User(_)))
+                .count(),
+            1
+        );
+        assert!(app.active_context.is_none());
+    }
+
+    #[test]
     fn incomplete_live_timeline_is_rebuilt_from_the_run_result_without_erasing_the_draft() {
         use aicoder_core::{AgentTurnResult, RunProgress, TurnExecutionResult};
         let mut app = App::new(vec![]);
@@ -867,7 +941,7 @@ mod tests {
     fn slash_menu_tracks_filtering_selection_and_dismissal() {
         let mut app = App::new(Vec::new());
         app.input.insert('/');
-        assert_eq!(app.slash_suggestions().len(), 5);
+        assert_eq!(app.slash_suggestions().len(), 6);
         assert_eq!(app.selected_slash_command().unwrap().name, "exit");
 
         app.dismiss_slash_menu();

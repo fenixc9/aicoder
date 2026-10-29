@@ -52,6 +52,8 @@ jobs:
         run: cargo run --locked -p aicoder-runtime --example offline_approvals
       - name: Branch context and canonical history example
         run: cargo run --locked -p aicoder-runtime --example offline_context
+      - name: Durable semantic summary example
+        run: cargo run --locked -p aicoder-runtime --example offline_summary
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

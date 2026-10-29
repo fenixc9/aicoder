@@ -32,6 +32,19 @@ pub trait ContextCompactor: Send + Sync {
         true
     }
 
+    fn manages_budget(&self) -> bool {
+        false
+    }
+    fn persistent_summaries(&self) -> bool {
+        false
+    }
+    async fn compact_recorded(
+        &self,
+        request: crate::summary::CompactionRequest<'_>,
+        context: crate::TurnExecutionContext,
+    ) -> Result<crate::summary::RecordedCompaction> {
+        crate::summary::legacy(self, request, context).await
+    }
     fn estimate_tokens(&self, input: ContextCompactionInput<'_>) -> usize;
 
     /// Maximum estimated input tokens the compacted request may contain.
@@ -156,17 +169,22 @@ impl ContextCompactor for PruningContextCompactor {
         }
 
         let mut removed = vec![false; units.len()];
+        let mut remaining = estimated_tokens_before;
+        let mut count = 0;
         for (index, unit) in units.iter().enumerate() {
             if !unit.removable || mandatory[index] {
                 continue;
             }
             removed[index] = true;
-            let messages = rebuild_messages(input.messages, &units, &removed);
-            let estimated_tokens_after = estimate_context_tokens(&messages, input.tools);
+            count += unit.end - unit.start;
+            remaining =
+                remaining.saturating_sub(estimate_messages(&input.messages[unit.start..unit.end]));
+            let estimated_tokens_after =
+                remaining.saturating_add(estimate_messages(&[compaction_marker(count)]));
             if estimated_tokens_after <= target_tokens {
                 return Ok(ContextCompaction {
-                    removed_messages: removed_message_count(&units, &removed),
-                    messages,
+                    messages: rebuild_messages(input.messages, &units, &removed),
+                    removed_messages: count,
                     estimated_tokens_before,
                     estimated_tokens_after,
                     usage: ModelUsage::zero(),
@@ -183,13 +201,13 @@ impl ContextCompactor for PruningContextCompactor {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct MessageUnit {
-    start: usize,
-    end: usize,
+pub(crate) struct MessageUnit {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
     removable: bool,
 }
 
-fn message_units(messages: &[Message]) -> Vec<MessageUnit> {
+pub(crate) fn message_units(messages: &[Message]) -> Vec<MessageUnit> {
     let mut units = Vec::new();
     let mut index = 0;
     while index < messages.len() {

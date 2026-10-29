@@ -48,8 +48,10 @@ remains the compatibility accessor for the selected safe snapshot.
 recovered/reordered result counts and interrupted-turn count. Revision is the loaded
 session's global revision; a foreign branch's leaf can predate it. The borrowed map has
 one origin per provider message; `into_messages()` drops that map when an owned provider
-view must outlive the snapshot. Compaction/extension records retain their previous metadata
-semantics: summary text is not automatically activated by this increment.
+view must outlive the snapshot. Legacy Compaction and unrecognized extension records retain
+their previous metadata semantics: legacy summary text is not automatically activated. The subsequent
+[semantic-summary increment](semantic-summary.md) reserves a validated extension for new
+branch-local summaries.
 
 ## Execution input
 
@@ -133,9 +135,9 @@ histories may contain fewer messages than older repaired results and preserve or
 arrival order. Consumers needing safe provider context must use the branch projection or the
 actual ModelProvider request; do not forward canonical `RunProgress.messages` blindly.
 
-This API does not bound total history residence, page JSONL, persist pruning, generate
-semantic summaries, activate old summary records or introduce exact tokenizers. Those remain
-S4 requirements. A branch view borrows an already loaded snapshot, and owned model/history
+This API does not bound total history residence, page JSONL, persist pruning, activate legacy
+summary records or introduce exact tokenizers. New semantic checkpoints are available through
+the [semantic-summary contract](semantic-summary.md); other items remain S4 requirements. A branch view borrows an already loaded snapshot, and owned model/history
 buffers still scale with their selected input. See [validation and scoped measurements](s4-projection-acceptance.md).
 
 ```sh

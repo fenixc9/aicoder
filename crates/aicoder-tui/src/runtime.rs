@@ -17,7 +17,11 @@ use crate::app::AppEvent;
 
 pub struct ActiveRun {
     events: Option<EventSubscription>,
-    completion: oneshot::Receiver<AgentTurnOutcome>,
+    completion: RunCompletion,
+}
+enum RunCompletion {
+    Turn(oneshot::Receiver<AgentTurnOutcome>),
+    Compaction(oneshot::Receiver<aicoder_core::summary::ManualCompactionReport>),
 }
 impl ActiveRun {
     pub async fn recv(&mut self) -> AppEvent {
@@ -31,9 +35,15 @@ impl ActiveRun {
                 Ok(None) => self.events = None,
             }
         }
-        match (&mut self.completion).await {
-            Ok(outcome) => AppEvent::TurnFinished(Box::new(outcome)),
-            Err(_) => AppEvent::RunDropped,
+        match &mut self.completion {
+            RunCompletion::Compaction(receiver) => match receiver.await {
+                Ok(report) => AppEvent::CompactionFinished(Box::new(report)),
+                Err(_) => AppEvent::RunDropped,
+            },
+            RunCompletion::Turn(receiver) => match receiver.await {
+                Ok(outcome) => AppEvent::TurnFinished(Box::new(outcome)),
+                Err(_) => AppEvent::RunDropped,
+            },
         }
     }
 }
@@ -136,6 +146,21 @@ impl AgentRuntime {
         }
         false
     }
+    pub fn start_compaction(&self, id: String, context: TurnExecutionContext) -> Result<ActiveRun> {
+        let agent = self.runtime.summary_agent(self.provider.clone())?;
+        let repository = self.repository.clone();
+        let (sent, received) = oneshot::channel();
+        tokio::spawn(async move {
+            let report = agent
+                .compact_session(repository.as_ref(), &id, context)
+                .await;
+            let _ = sent.send(report);
+        });
+        Ok(ActiveRun {
+            events: None,
+            completion: RunCompletion::Compaction(received),
+        })
+    }
     pub fn start_turn(
         &self,
         selection: SessionSelection,
@@ -160,7 +185,7 @@ impl AgentRuntime {
         });
         Ok(ActiveRun {
             events: Some(events),
-            completion,
+            completion: RunCompletion::Turn(completion),
         })
     }
 }
@@ -204,7 +229,7 @@ mod tests {
             .unwrap();
         let mut active = ActiveRun {
             events: Some(stream),
-            completion,
+            completion: RunCompletion::Turn(completion),
         };
         assert!(matches!(active.recv().await,AppEvent::Agent(event) if event.sequence==1));
         assert!(matches!(
@@ -220,7 +245,7 @@ mod tests {
         let (_sender, completion) = oneshot::channel();
         drop(ActiveRun {
             events: Some(events),
-            completion,
+            completion: RunCompletion::Turn(completion),
         });
         assert_eq!(handle.snapshot().status, RunControlStatus::Waiting);
         assert!(

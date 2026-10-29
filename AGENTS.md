@@ -32,6 +32,9 @@
 - Keep canonical recorded history separate from provider projections. Recovery repairs
   and pruning must not become historical facts; journal indices follow canonical input.
   Preserve declared runtime prefixes and branch provenance when constructing model views.
+- Semantic summaries must use bounded, tool-free requests and charge every attempt to
+  run usage/budgets. Commit branch-anchored checkpoints before using reduced context;
+  keep raw history, interruption uncertainty and restored authorization separate.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

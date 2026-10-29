@@ -830,3 +830,48 @@ async fn runtime_and_isolated_case_factories_inject_the_same_frozen_tool_deadlin
         assert_eq!(output["output"]["tool_timeout_ms"], 250);
     }
 }
+
+#[test]
+fn semantic_context_settings_resolve_with_provenance_and_require_known_window() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    write(
+        &workspace.path().join(".aicoder/settings.json"),
+        json!({"version":1,"settings":{"context":{"window_tokens":16000,"strategy":"semantic","summary_output_tokens":512}}}),
+    );
+    let runtime = load(
+        workspace.path(),
+        root.path(),
+        Default::default(),
+        &[("AICODER_SUMMARY_OUTPUT_TOKENS", "768")],
+    );
+    assert_eq!(runtime.config().context.strategy, ContextStrategy::Semantic);
+    assert_eq!(runtime.config().context.summary_output_tokens, 768);
+    assert!(matches!(
+        &runtime.config().sources["context.strategy"],
+        ConfigSource::Project { .. }
+    ));
+    assert!(matches!(
+        &runtime.config().sources["context.summary_output_tokens"],
+        ConfigSource::Environment { .. }
+    ));
+    std::fs::remove_file(workspace.path().join(".aicoder/settings.json")).unwrap();
+    for values in [
+        vec![("AICODER_CONTEXT_STRATEGY", "semantic")],
+        vec![("AICODER_CONTEXT_STRATEGY", "other")],
+        vec![("AICODER_SUMMARY_OUTPUT_TOKENS", "0")],
+        vec![("AICODER_SUMMARY_OUTPUT_TOKENS", "8193")],
+    ] {
+        assert!(
+            Runtime::load_with_environment(
+                workspace.path(),
+                Default::default(),
+                ConfigDiscovery::default(),
+                environment(root.path(), &values)
+            )
+            .is_err()
+        );
+    }
+    let runtime = load(workspace.path(), root.path(), Default::default(), &[]);
+    assert_eq!(runtime.config().context.strategy, ContextStrategy::Prune);
+}

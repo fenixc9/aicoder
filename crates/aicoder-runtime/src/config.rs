@@ -60,6 +60,8 @@ impl ResolvedExecution {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct ResolvedContext {
+    pub strategy: ContextStrategy,
+    pub summary_output_tokens: u32,
     pub window_tokens: Option<usize>,
     pub reserved_output_tokens: usize,
     pub preserve_recent_tokens: usize,
@@ -626,7 +628,36 @@ pub(crate) fn resolve(
         ),
         preserve_default,
     )?;
+    let strategy = required(
+        "context.strategy",
+        pick!("context.strategy", context.strategy, || env_setting::<
+            ContextStrategy,
+        >(
+            env.as_ref(),
+            "AICODER_CONTEXT_STRATEGY"
+        )),
+        ContextStrategy::Prune,
+    )?;
+    let summary_output_tokens = required(
+        "context.summary_output_tokens",
+        pick!(
+            "context.summary_output_tokens",
+            context.summary_output_tokens,
+            || env_setting::<u32>(env.as_ref(), "AICODER_SUMMARY_OUTPUT_TOKENS")
+        ),
+        1024,
+    )?;
+    ensure!(
+        (1..=8192).contains(&summary_output_tokens),
+        "summary_output_tokens must be 1..8192"
+    );
+    ensure!(
+        strategy != ContextStrategy::Semantic || window_tokens.is_some(),
+        "semantic context requires an explicit context window"
+    );
     let context = ResolvedContext {
+        strategy,
+        summary_output_tokens,
         window_tokens,
         reserved_output_tokens,
         preserve_recent_tokens,

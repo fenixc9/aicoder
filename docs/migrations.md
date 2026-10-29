@@ -404,3 +404,22 @@ field to explicit Rust struct literals; old serialized data still reads. JSONL r
 v3. New reports expose actual adapted request counts and heuristic estimates, with no
 extra message-body copy. See [the complete input, prefix and source rules](model-context.md)
 and [verification](s4-projection-acceptance.md).
+
+## S4 semantic summary checkpoints
+
+JSONL remains v3 and event envelopes remain v1. New reserved extensions
+`aicoder.context.summary.v1` and `aicoder.context.summary_usage.v1` hold validated
+branch-local checkpoints and failed manual accounting. Existing legacy Compaction
+records stay inert; no migration rewrites raw history. Older binaries ignore these
+extensions and reconstruct full history, so use the updated binary to retain context
+reduction and known manual-summary accounting. Do not downgrade expecting identical prompts.
+
+`ContextCompactor` gains default `manages_budget`, `persistent_summaries` and
+`compact_recorded` methods; existing implementations still compile. `RunJournal` gains
+a default no-op `record_summary`; durable custom hosts should implement it and propagate
+commit errors. New records use canonical retained-tail indices. Existing pruning and
+plain SDK execution remain transient. SDK users constructing `ModelContextInfo` or
+`SessionContextSource` literals must add the new summary fields (zero/None for old behavior).
+Their optional serde fields read older JSON without changes; Rust source literals are
+a documented source-level change. Runtime context settings gain optional strategy/output
+fields; older JSON uses prune/1024 defaults. See [semantic-summary API and limits](semantic-summary.md).

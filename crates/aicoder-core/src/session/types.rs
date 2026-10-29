@@ -389,10 +389,37 @@ impl Session {
                         _ => unreachable!(),
                     }
                 }
-                SessionEntryData::Extension { namespace, .. } => ensure!(
-                    !namespace.is_empty(),
-                    "extension namespace must not be empty"
-                ),
+                SessionEntryData::Extension { namespace, data } => {
+                    ensure!(
+                        !namespace.is_empty(),
+                        "extension namespace must not be empty"
+                    );
+                    if namespace == crate::summary::MANUAL_USAGE_NAMESPACE {
+                        let usage: crate::summary::manual::ManualSummaryUsage =
+                            serde_json::from_value(data.clone())?;
+                        usage.validate()?;
+                    }
+                    if namespace == crate::summary::SUMMARY_NAMESPACE {
+                        let checkpoint: crate::summary::SummaryCheckpoint =
+                            serde_json::from_value(data.clone())?;
+                        let mut ancestors = Vec::new();
+                        let mut cursor = entry.parent_id.as_deref();
+                        while let Some(id) = cursor {
+                            let ancestor = self
+                                .entry(id)
+                                .or_else(|| new_entries.get(id).copied())
+                                .expect("validated parent");
+                            ancestors.push(ancestor);
+                            cursor = ancestor.parent_id.as_deref();
+                        }
+                        ancestors.reverse();
+                        crate::summary::validate_checkpoint(
+                            &checkpoint,
+                            &ancestors,
+                            entry.parent_id.as_deref(),
+                        )?;
+                    }
+                }
             }
             new_entries.insert(entry.id.as_str(), entry);
         }

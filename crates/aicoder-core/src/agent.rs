@@ -142,6 +142,21 @@ impl Agent {
             None,
         )
     }
+    pub async fn compact_session(
+        &self,
+        repository: &dyn SessionRepository,
+        id: &str,
+        context: TurnExecutionContext,
+    ) -> crate::summary::ManualCompactionReport {
+        self.turn_executor
+            .compact_saved_session(
+                repository,
+                id,
+                self.completion_request(self.system_messages()),
+                context,
+            )
+            .await
+    }
     pub async fn run_controlled(
         &self,
         prompt: impl Into<String>,
