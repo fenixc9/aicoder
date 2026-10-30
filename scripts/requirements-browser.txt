@@ -1,0 +1,2 @@
+# Optional development browser verification only; no Rust binary requires Python/Chromium.
+playwright==1.62.0

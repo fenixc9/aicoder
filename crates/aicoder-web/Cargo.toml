@@ -1,0 +1,39 @@
+[package]
+name = "aicoder-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+server = ["dep:aicoder-core", "dep:aicoder-runtime", "dep:anyhow", "dep:axum", "dep:clap", "dep:futures", "dep:serde", "dep:serde_json", "dep:tokio", "dep:tower", "dep:tracing-subscriber"]
+
+[[bin]]
+name = "aicoder-web"
+path = "src/main.rs"
+required-features = ["server"]
+
+[dependencies]
+aicoder-core = { workspace = true, optional = true }
+aicoder-runtime = { workspace = true, optional = true }
+anyhow = { workspace = true, optional = true }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"], optional = true }
+clap = { workspace = true, optional = true }
+futures = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"], optional = true }
+tower = { version = "0.5", features = ["limit"], optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+
+[dev-dependencies]
+async-trait.workspace = true
+tempfile.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
+
+[[example]]
+name = "provider_turn"
+required-features = ["server"]

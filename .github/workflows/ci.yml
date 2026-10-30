@@ -67,6 +67,14 @@ jobs:
           cargo run --locked -p aicoder-runtime --features tokenizer-tiktoken --example offline_context_policy -- cl100k_base
       - name: Bounded archive continuation
         run: cargo run --locked -p aicoder-runtime --example offline_archive
+      - name: Build optional Web and SDK parity entry
+        run: cargo build --locked -p aicoder-cli -p aicoder-web --features server --bins --examples
+      - name: SDK, CLI JSON, RPC and Web consistency
+        run: python3 scripts/check_frontend_parity.py
+      - name: Optional Web documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked -p aicoder-web --features server --no-deps
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

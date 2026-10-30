@@ -56,6 +56,9 @@
 - RPC request IDs must prevent duplicate execution with bounded state. Scope controls and
   approval choices to the owned run, keep protocol queues/serialization bounded, and await
   the owner after EOF, shutdown or transport failure. Notifications cannot fabricate delivery.
+- Optional Web hosts fix principal/workspace/provider authority outside request payloads.
+  Authenticate before reading bodies, bound retained runs and SSE bodies, and distinguish
+  observer disconnect from owner cancellation. Await owners before HTTP/runtime shutdown.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

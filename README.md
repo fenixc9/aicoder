@@ -17,6 +17,7 @@ are separate crates.
   tool approvals, execution status, and cooperative cancellation.
 - aicoder-eval: isolated evaluation runner, deterministic evaluators,
   SWE-bench adapter, batch runner, and official harness integration.
+- aicoder-web: optional loopback HTTP/SSE/browser example (`server` feature).
 
 Each package lives under `crates/`; the root manifest defines the Cargo
 workspace and shared dependency versions. See [contributing](CONTRIBUTING.md)
@@ -104,6 +105,13 @@ cancels the active model request, approval, or tool execution. Approval dialogs
 accept `y` once, `s` for the displayed session/tool scope, or `n`;
 `/permissions` and `/revoke` inspect or clear grants while idle. `Ctrl-C` cancels an active turn or exits while idle. TUI logs
 are written to `$AICODER_HOME/tui.log` or `~/.aicoder/tui.log`.
+
+## Web example
+
+The [optional Web host](docs/web.md) provides HTTP submission, SSE, cancellation and
+prepared approval choices for one host-selected workspace. Set a private
+`AICODER_WEB_TOKEN` and run `cargo run --locked -p aicoder-web --features server -- --workspace .`.
+Normal CLI/TUI/core/runtime builds do not enable the Web server dependencies.
 
 ## Verification
 

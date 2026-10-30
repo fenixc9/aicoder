@@ -540,3 +540,22 @@ nonzero after cleanup; clients must not assume a complete event stream after dis
 `--no-session` RPC uses an ephemeral core repository for conversation continuity.
 See [RPC v1](rpc.md), [schema](protocol/rpc-v1.schema.json) and
 [client example](../scripts/rpc_client.py). This protocol does not emulate Pi/JSON-RPC wire formats.
+
+## S5 optional Web host
+
+`aicoder-web` is a separate workspace package with an empty default feature set. Root
+default members remain the six existing packages. Enable its `server` feature to build
+the loopback HTTP/SSE/browser example; core/runtime/CLI/TUI dependencies and persisted
+formats are unchanged. The lockfile records optional Axum dependencies for reproducibility.
+
+The host chooses the workspace/provider and requires a private Web token before API body
+extraction. Browser requests cannot select credential routing, private storage or tool
+rules. Single-run admission, monotonic prompt IDs, exact approval identities and explicit
+owner shutdown are part of [the Web contract](web.md). SSE disconnect does not cancel a
+run or provide replay; inspect status or explicitly cancel. Embedded hosts must await
+`WebHost::shutdown` before destroying their executor. Memory-session hosts must also clear
+runtime session storage, preventing implicit artifact persistence.
+
+Development source digests now include embedded HTML/JS/CSS alongside Rust/manifests,
+so Web asset edits invalidate new baseline measurements. Historical reports retain their
+original source identities. Browser verification dependencies remain development-only.
