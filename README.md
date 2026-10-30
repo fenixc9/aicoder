@@ -89,6 +89,13 @@ shows the request/notification lifecycle; Python is not required by the agent bi
 
 ## TUI
 
+[TUI interaction](docs/tui-interaction.md) includes multiline/grapheme editing, bounded input
+history, immutable `/file PATH` pages, frontend-only themes, and live context counts with
+optional declared base-rate estimates. Use Shift+Enter or Ctrl+O for a newline, Ctrl+P/N for
+history, `/detach` to clear references, `/theme dark|light|mono`, and `/usage` for provenance.
+Bracketed paste is draft data and cannot answer approval dialogs. `--theme-file PATH` loads
+a bounded explicit palette without putting UI types/settings into core or model prompts.
+
 Set an OpenAI-compatible API key and optional endpoint, then start the TUI from
 the workspace you want the agent to edit:
 

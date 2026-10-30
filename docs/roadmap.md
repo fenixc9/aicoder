@@ -214,9 +214,9 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 
 - [x] CLI：stdin/参数输入、单次 print、JSON 事件、REPL、统一配置和 Ctrl-C。
   见 [CLI 契约](cli-execution.md) 与 [验收记录](s5-cli-acceptance.md)。
-- [ ] TUI：多行/历史、文件引用、命令面板、模型切换与思考级别、分支、审批 diff、steer/follow-up，
+- [x] TUI：多行/历史、文件引用、命令面板、模型切换与思考级别、分支、审批 diff、steer/follow-up，
   展示 usage、上下文占用及可选成本；主题配置保持独立。
-  思考级别已通过 core/runtime/CLI/TUI 接通，见 [契约](reasoning-controls.md) 与 [验收](s5-reasoning-acceptance.md)；其余交互仍待完成。
+  见 [交互契约](tui-interaction.md) 与 [验收记录](s5-tui-acceptance.md)；思考级别沿用 [统一 API](reasoning-controls.md)。
 - [ ] 图片内容通过统一消息 API 进入；TUI/CLI 明确文件限制及 provider 能力。
 - [x] 版本化 stdin/stdout RPC：request ID、控制命令、响应、事件和错误；
   日志只去 stderr/文件，不能污染协议输出。

@@ -65,6 +65,11 @@
 - Model controls require declared capabilities and adapter validation before journal writes.
   Keep requested effort distinct from service default, visible reasoning and billed work.
   Bind branch choices to model epochs; request overrides must preserve live registry identity.
+- TUI drafts, history and previews are bounded frontend state. Recognized paste events are
+  payload, never approvals or automatic submissions. File pages are explicit immutable user
+  input; keep continuation metadata and reject late captures after cancellation/navigation.
+  Themes stay outside runtime/core settings. Unknown prices or incomplete usage cannot become
+  billed cost; display counting scope/precision and distinguish previews from persisted data.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

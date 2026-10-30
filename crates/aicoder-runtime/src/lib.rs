@@ -4,6 +4,7 @@ mod config;
 mod environment;
 pub mod exports;
 mod files;
+pub mod references;
 pub mod resources;
 pub mod session;
 mod session_client;

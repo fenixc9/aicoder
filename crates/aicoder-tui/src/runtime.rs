@@ -22,6 +22,7 @@ pub struct ActiveRun {
 enum RunCompletion {
     Turn(oneshot::Receiver<AgentTurnOutcome>),
     Compaction(oneshot::Receiver<aicoder_core::summary::ManualCompactionReport>),
+
     Model(oneshot::Receiver<Result<aicoder_core::session::ModelSelectionReport, String>>),
 }
 impl ActiveRun {
@@ -53,11 +54,29 @@ impl ActiveRun {
     }
 }
 
+pub struct ReferenceJob {
+    pub context: TurnExecutionContext,
+    completed: oneshot::Receiver<Result<aicoder_runtime::references::PromptReference, String>>,
+}
+impl ReferenceJob {
+    pub async fn recv(&mut self) -> AppEvent {
+        AppEvent::ReferenceReady(Box::new(
+            (&mut self.completed)
+                .await
+                .unwrap_or_else(|_| Err("Reference task ended without a result".into())),
+        ))
+    }
+}
+impl Drop for ReferenceJob {
+    fn drop(&mut self) {
+        self.context.cancel("Reference owner dropped");
+    }
+}
 pub struct AgentRuntime {
     agent: Arc<Agent>,
     repository: Arc<JsonlSessionRepository>,
     workspace: PathBuf,
-    runtime: aicoder_runtime::Runtime,
+    runtime: Arc<aicoder_runtime::Runtime>,
     provider: Arc<dyn aicoder_core::ModelProvider>,
     approvals: ApprovalSessions,
 }
@@ -83,7 +102,7 @@ impl AgentRuntime {
             agent,
             repository,
             workspace: runtime.config().workspace.clone(),
-            runtime,
+            runtime: Arc::new(runtime),
             provider,
             approvals: ApprovalSessions::default(),
         })
@@ -94,6 +113,29 @@ impl AgentRuntime {
         prompt: &str,
     ) -> Result<aicoder_runtime::resources::PreparedPrompt> {
         self.runtime.prepare_prompt(prompt)
+    }
+    pub fn start_reference(&self, path: String, context: TurnExecutionContext) -> ReferenceJob {
+        let runtime = self.runtime.clone();
+        let worker = context.clone();
+        let (sent, completed) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = runtime
+                .read_reference(&path, worker)
+                .await
+                .map_err(|error| aicoder_core::redaction::sanitize_text(&error.to_string(), 2048));
+            let _ = sent.send(result);
+        });
+        ReferenceJob { context, completed }
+    }
+    pub fn model_spec(&self, model: &str) -> Result<aicoder_core::model::ModelSpec> {
+        Ok(self.provider.model_spec(model)?)
+    }
+    pub fn context_window(&self) -> Option<u64> {
+        self.runtime
+            .config()
+            .context
+            .window_tokens
+            .map(|v| v as u64)
     }
     pub fn resource_summary(&self) -> Result<String> {
         let resources = self.runtime.resources()?;
@@ -127,7 +169,7 @@ impl AgentRuntime {
         );
         self.approvals.clear();
         self.agent = agent;
-        self.runtime = runtime;
+        self.runtime = Arc::new(runtime);
         Ok(())
     }
     pub fn sessions(&self) -> Result<Vec<SessionInfo>> {

@@ -19,6 +19,10 @@ pub enum SlashCommand {
     Recover,
     Model,
     Thinking,
+    File,
+    Detach,
+    Theme,
+    Usage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +161,34 @@ const COMMANDS: &[CommandSpec] = &[
         description: "Inspect or validate a reasoning choice",
         arguments: ArgumentPolicy::Optional,
     },
+    CommandSpec {
+        command: SlashCommand::File,
+        name: "file",
+        usage: "/file PATH",
+        description: "Capture a bounded workspace text page",
+        arguments: ArgumentPolicy::Required,
+    },
+    CommandSpec {
+        command: SlashCommand::Detach,
+        name: "detach",
+        usage: "/detach [INDEX|all]",
+        description: "Remove pending file references",
+        arguments: ArgumentPolicy::Optional,
+    },
+    CommandSpec {
+        command: SlashCommand::Theme,
+        name: "theme",
+        usage: "/theme NAME",
+        description: "Select dark, light or mono colors",
+        arguments: ArgumentPolicy::Required,
+    },
+    CommandSpec {
+        command: SlashCommand::Usage,
+        name: "usage",
+        usage: "/usage",
+        description: "Inspect context counts and base-rate estimate",
+        arguments: ArgumentPolicy::None,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,7 +275,7 @@ mod tests {
 
     #[test]
     fn registry_exposes_metadata_for_every_command() {
-        assert_eq!(all().len(), 17);
+        assert_eq!(all().len(), 21);
         assert_eq!(all()[0].usage, "/exit");
         assert!(!all()[0].description.is_empty());
     }
@@ -272,7 +304,11 @@ mod tests {
                 "branch",
                 "recover",
                 "model",
-                "thinking"
+                "thinking",
+                "file",
+                "detach",
+                "theme",
+                "usage"
             ]
         );
         assert_eq!(

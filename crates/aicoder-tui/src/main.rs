@@ -1,6 +1,8 @@
 mod app;
 mod commands;
+mod editor;
 mod runtime;
+mod theme;
 mod ui;
 
 use std::{
@@ -20,6 +22,7 @@ use anyhow::{Context, Result};
 use app::{App, AppEvent, Focus, TimelineItem};
 use clap::Parser;
 use crossterm::{
+    event::{DisableBracketedPaste, EnableBracketedPaste},
     event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -33,6 +36,10 @@ use runtime::AgentRuntime;
 struct Cli {
     #[arg(long, default_value = ".")]
     workspace: PathBuf,
+    #[arg(long, conflicts_with = "theme_file")]
+    theme: Option<String>,
+    #[arg(long)]
+    theme_file: Option<PathBuf>,
 
     #[arg(long)]
     model: Option<String>,
@@ -73,7 +80,7 @@ struct TerminalGuard;
 impl TerminalGuard {
     fn enter() -> Result<Self> {
         enable_raw_mode().context("Failed to enable terminal raw mode")?;
-        if let Err(error) = execute!(io::stdout(), EnterAlternateScreen) {
+        if let Err(error) = execute!(io::stdout(), EnterAlternateScreen, EnableBracketedPaste) {
             let _ = disable_raw_mode();
             return Err(error).context("Failed to enter alternate terminal screen");
         }
@@ -84,7 +91,7 @@ impl TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
     }
 }
 
@@ -146,12 +153,18 @@ async fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(application.config())?);
         return Ok(());
     }
+    let palette = if let Some(path) = &cli.theme_file {
+        theme::Theme::load(path)?
+    } else {
+        theme::Theme::named(cli.theme.as_deref().unwrap_or("dark"))?
+    };
     init_logging(application.state_root()?)?;
     let model = application.config().provider.model.clone();
     let initial_reasoning = application.config().options.reasoning_effort;
     let runtime = AgentRuntime::new(application)?;
     let mut app = App::new(runtime.sessions()?);
     app.reasoning_effort = initial_reasoning;
+    app.theme = palette;
     if let Some(session_id) = cli.session {
         if cli.model.is_some() || cli.profile.is_some() {
             runtime
@@ -186,11 +199,13 @@ async fn run(
     model: &str,
 ) -> Result<()> {
     let result = drive(terminal, &mut app, &mut runtime, model).await;
-    if app.is_running() {
-        app.cancel("TUI exited");
-    }
+    app.cancel("TUI exited");
     while let Some(run) = &mut app.run {
         let event = run.recv().await;
+        app.apply(event);
+    }
+    while let Some(reference) = &mut app.reference {
+        let event = reference.recv().await;
         app.apply(event);
     }
     result
@@ -204,6 +219,13 @@ async fn drive(
     let mut terminal_events = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     loop {
+        app.composer_width = usize::from(terminal.size()?.width.saturating_sub(2).max(1));
+        app.bounded_preview();
+        if let Some(handle) = &app.active_handle
+            && let Some(info) = handle.model_context()
+        {
+            app.model_context = Some(info);
+        }
         terminal.draw(|frame| ui::draw(frame, app, app.model_label.as_deref().unwrap_or(model)))?;
         if app.should_quit {
             break;
@@ -211,16 +233,26 @@ async fn drive(
         enum Action {
             Tick,
             Agent(AppEvent),
+            Reference(AppEvent),
             Terminal(Option<io::Result<Event>>),
         }
         let action = tokio::select! {
             _=tick.tick()=>Action::Tick,
             event=async {match &mut app.run {Some(run)=>run.recv().await,None=>std::future::pending().await}}=>Action::Agent(event),
+            event=async{match &mut app.reference{Some(job)=>job.recv().await,None=>std::future::pending().await}}=>Action::Reference(event),
             event=terminal_events.next()=>Action::Terminal(event),
         };
         match action {
             Action::Tick => {}
+            Action::Reference(event) => app.apply(event),
             Action::Agent(event) => {
+                if let AppEvent::Agent(envelope) = &event
+                    && let aicoder_core::AgentRawEvent::AgentStarted { model } = &envelope.event
+                {
+                    app.model_spec = runtime.model_spec(model).ok();
+                    app.host_window = runtime.context_window();
+                }
+
                 let finished = matches!(
                     event,
                     AppEvent::TurnFinished(_)
@@ -240,6 +272,7 @@ async fn drive(
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
                     handle_key(app, runtime, key)?
                 }
+                Some(Ok(Event::Paste(text))) => handle_paste(app, &text),
                 Some(Ok(_)) => {}
                 Some(Err(error)) => return Err(error).context("Failed to read terminal event"),
                 None => break,
@@ -249,9 +282,23 @@ async fn drive(
     Ok(())
 }
 
+fn handle_paste(app: &mut App, text: &str) {
+    if app.approval.is_some() || app.confirm_delete || app.focus != Focus::Input {
+        return;
+    }
+    if !app.input.insert_text(text) {
+        app.timeline.push(TimelineItem::Error(
+            "Paste exceeds the 64 KiB draft budget; draft unchanged.".into(),
+        ));
+    } else {
+        app.history.edited();
+        app.slash_input_changed();
+    }
+}
+
 fn handle_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) -> Result<()> {
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        if app.is_running() {
+        if app.is_running() || app.reference.is_some() {
             app.cancel("Ctrl-C pressed");
         } else {
             app.should_quit = true;
@@ -311,7 +358,7 @@ fn handle_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) -> Resul
         }
         return Ok(());
     }
-    if key.code == KeyCode::Esc && app.is_running() {
+    if key.code == KeyCode::Esc && (app.is_running() || app.reference.is_some()) {
         app.cancel("Escape pressed");
         return Ok(());
     }
@@ -360,16 +407,81 @@ fn handle_session_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) -> R
 
 fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
     match key.code {
+        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+            app.input.insert('\n');
+            app.history.edited();
+            app.slash_input_changed();
+        }
+        KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.input.insert('\n');
+            app.history.edited();
+            app.slash_input_changed();
+        }
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(text) = app.history.previous(app.input.value()) {
+                app.input.replace(text);
+                app.slash_input_changed();
+            }
+        }
+        KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if let Some(text) = app.history.next() {
+                app.input.replace(text);
+                app.slash_input_changed();
+            }
+        }
         KeyCode::Enter => {
             if app.selected_slash_command().is_some() {
                 app.complete_selected_slash_command();
             }
             let prompt = app.input.take();
             app.slash_input_changed();
-            if prompt.trim().is_empty() {
+            if prompt.trim().is_empty() && app.references.is_empty() {
                 return;
             }
             match commands::parse(&prompt) {
+                Some(Ok(commands::SlashCommand::File)) => {
+                    if app.reference.is_some() {
+                        app.input.replace(prompt);
+                        app.timeline.push(TimelineItem::Notice(
+                            "Wait for the pending file page or cancel it.".into(),
+                        ));
+                        return;
+                    }
+                    app.reference = Some(runtime.start_reference(
+                        commands::arguments(&prompt).into(),
+                        runtime.execution_context(),
+                    ));
+                    return;
+                }
+                Some(Ok(commands::SlashCommand::Detach)) => {
+                    let args = commands::arguments(&prompt);
+                    if args.is_empty() || args == "all" {
+                        app.reference = None;
+                        app.references.clear();
+                    } else {
+                        match args.parse::<usize>() {
+                            Ok(i) if i > 0 && i <= app.references.len() => {
+                                app.references.remove(i - 1);
+                            }
+                            _ => app.timeline.push(TimelineItem::Error(
+                                "Use /detach INDEX (1-based) or /detach all".into(),
+                            )),
+                        }
+                    }
+                    return;
+                }
+                Some(Ok(commands::SlashCommand::Theme)) => {
+                    match theme::Theme::named(commands::arguments(&prompt)) {
+                        Ok(theme) => app.theme = theme,
+                        Err(error) => app.timeline.push(TimelineItem::Error(error.to_string())),
+                    }
+                    return;
+                }
+                Some(Ok(commands::SlashCommand::Usage)) => {
+                    app.timeline.push(TimelineItem::Notice(serde_json::to_string_pretty(&serde_json::json!({"usage":app.usage,"model_context":app.model_context,"model_window":app.model_spec.as_ref().and_then(|s|s.context_tokens),"host_window":app.host_window,"base_cost_estimate":app.cost_estimate(),"estimate_is_billed":false})).unwrap_or_default()));
+                    return;
+                }
+
                 Some(Ok(commands::SlashCommand::Thinking)) => {
                     if app.is_running() {
                         app.input.replace(prompt);
@@ -552,6 +664,13 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                 }
                 _ => {}
             }
+            if app.reference.is_some() {
+                app.input.replace(prompt);
+                app.timeline.push(TimelineItem::Notice(
+                    "File capture is pending; submit after it completes or cancel it.".into(),
+                ));
+                return;
+            }
             let raw_prompt = prompt.clone();
             let prepared = match runtime.prepare_prompt(&prompt) {
                 Ok(prepared) => prepared,
@@ -561,14 +680,17 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                     return;
                 }
             };
-            let prompt = prepared.text;
+            let prompt = app.compose(&prepared.text);
             if app.is_running() {
                 let kind = if key.modifiers.contains(KeyModifiers::ALT) {
                     RunInputKind::FollowUp
                 } else {
                     RunInputKind::Steer
                 };
-                if !app.queue_input(kind, prompt) {
+                if app.queue_input(kind, prompt) {
+                    app.history.record(&raw_prompt);
+                    app.references.clear();
+                } else {
                     app.input.replace(raw_prompt);
                 }
                 return;
@@ -585,6 +707,8 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
             .expect("default TUI run controls");
             match runtime.start_turn(selection, prompt.clone(), app.pending_reasoning, control) {
                 Ok(run) => {
+                    app.history.record(&raw_prompt);
+                    app.references.clear();
                     app.pending_reasoning = None;
                     app.begin_turn(prompt, context);
                     app.active_handle = Some(handle);
@@ -601,19 +725,40 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                 && !key.modifiers.contains(KeyModifiers::ALT) =>
         {
             app.input.insert(character);
+            app.history.edited();
             app.slash_input_changed();
         }
         KeyCode::Backspace => {
             app.input.backspace();
+            app.history.edited();
             app.slash_input_changed();
         }
         KeyCode::Delete => {
             app.input.delete();
+            app.history.edited();
             app.slash_input_changed();
         }
         KeyCode::Up if !app.slash_suggestions().is_empty() => app.select_previous_slash_command(),
         KeyCode::Down if !app.slash_suggestions().is_empty() => app.select_next_slash_command(),
         KeyCode::Esc if !app.slash_suggestions().is_empty() => app.dismiss_slash_menu(),
+        KeyCode::Up => {
+            if !app.input.vertical(app.composer_width, false)
+                && let Some(text) = app.history.previous(app.input.value())
+            {
+                app.input.replace(text);
+            }
+            app.slash_input_changed();
+        }
+        KeyCode::Down => {
+            if !app.input.vertical(app.composer_width, true)
+                && let Some(text) = app.history.next()
+            {
+                app.input.replace(text);
+            }
+            app.slash_input_changed();
+        }
+        KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => app.input.document_home(),
+        KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => app.input.document_end(),
         KeyCode::Left => app.input.move_left(),
         KeyCode::Right => app.input.move_right(),
         KeyCode::Home => app.input.move_home(),
@@ -644,7 +789,11 @@ fn handle_slash_command(app: &mut App, input: &str) -> bool {
             | commands::SlashCommand::Branch
             | commands::SlashCommand::Recover
             | commands::SlashCommand::Model
-            | commands::SlashCommand::Thinking,
+            | commands::SlashCommand::Thinking
+            | commands::SlashCommand::File
+            | commands::SlashCommand::Detach
+            | commands::SlashCommand::Theme
+            | commands::SlashCommand::Usage,
         ) => {}
         Err(error) => {
             app.timeline.push(TimelineItem::Error(error.to_string()));
@@ -824,5 +973,36 @@ mod tests {
             commands::parse(app.input.value()),
             Some(Ok(commands::SlashCommand::Exit))
         );
+    }
+    #[test]
+    fn bracketed_paste_is_draft_data_and_cannot_answer_modal_questions() {
+        let mut app = App::new(vec![]);
+        handle_paste(&mut app, "/exit\ny\n");
+        assert_eq!(app.input.value(), "/exit\ny\n");
+        assert!(!app.should_quit);
+        app.confirm_delete = true;
+        handle_paste(&mut app, "y");
+        assert!(app.confirm_delete);
+        assert_eq!(app.input.value(), "/exit\ny\n");
+        app.confirm_delete = false;
+        app.approval = Some(app::PendingApproval {
+            id: aicoder_core::ApprovalRequestId {
+                run_id: "fixture".into(),
+                sequence: 1,
+            },
+            invocation: aicoder_core::tools::ToolInvocation {
+                call_id: "call".into(),
+                name: "write_file".into(),
+                arguments: serde_json::json!({}),
+                capability: aicoder_core::tools::ToolCapability::Mutating,
+                preview: None,
+            },
+            scroll: 0,
+            show_arguments: false,
+            session: None,
+        });
+        handle_paste(&mut app, "y\n");
+        assert!(app.approval.is_some());
+        assert_eq!(app.input.value(), "/exit\ny\n");
     }
 }

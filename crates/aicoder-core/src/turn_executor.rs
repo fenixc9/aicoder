@@ -924,6 +924,9 @@ impl TurnExecutor {
                 info.last_input_token_estimate = Some(input_estimate);
                 info.last_input_count = Some(input_count);
             }
+            if let Some(control) = &context.control {
+                control.observe_context(&progress.model_context);
+            }
             let messages = std::mem::take(&mut request.messages);
             let mut model_request = request.clone();
             model_request.messages = messages;

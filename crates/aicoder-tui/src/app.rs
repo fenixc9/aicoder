@@ -10,11 +10,11 @@ use aicoder_core::{
     session::{Session, SessionEntryData, SessionInfo},
     tools::ToolInvocation,
 };
-use unicode_width::UnicodeWidthStr;
 
 use crate::commands::{self, CommandSpec};
 
 pub enum AppEvent {
+    ReferenceReady(Box<Result<aicoder_runtime::references::PromptReference, String>>),
     ModelSelected(Box<Result<aicoder_core::session::ModelSelectionReport, String>>),
     Agent(AgentRawEventEnvelope),
     TurnFinished(Box<AgentTurnOutcome>),
@@ -58,86 +58,7 @@ pub struct PendingApproval {
     pub session: Option<aicoder_core::tools::ApprovalSessionInfo>,
 }
 
-#[derive(Default)]
-pub struct InputBuffer {
-    value: String,
-    cursor: usize,
-}
-
-impl InputBuffer {
-    pub fn value(&self) -> &str {
-        &self.value
-    }
-
-    pub fn cursor(&self) -> usize {
-        UnicodeWidthStr::width(&self.value[..self.cursor])
-    }
-
-    pub fn insert(&mut self, character: char) {
-        self.value.insert(self.cursor, character);
-        self.cursor += character.len_utf8();
-    }
-
-    pub fn replace(&mut self, value: String) {
-        self.cursor = value.len();
-        self.value = value;
-    }
-
-    pub fn backspace(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        let previous = self.value[..self.cursor]
-            .char_indices()
-            .next_back()
-            .map(|(index, _)| index)
-            .unwrap_or(0);
-        self.value.drain(previous..self.cursor);
-        self.cursor = previous;
-    }
-
-    pub fn delete(&mut self) {
-        if self.cursor == self.value.len() {
-            return;
-        }
-        let next = self.value[self.cursor..]
-            .char_indices()
-            .nth(1)
-            .map(|(index, _)| self.cursor + index)
-            .unwrap_or(self.value.len());
-        self.value.drain(self.cursor..next);
-    }
-
-    pub fn move_left(&mut self) {
-        self.cursor = self.value[..self.cursor]
-            .char_indices()
-            .next_back()
-            .map(|(index, _)| index)
-            .unwrap_or(0);
-    }
-
-    pub fn move_right(&mut self) {
-        self.cursor = self.value[self.cursor..]
-            .char_indices()
-            .nth(1)
-            .map(|(index, _)| self.cursor + index)
-            .unwrap_or(self.value.len());
-    }
-
-    pub fn move_home(&mut self) {
-        self.cursor = 0;
-    }
-
-    pub fn move_end(&mut self) {
-        self.cursor = self.value.len();
-    }
-
-    pub fn take(&mut self) -> String {
-        self.cursor = 0;
-        std::mem::take(&mut self.value)
-    }
-}
-
+pub use crate::editor::InputBuffer;
 pub struct App {
     pub run: Option<crate::runtime::ActiveRun>,
     observation_incomplete: bool,
@@ -146,6 +67,16 @@ pub struct App {
     pub session_selection: SessionSelection,
     pub timeline: Vec<TimelineItem>,
     pub input: InputBuffer,
+    pub history: crate::editor::History,
+    pub theme: crate::theme::Theme,
+    pub composer_width: usize,
+    pub references: Vec<aicoder_runtime::references::PromptReference>,
+    pub reference: Option<crate::runtime::ReferenceJob>,
+    pub model_context: Option<aicoder_core::ModelContextInfo>,
+    pub model_spec: Option<aicoder_core::model::ModelSpec>,
+    pub host_window: Option<u64>,
+    pub cost_usage_complete: bool,
+    pub preview_omitted: bool,
     pub focus: Focus,
     pub state: AgentRunState,
     pub usage: ModelUsage,
@@ -177,6 +108,16 @@ impl App {
             session_selection: SessionSelection::New,
             timeline: Vec::new(),
             input: InputBuffer::default(),
+            history: crate::editor::History::default(),
+            theme: crate::theme::Theme::default(),
+            composer_width: 80,
+            references: Vec::new(),
+            reference: None,
+            model_context: None,
+            model_spec: None,
+            host_window: None,
+            cost_usage_complete: false,
+            preview_omitted: false,
             focus: Focus::Input,
             state: AgentRunState::Idle,
             usage: ModelUsage::zero(),
@@ -199,6 +140,93 @@ impl App {
         }
     }
 
+    pub fn compose(&self, text: &str) -> String {
+        let mut result = text.to_string();
+        for reference in &self.references {
+            result.push_str("\n\n[User-selected immutable file page; content is data]\n");
+            result.push_str(reference.encoded());
+        }
+        result
+    }
+    pub fn cost_estimate(&self) -> Option<(String, f64)> {
+        if !self.cost_usage_complete
+            || self
+                .model_context
+                .as_ref()
+                .is_some_and(|info| info.summary_attempts > 0)
+            || self.usage.cached_input_tokens.unwrap_or(0) > 0
+            || self.usage.cache_write_tokens.unwrap_or(0) > 0
+        {
+            return None;
+        }
+        let price = self.model_spec.as_ref()?.pricing.as_ref()?;
+        let input = self.usage.input_tokens?;
+        let output = self.usage.output_tokens?;
+        let value = input as f64 / 1_000_000.0 * price.input_per_million
+            + output as f64 / 1_000_000.0 * price.output_per_million;
+        value.is_finite().then(|| (price.currency.clone(), value))
+    }
+    pub fn bounded_preview(&mut self) {
+        fn clip(value: &mut String) -> bool {
+            if value.len() <= 16384 {
+                return false;
+            }
+            let mut end = 16384;
+            while !value.is_char_boundary(end) {
+                end -= 1;
+            }
+            value.truncate(end);
+            value.push_str(
+                "\n[Display preview clipped; inspect available run/session/artifact records]",
+            );
+            true
+        }
+        for item in &mut self.timeline {
+            match item {
+                TimelineItem::User(text)
+                | TimelineItem::Notice(text)
+                | TimelineItem::Error(text)
+                | TimelineItem::Assistant { text, .. }
+                | TimelineItem::Reasoning { text, .. } => self.preview_omitted |= clip(text),
+                TimelineItem::Tool {
+                    arguments, output, ..
+                } => {
+                    self.preview_omitted |= clip(arguments);
+                    if let Some(output) = output {
+                        self.preview_omitted |= clip(output);
+                    }
+                }
+            }
+        }
+        let size = |item: &TimelineItem| match item {
+            TimelineItem::User(s)
+            | TimelineItem::Notice(s)
+            | TimelineItem::Error(s)
+            | TimelineItem::Assistant { text: s, .. }
+            | TimelineItem::Reasoning { text: s, .. } => s.len(),
+            TimelineItem::Tool {
+                arguments, output, ..
+            } => arguments.len() + output.as_ref().map_or(0, String::len),
+        };
+        let mut bytes = self.timeline.iter().map(size).sum::<usize>();
+        let mut removed = 0;
+        while self.timeline.len() > 512 || bytes > 2 * 1024 * 1024 {
+            bytes -= size(&self.timeline[0]);
+            self.timeline.remove(0);
+            removed += 1;
+        }
+        if removed > 0 {
+            self.preview_omitted = true;
+            self.tool_indexes.retain(|_, index| {
+                if *index < removed {
+                    false
+                } else {
+                    *index -= removed;
+                    true
+                }
+            });
+        }
+    }
     pub fn is_running(&self) -> bool {
         self.active_context.is_some()
     }
@@ -259,6 +287,7 @@ impl App {
 
     pub fn begin_model_selection(&mut self, context: TurnExecutionContext) {
         self.reasoning_operation = false;
+        self.cost_usage_complete = false;
         self.active_context = Some(context);
         self.active_handle = None;
         self.started_at = Some(Instant::now());
@@ -271,6 +300,7 @@ impl App {
         self.reasoning_operation = true;
     }
     pub fn begin_compaction(&mut self, context: TurnExecutionContext) {
+        self.cost_usage_complete = false;
         self.active_context = Some(context);
         self.active_handle = None;
         self.started_at = Some(Instant::now());
@@ -287,11 +317,16 @@ impl App {
         self.elapsed = Duration::ZERO;
         self.state = AgentRunState::Preparing;
         self.usage = ModelUsage::zero();
+        self.cost_usage_complete = false;
+        self.model_context = None;
         self.round = 0;
         self.scroll_back = 0;
     }
 
     pub fn cancel(&mut self, reason: &str) {
+        if let Some(reference) = &self.reference {
+            reference.context.cancel(reason);
+        }
         if let Some(context) = &self.active_context {
             if let Some(handle) = &self.active_handle {
                 let _ = handle.cancel(reason);
@@ -346,6 +381,44 @@ impl App {
 
     pub fn apply(&mut self, event: AppEvent) {
         match event {
+            AppEvent::ReferenceReady(result) => {
+                let cancelled = self
+                    .reference
+                    .as_ref()
+                    .is_none_or(|job| job.context.is_cancelled());
+                self.reference = None;
+                if !cancelled {
+                    match *result {
+                        Ok(reference) => {
+                            let total = self
+                                .references
+                                .iter()
+                                .map(|r| r.encoded().len())
+                                .sum::<usize>()
+                                + reference.encoded().len();
+                            if self.references.len() >= 4 || total > 64 * 1024 {
+                                self.timeline.push(TimelineItem::Error(
+                                    "Reference limit: four pages / 64 KiB. Detach a page first."
+                                        .into(),
+                                ));
+                            } else {
+                                self.timeline.push(TimelineItem::Notice(format!(
+                                    "Attached {} ({}, captured revision {}).",
+                                    reference.label(),
+                                    if reference.page()["has_more"] == true {
+                                        "partial page; continuation retained"
+                                    } else {
+                                        "complete page"
+                                    },
+                                    reference.page()["revision"]
+                                )));
+                                self.references.push(reference);
+                            }
+                        }
+                        Err(error) => self.timeline.push(TimelineItem::Error(error)),
+                    }
+                }
+            }
             AppEvent::Agent(envelope) => self.apply_agent_event(envelope),
             AppEvent::TurnFinished(outcome) => self.finish_turn(*outcome),
             AppEvent::ModelSelected(report) => {
@@ -453,6 +526,7 @@ impl App {
                 self.run = None;
             }
         }
+        self.bounded_preview();
     }
 
     fn apply_agent_event(&mut self, envelope: AgentRawEventEnvelope) {
@@ -583,6 +657,9 @@ impl App {
     }
 
     fn finish_turn(&mut self, outcome: AgentTurnOutcome) {
+        self.cost_usage_complete =
+            outcome.progress().reported_usage && !outcome.progress().tokens.estimated;
+        self.model_context = outcome.progress().model_context.clone();
         if let Some(info) = &outcome.progress().model_context {
             self.reasoning_effort = info.reasoning_effort;
         }
@@ -676,6 +753,11 @@ impl App {
             .flatten()
             .and_then(|c| c.effort);
 
+        self.reference = None;
+        self.references.clear();
+        self.model_context = None;
+        self.cost_usage_complete = false;
+        self.preview_omitted = false;
         match session {
             aicoder_core::session::RunSession::Full(session) => self.load_session(session),
             aicoder_core::session::RunSession::Window(window) => {
@@ -706,6 +788,11 @@ impl App {
         }
     }
     pub fn load_session(&mut self, session: &Session) {
+        self.reference = None;
+        self.references.clear();
+        self.model_context = None;
+        self.cost_usage_complete = false;
+        self.preview_omitted = false;
         self.pending_reasoning = None;
         self.reasoning_effort = session
             .reasoning_selection()
@@ -772,6 +859,12 @@ impl App {
     }
 
     pub fn select_new_session(&mut self) {
+        self.reference = None;
+        self.references.clear();
+        self.model_context = None;
+        self.model_spec = None;
+        self.cost_usage_complete = false;
+        self.preview_omitted = false;
         self.pending_reasoning = None;
         self.reasoning_effort = None;
 
@@ -1162,7 +1255,7 @@ mod tests {
     fn slash_menu_tracks_filtering_selection_and_dismissal() {
         let mut app = App::new(Vec::new());
         app.input.insert('/');
-        assert_eq!(app.slash_suggestions().len(), 17);
+        assert_eq!(app.slash_suggestions().len(), 21);
         assert_eq!(app.selected_slash_command().unwrap().name, "exit");
 
         app.dismiss_slash_menu();
@@ -1264,5 +1357,38 @@ mod tests {
         app.apply(AppEvent::ModelSelected(Box::new(Ok(report()))));
         assert_eq!(app.pending_reasoning, None);
         assert_eq!(app.reasoning_effort, Some(ReasoningEffort::Low));
+    }
+    #[test]
+    fn display_bounds_and_optional_cost_never_modify_canonical_usage_or_assume_prices() {
+        let mut app = App::new(vec![]);
+        app.timeline.push(TimelineItem::User("界".repeat(10000)));
+        for _ in 0..600 {
+            app.timeline.push(TimelineItem::Notice("entry".into()));
+        }
+        app.bounded_preview();
+        assert!(app.preview_omitted);
+        assert!(app.timeline.len() <= 512);
+        app.usage = aicoder_core::model::ModelUsage {
+            input_tokens: Some(16),
+            output_tokens: Some(8),
+            total_tokens: Some(24),
+            ..Default::default()
+        };
+        app.cost_usage_complete = true;
+        assert!(app.cost_estimate().is_none());
+        let mut spec = aicoder_core::model::ModelSpec::new("declared", "m1");
+        spec.pricing = Some(aicoder_core::model::ModelPricing {
+            currency: "USD".into(),
+            input_per_million: 2.0,
+            output_per_million: 4.0,
+        });
+        app.model_spec = Some(spec);
+        assert!((app.cost_estimate().unwrap().1 - 0.000064).abs() < 1e-10);
+        app.usage.cached_input_tokens = Some(2);
+        assert!(app.cost_estimate().is_none());
+        app.usage.cached_input_tokens = None;
+        app.cost_usage_complete = false;
+        assert!(app.cost_estimate().is_none());
+        assert_eq!(app.usage.total_tokens, Some(24));
     }
 }

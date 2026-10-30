@@ -70,6 +70,8 @@ pub struct PendingRunApproval {
 }
 #[derive(Debug, Clone)]
 pub struct RunControlSnapshot {
+    /// Latest counted projected request; no messages, credentials or backend checkpoints.
+    pub model_context: Option<crate::ModelContextInfo>,
     pub run_id: RunId,
     pub session_id: Option<String>,
     pub revision: u64,
@@ -127,6 +129,7 @@ struct Approval {
     response: oneshot::Sender<ApprovalDecision>,
 }
 struct State {
+    model_context: Option<crate::ModelContextInfo>,
     status: RunControlStatus,
     revision: u64,
     session_id: Option<String>,
@@ -173,6 +176,7 @@ impl RunHandle {
             id,
             config,
             state: Mutex::new(State {
+                model_context: None,
                 status: RunControlStatus::Waiting,
                 revision: 0,
                 session_id: None,
@@ -285,6 +289,15 @@ impl RunHandle {
         self.shared.update(&mut state);
         Ok(())
     }
+    /// Read count metadata without cloning queued input/approval payloads.
+    pub fn model_context(&self) -> Option<crate::ModelContextInfo> {
+        self.shared
+            .state
+            .lock()
+            .expect("run controls poisoned")
+            .model_context
+            .clone()
+    }
     pub fn snapshot(&self) -> RunControlSnapshot {
         let mut snapshot = self.shared.snapshot();
         if self.context.is_cancelled()
@@ -361,6 +374,7 @@ impl ControlState {
     pub(crate) fn snapshot(&self) -> RunControlSnapshot {
         let state = self.state.lock().expect("run controls poisoned");
         RunControlSnapshot {
+            model_context: state.model_context.clone(),
             run_id: self.id,
             session_id: state.session_id.clone(),
             revision: state.revision,
@@ -376,6 +390,11 @@ impl ControlState {
                 .map(|approval| approval.request.clone())
                 .collect(),
         }
+    }
+    pub(crate) fn observe_context(&self, info: &Option<crate::ModelContextInfo>) {
+        let mut state = self.state.lock().expect("run controls poisoned");
+        state.model_context = info.clone();
+        self.update(&mut state);
     }
     pub(crate) fn event_source(&self) -> crate::events::EventSource {
         self.events.clone()

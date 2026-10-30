@@ -601,3 +601,25 @@ Agent::with_reasoning_effort shares the live executor/registry while varying par
 rebuilding a registry for a preference change can invalidate ephemeral grants. TUI now
 cancels and awaits owned operations after terminal EOF/errors as well as normal exit.
 See [contract](reasoning-controls.md) and [acceptance](s5-reasoning-acceptance.md).
+
+## S5 TUI interaction
+
+The TUI now has a bounded grapheme/multiline composer, ephemeral accepted-input history,
+explicit immutable /file pages, /detach, /usage and frontend palettes. Enter/Alt+Enter
+retain steer/follow-up semantics; Shift+Enter or portable Ctrl+O inserts a newline.
+Recognized bracketed paste no longer acts like typed Enter/approval keys. Oversized paste
+leaves the draft unchanged. History recalls raw text rather than expanded templates or
+restored attachments; actual canonical conversation storage remains core-owned.
+
+RunControlSnapshot gains optional model_context metadata and RunHandle::model_context()
+reads it without copying pending payloads. Explicit Rust snapshot literals add
+model_context: None. No message/event/session format changes or authority restoration occurs.
+Core updates these counts from the same projected request used for policy/budgets.
+TUI base-rate estimates require known declared prices and complete usage; unknown/mixed
+work remains unavailable. Palettes stay outside runtime/core settings.
+
+/file uses the existing bounded read_file backend and preserves page revision/completeness/
+cursor as user data. It does not fabricate a tool result, re-read captured pages on submit,
+or bypass later model-tool approvals. Pending captures are cancelled on navigation/detach.
+TUI preview clipping never guarantees recovery of failed archive writes. See
+[interaction contract](tui-interaction.md) and [acceptance](s5-tui-acceptance.md).
