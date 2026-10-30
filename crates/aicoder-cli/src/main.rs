@@ -26,6 +26,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 mod execution;
+mod exports;
 mod input;
 mod rpc;
 
@@ -214,6 +215,28 @@ enum Command {
         #[arg(long, default_value_t = 8192)]
         max_bytes: usize,
     },
+    /// Export all canonical branches to a new private JSON or HTML file.
+    ExportSession {
+        id: String,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, default_value = "json")]
+        format: aicoder_runtime::exports::ExportFormat,
+        #[command(flatten)]
+        limits: ExportBudget,
+    },
+    /// Explicitly publish a prepared session export to a trusted local share directory.
+    ShareSession {
+        id: String,
+        #[arg(long)]
+        directory: PathBuf,
+        #[arg(long)]
+        base_url: Option<String>,
+        #[arg(long, default_value = "html")]
+        format: aicoder_runtime::exports::ExportFormat,
+        #[command(flatten)]
+        limits: ExportBudget,
+    },
     /// Summarize this session branch without adding a user/coding turn; requires a context window.
     CompactSession {
         id: String,
@@ -225,6 +248,15 @@ enum Command {
     },
 }
 
+#[derive(Debug, clap::Args)]
+struct ExportBudget {
+    #[arg(long, default_value_t = 16777216)]
+    max_bytes: usize,
+    #[arg(long, default_value_t = 10000)]
+    max_entries: usize,
+    #[arg(long, default_value_t = 134217728)]
+    max_source_bytes: u64,
+}
 struct ConsoleEvents;
 
 struct ConsoleApproval {
@@ -547,6 +579,8 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             | Command::Resources
             | Command::ExpandPrompt { .. }
             | Command::CompactSession { .. }
+            | Command::ExportSession { .. }
+            | Command::ShareSession { .. }
             | Command::ReadArtifact { .. }
             | Command::SwitchSessionModel { .. },
         )
@@ -728,6 +762,9 @@ async fn application() -> Result<()> {
                 "Manual compaction did not commit a summary; inspect the report before retrying"
             );
         }
+        return Ok(());
+    }
+    if exports::handle(&cli, &runtime).await? {
         return Ok(());
     }
     if cli.command.is_some() {

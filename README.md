@@ -26,6 +26,8 @@ and [project instructions](AGENTS.md) for development conventions.
 The [development roadmap](docs/roadmap.md) defines the plan for a lightweight,
 extensible core and Pi feature parity across SDK, CLI, TUI, and Web integrations.
 See [API migrations](docs/migrations.md) when updating an embedded application.
+Canonical sessions support [bounded JSON/HTML exports](docs/session-exports.md), with
+explicit publication adapters and no automatic third-party sharing.
 The [provider-neutral model API](docs/model-api.md) is shared by the agent
 loop, tools, sessions and frontends. Structured [run outcomes and budgets](docs/run-outcomes.md) retain progress on
 limits, failures and cancellation. [Provider profiles](docs/provider-configuration.md) configure proxy, credentials,

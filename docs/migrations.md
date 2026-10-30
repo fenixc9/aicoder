@@ -559,3 +559,18 @@ runtime session storage, preventing implicit artifact persistence.
 Development source digests now include embedded HTML/JS/CSS alongside Rust/manifests,
 so Web asset edits invalidate new baseline measurements. Historical reports retain their
 original source identities. Browser verification dependencies remain development-only.
+
+## S5 canonical JSON/HTML exports
+
+`export-session ID --output PATH --format json|html` creates a new private, bounded
+canonical snapshot containing all branches. `share-session ID --directory PATH` explicitly
+invokes the directory publication adapter; an optional --base-url only constructs its URL
+receipt. Existing files/symlinks are never replaced, storage is not migrated, and no model
+credential or third-party upload is involved. Other destinations implement ExportPublisher
+and receive the same immutable prepared bytes. No core API/event/session version changes.
+
+Export schema v1 is distinct from session JSONL v3. It preserves domain entries rather
+than copying raw transaction framing, private backend checkpoints, provider repairs or
+ephemeral authority. Torn-tail completeness and unfinished turns remain explicit. Output
+artifacts are referenced, not automatically bundled. Failures after file visibility expose
+CommitFailure.visible; callers must inspect before retrying. See [the contract](session-exports.md).

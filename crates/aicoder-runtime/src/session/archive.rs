@@ -301,7 +301,14 @@ fn accept(
     Ok(())
 }
 fn scan(path: &Path, limits: &SessionLoadLimits) -> Result<ArchiveIndex> {
-    let file = open_data(path, true, false)?;
+    scan_file(path, limits, open_data(path, true, false)?, None)
+}
+fn scan_file(
+    path: &Path,
+    limits: &SessionLoadLimits,
+    file: File,
+    context: Option<&aicoder_core::TurnExecutionContext>,
+) -> Result<ArchiveIndex> {
     check("scan bytes", file.metadata()?.len(), limits.max_scan_bytes)?;
     let mut reader = BufReader::with_capacity(8192, file);
     let raw = line(&mut reader, limits.max_record_bytes)?;
@@ -346,6 +353,11 @@ fn scan(path: &Path, limits: &SessionLoadLimits) -> Result<ArchiveIndex> {
         title: None,
     };
     loop {
+        if let Some(context) = context
+            && context.is_cancelled()
+        {
+            return Err(context.error().into());
+        }
         let offset = index.expected_len;
         let raw = line(&mut reader, limits.max_record_bytes)?;
         if raw.is_empty() {
@@ -992,4 +1004,178 @@ pub(super) fn navigate(
         transaction
     };
     commit_transaction(repository, window, transaction, true)
+}
+
+/// One pinned read/validation pass followed by bounded record visits, never model projections.
+pub(crate) fn visit_export<T>(
+    repository: &JsonlSessionRepository,
+    workspace: &Path,
+    id: &str,
+    limits: &crate::exports::ExportLimits,
+    context: &aicoder_core::TurnExecutionContext,
+    render: impl FnOnce(
+        crate::exports::Manifest,
+        &mut dyn Iterator<Item = Result<SessionEntry>>,
+        &std::collections::HashSet<String>,
+    ) -> Result<T>,
+) -> Result<T> {
+    use std::os::unix::fs::MetadataExt;
+    let workspace = workspace.canonicalize()?;
+    if context.is_cancelled() {
+        return Err(context.error().into());
+    }
+    let _metadata = repository.export_lock(id)?;
+    let _idle = repository.write_lease(id, None)?;
+    let path = repository.find(id)?;
+    let mut file = open_data(&path, true, false)?;
+    let before = file.metadata()?;
+    check("export source bytes", before.len(), limits.max_source_bytes)?;
+    let (header_id, version, _, cwd) = read_header(&path)?;
+    ensure!(
+        header_id == id && cwd == workspace,
+        "session belongs to another workspace or identity"
+    );
+    let mut source_limits = repository.limits.clone();
+    source_limits.max_scan_bytes = source_limits.max_scan_bytes.min(limits.max_source_bytes);
+    source_limits.max_snapshot_bytes = source_limits
+        .max_snapshot_bytes
+        .min(limits.max_source_bytes);
+    source_limits.max_record_bytes = source_limits
+        .max_record_bytes
+        .min(limits.max_source_bytes as usize);
+    source_limits.max_index_entries = source_limits.max_index_entries.min(limits.max_entries);
+    let (result, expected_len, expected_hash) = if version == SESSION_VERSION {
+        let index = scan_file(&path, &source_limits, file.try_clone()?, Some(context))?;
+        ensure!(
+            index.session.metadata().id == id && index.session.metadata().cwd == workspace,
+            "session source changed"
+        );
+        let selected = index
+            .session
+            .selected_branch()
+            .entries()
+            .iter()
+            .map(|e| e.id.clone())
+            .collect();
+        let manifest = crate::exports::Manifest::new(
+            index.session.metadata().clone(),
+            index.locations.len(),
+            index.expected_len,
+            index.expected_len - index.valid_len,
+            index.session.unfinished_turn().map(str::to_string),
+        );
+        let mut reader = Reader {
+            reader: BufReader::with_capacity(8192, file.try_clone()?),
+            record: None,
+            limit: source_limits.max_record_bytes,
+        };
+        let mut entries = index.locations.iter().map(|location| {
+            if context.is_cancelled() {
+                return Err(context.error().into());
+            }
+            reader.entry(*location)
+        });
+        (
+            render(manifest, &mut entries, &selected)?,
+            index.expected_len,
+            index.hash,
+        )
+    } else {
+        let bytes = read_full(&mut file, &source_limits)?;
+        let session = load_bytes(&path, &bytes)?;
+        ensure!(
+            session.metadata().id == id && session.metadata().cwd == workspace,
+            "session source changed"
+        );
+        check(
+            "export entries",
+            session.entries().len() as u64,
+            limits.max_entries as u64,
+        )?;
+        let cursor = session
+            .backend_state::<StorageCursor>()
+            .context("legacy storage cursor missing")?;
+        let selected = session
+            .selected_branch()
+            .entries()
+            .iter()
+            .map(|e| e.id.clone())
+            .collect();
+        let manifest = crate::exports::Manifest::new(
+            session.metadata().clone(),
+            session.entries().len(),
+            cursor.expected_len,
+            cursor.expected_len - cursor.valid_len,
+            session.unfinished_turn().map(str::to_string),
+        );
+        let mut entries = session.entries().iter().cloned().map(Ok);
+        (
+            render(manifest, &mut entries, &selected)?,
+            bytes.len() as u64,
+            fingerprint(&bytes),
+        )
+    };
+    if context.is_cancelled() {
+        return Err(context.error().into());
+    }
+    let (length, hash, _) = hash_file(&mut file, None, source_limits.max_scan_bytes)?;
+    let after = file.metadata()?;
+    let named = std::fs::symlink_metadata(&path)?;
+    let stamp = |m: &std::fs::Metadata| {
+        (
+            m.dev(),
+            m.ino(),
+            m.len(),
+            m.mtime(),
+            m.mtime_nsec(),
+            m.ctime(),
+            m.ctime_nsec(),
+        )
+    };
+    ensure!(
+        length == expected_len
+            && hash == expected_hash
+            && stamp(&before) == stamp(&after)
+            && !named.file_type().is_symlink()
+            && stamp(&after) == stamp(&named),
+        "session changed while preparing export"
+    );
+    if context.is_cancelled() {
+        return Err(context.error().into());
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+    #[test]
+    fn changed_source_is_rejected_after_record_visits_even_under_an_idle_lease() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let repo = JsonlSessionRepository::new(root.path()).unwrap();
+        let mut session = repo.create(workspace.path()).unwrap();
+        repo.append(&mut session, Message::text(MessageRole::User, "original"))
+            .unwrap();
+        let path = session.path().unwrap().to_path_buf();
+        let result = visit_export(
+            &repo,
+            workspace.path(),
+            &session.metadata().id,
+            &crate::exports::ExportLimits::default(),
+            &aicoder_core::TurnExecutionContext::new(),
+            |_, entries, _| {
+                for entry in entries {
+                    entry?;
+                }
+                // Simulate an external writer ignoring repository locks after materialization.
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&path)?
+                    .write_all(b" ")?;
+                Ok(())
+            },
+        );
+        assert!(result.unwrap_err().to_string().contains("session changed"));
+    }
 }

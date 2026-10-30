@@ -59,6 +59,9 @@
 - Optional Web hosts fix principal/workspace/provider authority outside request payloads.
   Authenticate before reading bodies, bound retained runs and SSE bodies, and distinguish
   observer disconnect from owner cancellation. Await owners before HTTP/runtime shutdown.
+- Exports preserve canonical records and all branches, never provider repairs or authority.
+  Validate a pinned idle source before accepting immutable output; publish only by explicit
+  adapter call. Keep text inert and report post-visibility failures without automatic retries.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

@@ -1,5 +1,6 @@
 //! Filesystem session repositories; domain types and memory storage live in core.
 mod archive;
+pub(crate) use archive::visit_export;
 mod jsonl;
 mod limits;
 pub use limits::{SessionLoadLimit, SessionLoadLimits};

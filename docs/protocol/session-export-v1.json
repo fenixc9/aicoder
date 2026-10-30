@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "manifest": {
+    "metadata": {
+      "version": 3,
+      "id": "83874432-6068-4ec9-95ef-2e49e31762a4",
+      "cwd": "/workspace/export-fixture",
+      "created_at": 1793368558478,
+      "updated_at": 1793368558484,
+      "title": null,
+      "leaf_id": "fec6d5d1-407a-470d-855c-38dfabb37463",
+      "revision": 3
+    },
+    "scope": "all_canonical_branches",
+    "entry_count": 6,
+    "source_bytes": 2170,
+    "ignored_tail_bytes": 0,
+    "source_tail_complete": true,
+    "unfinished_turn": null,
+    "includes_artifact_bytes": false
+  },
+  "entries": [
+    {
+      "selected_branch": false,
+      "entry": {
+        "id": "5e0253cd-bc0f-403d-9b2f-270a3c9aa0a5",
+        "parent_id": null,
+        "created_at": 1793368558480,
+        "data": {
+          "kind": "message",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Inspect this safely: </pre><script>window.injected=true</script>"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "selected_branch": false,
+      "entry": {
+        "id": "e30b8942-0d42-4b2c-a496-eb5904d42364",
+        "parent_id": "5e0253cd-bc0f-403d-9b2f-270a3c9aa0a5",
+        "created_at": 1793368558480,
+        "data": {
+          "kind": "message",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_call",
+                "call": {
+                  "id": "read-1",
+                  "name": "read_file",
+                  "arguments": {
+                    "path": "example.rs"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "selected_branch": false,
+      "entry": {
+        "id": "6d158fe3-0566-40a1-9f8d-fce53ae56e83",
+        "parent_id": "e30b8942-0d42-4b2c-a496-eb5904d42364",
+        "created_at": 1793368558480,
+        "data": {
+          "kind": "message",
+          "message": {
+            "role": "tool",
+            "content": [
+              {
+                "type": "tool_result",
+                "call_id": "read-1",
+                "content": {
+                  "text": "<img src='https://remote.invalid/x'>"
+                },
+                "is_error": false
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "selected_branch": false,
+      "entry": {
+        "id": "0fb92493-4044-47d3-96da-38b24a167a12",
+        "parent_id": "6d158fe3-0566-40a1-9f8d-fce53ae56e83",
+        "created_at": 1793368558480,
+        "data": {
+          "kind": "message",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Recorded result remains inspectable."
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "selected_branch": true,
+      "entry": {
+        "id": "a334616e-fe20-474c-9ed1-9e7876304fde",
+        "parent_id": null,
+        "created_at": 1793368558482,
+        "data": {
+          "kind": "extension",
+          "namespace": "aicoder.session.navigation.v1",
+          "data": {
+            "name": "retained alternative",
+            "operation": "branch"
+          }
+        }
+      }
+    },
+    {
+      "selected_branch": true,
+      "entry": {
+        "id": "fec6d5d1-407a-470d-855c-38dfabb37463",
+        "parent_id": "a334616e-fe20-474c-9ed1-9e7876304fde",
+        "created_at": 1793368558484,
+        "data": {
+          "kind": "message",
+          "message": {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Current branch; older branch remains in this export."
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "canonical_entries_complete": true
+}

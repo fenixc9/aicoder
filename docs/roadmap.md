@@ -223,7 +223,8 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 - [x] 最小 Web 示例：HTTP 提交、SSE 事件、取消和审批；宿主负责认证、工作区授权
   与运行生命周期，浏览器不获得任意文件/命令入口。
   见 [Web 契约](web.md) 与 [验收记录](s5-web-acceptance.md)，四入口有同任务规范化对照。
-- [ ] JSON/HTML 本地导出；分享功能作为显式调用的发布 adapter。
+- [x] JSON/HTML 本地导出；分享功能作为显式调用的发布 adapter。
+  导出全部规范分支、保留中断状态；见 [导出契约](session-exports.md) 与 [验收记录](s5-exports-acceptance.md)。
 
 验收：同一 scripted case 可经 SDK、CLI JSON、RPC、Web 示例执行，并产生一致的
 规范化结果；TUI 只适配输入展示，不复制执行逻辑。

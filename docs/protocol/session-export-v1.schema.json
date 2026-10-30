@@ -1,0 +1,195 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aicoder:session-export:v1",
+  "title": "aicoder canonical session export v1",
+  "description": "All canonical branches, no provider projection/authority/storage checkpoint. Session::from_entries validates cross-record parent/turn invariants. See docs/session-exports.md.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "manifest": {
+      "type": "object",
+      "properties": {
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            },
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "created_at": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "updated_at": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "leaf_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "version",
+            "id",
+            "cwd",
+            "created_at",
+            "updated_at",
+            "title",
+            "leaf_id",
+            "revision"
+          ],
+          "additionalProperties": false
+        },
+        "scope": {
+          "const": "all_canonical_branches"
+        },
+        "entry_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ignored_tail_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_tail_complete": {
+          "type": "boolean"
+        },
+        "unfinished_turn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "includes_artifact_bytes": {
+          "const": false
+        }
+      },
+      "required": [
+        "metadata",
+        "scope",
+        "entry_count",
+        "source_bytes",
+        "ignored_tail_bytes",
+        "source_tail_complete",
+        "unfinished_turn",
+        "includes_artifact_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "selected_branch": {
+            "type": "boolean"
+          },
+          "entry": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "parent_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "created_at": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "enum": [
+                      "message",
+                      "model_changed",
+                      "compaction",
+                      "extension",
+                      "turn_start",
+                      "turn_end"
+                    ]
+                  },
+                  "message": {
+                    "$ref": "urn:aicoder:events:v1#/$defs/message"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "parent_id",
+              "created_at",
+              "data"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "selected_branch",
+          "entry"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "canonical_entries_complete": {
+      "const": true
+    }
+  },
+  "required": [
+    "schema_version",
+    "manifest",
+    "entries",
+    "canonical_entries_complete"
+  ],
+  "additionalProperties": false
+}

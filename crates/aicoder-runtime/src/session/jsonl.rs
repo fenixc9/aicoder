@@ -119,6 +119,13 @@ impl JsonlSessionRepository {
         }
         Ok(Lock(file))
     }
+    pub(super) fn export_lock(&self, id: &str) -> Result<Lock> {
+        validate_id(id)?;
+        let file = open_lock(&self.root.join(".locks").join(format!("{id}.lock")))?;
+        FileExt::try_lock_shared(&file)
+            .context("session metadata is busy; retry export after the writer finishes")?;
+        Ok(Lock(file))
+    }
     pub(super) fn run_file(&self, id: &str) -> Result<File> {
         validate_id(id)?;
         open_lock(&self.root.join(".runs").join(format!("{id}.lock")))
@@ -458,7 +465,7 @@ pub(super) fn transaction_line(
     writeln!(&mut bytes, ",\"checksum\":\"{checksum:016x}\"}}")?;
     Ok(bytes)
 }
-fn load_bytes(path: &Path, bytes: &[u8]) -> Result<Session> {
+pub(super) fn load_bytes(path: &Path, bytes: &[u8]) -> Result<Session> {
     let mut offset = 0;
     let mut valid_len = 0;
     let mut session: Option<Session> = None;

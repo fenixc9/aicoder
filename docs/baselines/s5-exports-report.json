@@ -1,0 +1,333 @@
+{
+  "schema_version": 1,
+  "phase": "S5 canonical JSON/HTML exports and explicit directory publication",
+  "reference": "s5-web-report.json",
+  "resolved_packages": 250,
+  "samples": [
+    {
+      "schema_version": 1,
+      "revision": "c875766e4ff3b14c95afdcde80a38467fd533895",
+      "worktree_dirty": true,
+      "source_sha256": "03b59462977acc963a55994f3162bc289ff8f741e143442345ad216992b078df",
+      "platform": "Linux-6.8.0-101-generic-x86_64-with-glibc2.35",
+      "machine": "x86_64",
+      "logical_cpus": 16,
+      "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+      "cargo": "cargo 1.92.0 (344c4567c 2025-10-21)",
+      "build": {
+        "mode": "existing-target",
+        "seconds": 49.34888676740229
+      },
+      "binaries": {
+        "aicoder": {
+          "bytes": 15885040,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 4.894373007118702,
+            "peak_rss_kib": 7936
+          },
+          "warm_process_help_median_ms": 4.179669544100761,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 4.237186163663864,
+              "peak_rss_kib": 7680
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.179669544100761,
+              "peak_rss_kib": 7936
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.132382571697235,
+              "peak_rss_kib": 7680
+            }
+          ]
+        },
+        "aicoder-tui": {
+          "bytes": 15146384,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 4.065787419676781,
+            "peak_rss_kib": 7168
+          },
+          "warm_process_help_median_ms": 3.6716805770993233,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 3.6716805770993233,
+              "peak_rss_kib": 7040
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.424481488764286,
+              "peak_rss_kib": 7040
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.7039685994386673,
+              "peak_rss_kib": 7168
+            }
+          ]
+        },
+        "aicoder-swebench": {
+          "bytes": 14176016,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 3.8513019680976868,
+            "peak_rss_kib": 7296
+          },
+          "warm_process_help_median_ms": 3.766183741390705,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 3.766183741390705,
+              "peak_rss_kib": 7168
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.965933807194233,
+              "peak_rss_kib": 7040
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.590419888496399,
+              "peak_rss_kib": 7168
+            }
+          ]
+        }
+      },
+      "runtime": {
+        "wall_ms_including_time_wrapper": 389.53173346817493,
+        "peak_rss_kib": 7296,
+        "idle_runtime_rss_kib": 4228,
+        "iterations": 25,
+        "cases_per_iteration": 5,
+        "example_bytes": 9022840
+      },
+      "limitations": [
+        "No filesystem/OS page caches are cleared: first process is not disk-cold startup.",
+        "Help includes process creation and GNU time wrapper overhead, not interactive startup.",
+        "Idle RSS samples the current-thread offline runtime, not the TUI.",
+        "Smoke uses a scripted provider; it measures no real model latency or task success rate.",
+        "No allocator or message-clone instrumentation is performed; transcript bytes are serialized size only."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "revision": "c875766e4ff3b14c95afdcde80a38467fd533895",
+      "worktree_dirty": true,
+      "source_sha256": "03b59462977acc963a55994f3162bc289ff8f741e143442345ad216992b078df",
+      "platform": "Linux-6.8.0-101-generic-x86_64-with-glibc2.35",
+      "machine": "x86_64",
+      "logical_cpus": 16,
+      "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+      "cargo": "cargo 1.92.0 (344c4567c 2025-10-21)",
+      "build": {
+        "mode": "existing-target",
+        "seconds": 0.19511067867279053
+      },
+      "binaries": {
+        "aicoder": {
+          "bytes": 15885040,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 5.081378854811192,
+            "peak_rss_kib": 7936
+          },
+          "warm_process_help_median_ms": 4.274015314877033,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 4.251222126185894,
+              "peak_rss_kib": 7936
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.314137622714043,
+              "peak_rss_kib": 7552
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.274015314877033,
+              "peak_rss_kib": 7936
+            }
+          ]
+        },
+        "aicoder-tui": {
+          "bytes": 15146384,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 4.1993362829089165,
+            "peak_rss_kib": 6912
+          },
+          "warm_process_help_median_ms": 3.896825946867466,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 3.958730958402157,
+              "peak_rss_kib": 7296
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.896825946867466,
+              "peak_rss_kib": 7040
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.8498584181070328,
+              "peak_rss_kib": 7040
+            }
+          ]
+        },
+        "aicoder-swebench": {
+          "bytes": 14176016,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 3.995819017291069,
+            "peak_rss_kib": 7040
+          },
+          "warm_process_help_median_ms": 3.8579441606998444,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 3.7353672087192535,
+              "peak_rss_kib": 7168
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.9448151364922523,
+              "peak_rss_kib": 7168
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.8579441606998444,
+              "peak_rss_kib": 7040
+            }
+          ]
+        }
+      },
+      "runtime": {
+        "wall_ms_including_time_wrapper": 397.5579338148236,
+        "peak_rss_kib": 7424,
+        "idle_runtime_rss_kib": 4040,
+        "iterations": 25,
+        "cases_per_iteration": 5,
+        "example_bytes": 9022840
+      },
+      "limitations": [
+        "No filesystem/OS page caches are cleared: first process is not disk-cold startup.",
+        "Help includes process creation and GNU time wrapper overhead, not interactive startup.",
+        "Idle RSS samples the current-thread offline runtime, not the TUI.",
+        "Smoke uses a scripted provider; it measures no real model latency or task success rate.",
+        "No allocator or message-clone instrumentation is performed; transcript bytes are serialized size only."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "revision": "c875766e4ff3b14c95afdcde80a38467fd533895",
+      "worktree_dirty": true,
+      "source_sha256": "03b59462977acc963a55994f3162bc289ff8f741e143442345ad216992b078df",
+      "platform": "Linux-6.8.0-101-generic-x86_64-with-glibc2.35",
+      "machine": "x86_64",
+      "logical_cpus": 16,
+      "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+      "cargo": "cargo 1.92.0 (344c4567c 2025-10-21)",
+      "build": {
+        "mode": "existing-target",
+        "seconds": 0.1906089261174202
+      },
+      "binaries": {
+        "aicoder": {
+          "bytes": 15885040,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 5.0305454060435295,
+            "peak_rss_kib": 7808
+          },
+          "warm_process_help_median_ms": 4.167717881500721,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 4.110401496291161,
+              "peak_rss_kib": 7936
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.256552085280418,
+              "peak_rss_kib": 7808
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.167717881500721,
+              "peak_rss_kib": 7936
+            }
+          ]
+        },
+        "aicoder-tui": {
+          "bytes": 15146384,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 3.882668912410736,
+            "peak_rss_kib": 7040
+          },
+          "warm_process_help_median_ms": 3.712143748998642,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 3.712143748998642,
+              "peak_rss_kib": 7040
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.911113366484642,
+              "peak_rss_kib": 6656
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.6817174404859543,
+              "peak_rss_kib": 7168
+            }
+          ]
+        },
+        "aicoder-swebench": {
+          "bytes": 14176016,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 4.261241294443607,
+            "peak_rss_kib": 7296
+          },
+          "warm_process_help_median_ms": 3.9774253964424133,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 3.89866903424263,
+              "peak_rss_kib": 7296
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.9774253964424133,
+              "peak_rss_kib": 6912
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.033409059047699,
+              "peak_rss_kib": 7168
+            }
+          ]
+        }
+      },
+      "runtime": {
+        "wall_ms_including_time_wrapper": 390.8377392217517,
+        "peak_rss_kib": 7552,
+        "idle_runtime_rss_kib": 4116,
+        "iterations": 25,
+        "cases_per_iteration": 5,
+        "example_bytes": 9022840
+      },
+      "limitations": [
+        "No filesystem/OS page caches are cleared: first process is not disk-cold startup.",
+        "Help includes process creation and GNU time wrapper overhead, not interactive startup.",
+        "Idle RSS samples the current-thread offline runtime, not the TUI.",
+        "Smoke uses a scripted provider; it measures no real model latency or task success rate.",
+        "No allocator or message-clone instrumentation is performed; transcript bytes are serialized size only."
+      ]
+    }
+  ],
+  "export_case": {
+    "binary_bytes": 3764032,
+    "samples": [
+      {
+        "wall_ms_including_time_wrapper": 50.45635346323252,
+        "peak_rss_kib": 4224,
+        "entries": 6,
+        "json_bytes": 2261,
+        "html_bytes": 7229,
+        "publication_bytes": 7229
+      },
+      {
+        "wall_ms_including_time_wrapper": 23.548555560410023,
+        "peak_rss_kib": 4352,
+        "entries": 6,
+        "json_bytes": 2261,
+        "html_bytes": 7229,
+        "publication_bytes": 7229
+      },
+      {
+        "wall_ms_including_time_wrapper": 21.69040124863386,
+        "peak_rss_kib": 4096,
+        "entries": 6,
+        "json_bytes": 2261,
+        "html_bytes": 7229,
+        "publication_bytes": 7229
+      }
+    ],
+    "configuration": "Current-thread offline Rust example: six canonical records across two branches; JSON and HTML preparation; two new private files; one explicit directory publication; no model/provider/credential/network.",
+    "limitations": "Small scripted filesystem case only; includes process/GNU time wrapper and temp-directory/sync costs; no cold cache, large-archive throughput, browser memory or real coding success measurement."
+  }
+}

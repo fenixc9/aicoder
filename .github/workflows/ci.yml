@@ -67,6 +67,8 @@ jobs:
           cargo run --locked -p aicoder-runtime --features tokenizer-tiktoken --example offline_context_policy -- cl100k_base
       - name: Bounded archive continuation
         run: cargo run --locked -p aicoder-runtime --example offline_archive
+      - name: Canonical exports and explicit local publication
+        run: cargo run --locked -p aicoder-runtime --example offline_exports
       - name: Build optional Web and SDK parity entry
         run: cargo build --locked -p aicoder-cli -p aicoder-web --features server --bins --examples
       - name: SDK, CLI JSON, RPC and Web consistency
@@ -92,3 +94,5 @@ jobs:
         run: '"$RUNNER_TEMP/aicoder-schema/bin/python" scripts/check_event_schema.py'
       - name: Validate published RPC fixture
         run: '"$RUNNER_TEMP/aicoder-schema/bin/python" scripts/check_rpc_schema.py'
+      - name: Validate canonical export fixture
+        run: '"$RUNNER_TEMP/aicoder-schema/bin/python" scripts/check_export_schema.py'

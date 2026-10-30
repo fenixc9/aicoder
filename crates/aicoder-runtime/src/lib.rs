@@ -2,6 +2,7 @@
 pub mod artifacts;
 mod config;
 mod environment;
+pub mod exports;
 mod files;
 pub mod resources;
 pub mod session;
