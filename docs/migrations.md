@@ -511,3 +511,17 @@ literals need archived_raw_messages (zero), and CompactionRequest includes archi
 Old JSON reads default zero and omits zeros, so event envelopes remain v1/JSONL v3.
 Summary provenance distinguishes a materialized projection from all replaced raw records.
 See [load limits, legacy behavior and IO tradeoffs](archive-windows.md).
+
+## S5 CLI execution modes
+
+Existing -p/--prompt remains the explicit prompt option; --print is final-text mode.
+An optional positional prompt, bounded --stdin/automatic piped input, --json event-v1
+output and --repl are now supported. Empty piped one-shot input errors instead of sending
+the terminal-only default prompt. Metadata subcommands keep their own formats and reject
+execution-mode flags. Tracing now writes to stderr. No event or JSONL version changes.
+
+Piped prompt/REPL and machine/text-only modes do not consume payload lines as approvals;
+noninteractive mutations require explicit --yes. Legacy explicit-prompt streaming stdin
+approvals remain. Readers expire with their question receiver. Ctrl-C awaits cancellation/
+persistence and exits 130 for one-shot runs. REPL uses core disk/memory sessions and resets
+the context between turns. See [mode and compatibility details](cli-execution.md).

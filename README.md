@@ -37,8 +37,8 @@ bench traces. S0–S3 are complete on the verified Linux platform. Runtime provi
 [shared settings](docs/runtime-configuration.md), [project resources](docs/project-resources.md),
 [concrete tools/storage](docs/runtime-backends.md), [bounded read/search](docs/file-tools.md),
 [checked edits and diffs](docs/file-mutations.md), [shell supervision](docs/shell-tools.md)
-and [session tool grants](docs/approvals.md). Current work advances to S4 long-context
-management; [branch model-context projections](docs/model-context.md) now keep recovery
+and [session tool grants](docs/approvals.md). S4 long-context management is complete;
+current work advances to S5 frontends. [Branch model-context projections](docs/model-context.md) keep recovery
 views separate from recorded history. See the settings guide for the explicit `--env-file` migration and
 [S3 acceptance](docs/s3-approvals-acceptance.md) for verification and cumulative costs.
 
@@ -63,6 +63,21 @@ returns a downcastable `TurnCancelled` error.
 
 Runtime prerequisites are Git, Bash, and ripgrep (`rg`). The SWE-bench grading
 subcommand additionally requires the official Python package and Docker.
+
+## CLI
+
+With a provider configured through the [shared settings](docs/runtime-configuration.md):
+
+~~~bash
+cargo run --locked -p aicoder-cli -- --print 'inspect the project'
+printf 'explain this project\n' | cargo run --locked -p aicoder-cli -- --json
+cargo run --locked -p aicoder-cli -- --repl
+~~~
+
+`-p` remains `--prompt`; use `--print` for final text or `--json` for event-v1 JSONL.
+REPL reuses core sessions; `--no-session` retains history in memory. Piped input is
+prompt data and cannot approve tools. Ctrl-C cancels and awaits the active turn.
+See [CLI modes](docs/cli-execution.md) for input bounds, approvals and exit behavior.
 
 ## TUI
 

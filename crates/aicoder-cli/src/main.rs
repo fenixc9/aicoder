@@ -24,7 +24,9 @@ use aicoder_runtime::{
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+mod execution;
+mod input;
 
 #[derive(Debug, Parser)]
 #[command(name = "aicoder", about = "A small tool-using coding agent")]
@@ -33,6 +35,21 @@ struct Cli {
     #[arg(short, long, default_value = "你是谁")]
     prompt: String,
 
+    /// Prompt as one quoted positional argument.
+    #[arg(index = 1, conflicts_with = "prompt")]
+    input: Option<String>,
+    /// Read the prompt from stdin, bounded to 1 MiB.
+    #[arg(long,conflicts_with_all=["input","prompt","repl"])]
+    stdin: bool,
+    /// Emit only the final assistant text on stdout.
+    #[arg(long = "print", conflicts_with = "json")]
+    print: bool,
+    /// Emit complete event-v1 JSONL on stdout; diagnostics stay on stderr.
+    #[arg(long)]
+    json: bool,
+    /// Read sequential conversation turns; --no-session uses an in-memory session.
+    #[arg(long, conflicts_with = "stdin")]
+    repl: bool,
     /// Automatically approve mutating tools and commands.
     #[arg(long)]
     yes: bool,
@@ -206,17 +223,26 @@ enum Command {
 
 struct ConsoleEvents;
 
-struct ConsoleApproval;
+struct ConsoleApproval {
+    terminal: bool,
+}
 
 #[async_trait]
 impl ApprovalHandler for ConsoleApproval {
     async fn decide(&self, request: &ApprovalRequest<'_>) -> Result<ApprovalDecision> {
+        if self.terminal && !std::io::IsTerminal::is_terminal(&io::stdin()) {
+            return Ok(ApprovalDecision::Deny);
+        }
         let invocation = request.invocation.clone();
         let session = request.session.clone();
         let (sent, received) = tokio::sync::oneshot::channel();
+        let terminal = self.terminal;
         std::thread::Builder::new()
             .name("aicoder-approval".into())
             .spawn(move || {
+                if sent.is_closed() {
+                    return;
+                }
                 let result = (|| -> Result<ApprovalDecision> {
                     if let Some(preview) = &invocation.preview {
                         eprintln!(
@@ -242,8 +268,9 @@ impl ApprovalHandler for ConsoleApproval {
                     }
                     io::stderr().flush()?;
 
-                    let mut input = String::new();
-                    io::stdin().read_line(&mut input)?;
+                    let Some(input) = input::approval_line(terminal, &sent)? else {
+                        return Ok(ApprovalDecision::Deny);
+                    };
                     Ok(match input.trim().to_ascii_lowercase().as_str() {
                         "y" | "yes" => ApprovalDecision::AllowOnce,
                         "s" if session.is_some() => ApprovalDecision::AllowSession,
@@ -524,12 +551,34 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> std::process::ExitCode {
+    match application().await {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error:#}");
+            if error.downcast_ref::<input::Interrupted>().is_some() {
+                std::process::ExitCode::from(130)
+            } else {
+                std::process::ExitCode::FAILURE
+            }
+        }
+    }
+}
+async fn application() -> Result<()> {
     tracing_subscriber::fmt()
         .with_target(false)
         .with_level(true)
+        .with_writer(io::stderr)
         .init();
-    let cli = Cli::parse();
+    let matches = Cli::command().get_matches();
+    let explicit_prompt =
+        matches.value_source("prompt") == Some(clap::parser::ValueSource::CommandLine);
+    let cli = Cli::from_arg_matches(&matches)?;
+    anyhow::ensure!(
+        cli.command.is_none()
+            || !(cli.repl || cli.stdin || cli.print || cli.json || cli.input.is_some()),
+        "execution input/output flags cannot be combined with metadata commands"
+    );
 
     let runtime = Runtime::load_with_environment(
         &cli.workspace,
@@ -644,24 +693,32 @@ async fn main() -> Result<()> {
                 .build()?,
             runtime.agent_config(),
         );
-        let report = agent
-            .switch_session_model(
-                &repository,
-                id,
-                model,
-                aicoder_core::TurnExecutionContext::new(),
-            )
-            .await?;
+        let context = aicoder_core::TurnExecutionContext::new();
+        let result = execution::cancellable(
+            context.clone(),
+            agent.switch_session_model(&repository, id, model, context.clone()),
+        )
+        .await?;
+        if context.is_cancelled() {
+            return Err(input::Interrupted.into());
+        }
+        let report = result?;
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
     if let Some(Command::CompactSession { id }) = &cli.command {
         let repository = runtime.sessions()?;
         let agent = runtime.summary_agent(Arc::new(runtime.session_client()?))?;
-        let report = agent
-            .compact_session(&repository, id, aicoder_core::TurnExecutionContext::new())
-            .await;
+        let context = aicoder_core::TurnExecutionContext::new();
+        let report = execution::cancellable(
+            context.clone(),
+            agent.compact_session(&repository, id, context.clone()),
+        )
+        .await?;
         println!("{}", serde_json::to_string_pretty(&report)?);
+        if context.is_cancelled() {
+            return Err(input::Interrupted.into());
+        }
         if !report.succeeded() {
             anyhow::bail!(
                 "Manual compaction did not commit a summary; inspect the report before retrying"
@@ -675,97 +732,7 @@ async fn main() -> Result<()> {
             return Ok(());
         }
     }
-    let repository = if cli.no_session {
-        None
-    } else {
-        Some(runtime.sessions()?)
-    };
-    let builder = runtime.executor_builder(Arc::new(runtime.session_client()?))?;
-    let executor = if cli.yes {
-        builder.approval(AllowAllApproval).build()?
-    } else {
-        builder.approval(ConsoleApproval).build()?
-    };
-    let agent = Agent::new(executor, runtime.agent_config());
-    let agent = if cli.model.is_none() && cli.profile.is_none() {
-        agent.following_session_models()
-    } else {
-        agent
-    };
-    let prompt = runtime.prepare_prompt(&cli.prompt)?.text;
-    let handler = Arc::new(ConsoleEvents);
-    let outcome = match &repository {
-        None => {
-            agent
-                .run_outcome(prompt, handler, aicoder_core::TurnExecutionContext::new())
-                .await
-        }
-        Some(repository) => {
-            let selection = if cli.continue_session {
-                SessionSelection::ContinueMostRecent
-            } else if let Some(id) = cli.session {
-                SessionSelection::Existing(id)
-            } else {
-                SessionSelection::New
-            };
-            agent
-                .run_with_session_outcome(
-                    repository,
-                    selection,
-                    prompt,
-                    handler,
-                    aicoder_core::TurnExecutionContext::new()
-                        .with_approval_sessions(ApprovalSessions::default()),
-                )
-                .await
-        }
-    };
-    if let Some(session) = outcome.session() {
-        eprintln!("Session: {}", session.id);
-    }
-    let progress = outcome.progress();
-    if progress.event_delivery.has_failures() {
-        eprintln!(
-            "Live event delivery was incomplete: {}",
-            serde_json::to_string(&progress.event_delivery)?
-        );
-    }
-    if let Some(info) = &progress.model_context
-        && let Some(count) = &info.last_input_count
-    {
-        eprintln!(
-            "[Context] input={} {:?}, {}{}",
-            count.tokens,
-            count.accuracy,
-            count.method,
-            count
-                .fallback
-                .map_or(String::new(), |reason| format!(", fallback={reason:?}"))
-        );
-    }
-    let count = |value: Option<u64>| {
-        value
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "unknown".into())
-    };
-    println!(
-        "Tokens: input={}, output={}, total={}",
-        count(progress.usage.input_tokens),
-        count(progress.usage.output_tokens),
-        count(progress.usage.total_tokens)
-    );
-    if let Some(limit) = cli.token_budget {
-        println!(
-            "Token budget: {}/{limit}{}",
-            progress.tokens.used,
-            if progress.tokens.estimated {
-                " (estimated)"
-            } else {
-                ""
-            }
-        );
-    }
-    outcome.into_result().map(|_| ())
+    execution::run(&cli, explicit_prompt, &runtime).await
 }
 
 #[cfg(test)]

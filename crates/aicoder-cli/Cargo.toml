@@ -16,9 +16,10 @@ aicoder-core.workspace = true
 aicoder-runtime.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
+libc = "0.2"
 clap.workspace = true
 serde_json.workspace = true
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 tracing-subscriber.workspace = true
 
 [dev-dependencies]

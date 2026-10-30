@@ -212,7 +212,8 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 
 ### S5：四种入口与 Web 接入示例
 
-- [ ] CLI：stdin/参数输入、单次 print、JSON 事件、REPL、统一配置和 Ctrl-C。
+- [x] CLI：stdin/参数输入、单次 print、JSON 事件、REPL、统一配置和 Ctrl-C。
+  见 [CLI 契约](cli-execution.md) 与 [验收记录](s5-cli-acceptance.md)。
 - [ ] TUI：多行/历史、文件引用、命令面板、模型切换与思考级别、分支、审批 diff、steer/follow-up，
   展示 usage、上下文占用及可选成本；主题配置保持独立。
 - [ ] 图片内容通过统一消息 API 进入；TUI/CLI 明确文件限制及 provider 能力。

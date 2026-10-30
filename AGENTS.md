@@ -50,6 +50,9 @@
   only real materialized records; private metadata descriptors must never become prompts or
   canonical facts. Retain global provenance and raw archive access, and stream fingerprint
   verification without weakening conflicts, ownership or torn-batch recovery.
+- CLI payload stdin must not become authorization input. Keep machine stdout limited to
+  its declared format, report incomplete delivery, and cancel/await the execution owner
+  before exiting. Reuse core sessions for REPL history instead of rebuilding a second loop.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 
