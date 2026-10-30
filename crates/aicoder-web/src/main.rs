@@ -24,6 +24,8 @@ struct Cli {
     #[arg(long)]
     model: Option<String>,
     #[arg(long)]
+    reasoning_effort: Option<aicoder_runtime::ReasoningOverride>,
+    #[arg(long)]
     env_file: Option<PathBuf>,
 }
 #[tokio::main]
@@ -49,6 +51,13 @@ async fn main() -> Result<()> {
         RuntimeOverrides {
             settings: Settings {
                 model: Setting::from_option(cli.model),
+                options: aicoder_runtime::ModelSettings {
+                    reasoning_effort: cli
+                        .reasoning_effort
+                        .map(|v| v.setting())
+                        .unwrap_or(Setting::Inherit),
+                    ..Default::default()
+                },
                 provider_profile: Setting::from_option(cli.profile),
                 resources: ResourceSettings {
                     enabled: if cli.no_resources {

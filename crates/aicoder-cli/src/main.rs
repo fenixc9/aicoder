@@ -85,6 +85,8 @@ struct Cli {
     #[arg(long)]
     model: Option<String>,
     #[arg(long)]
+    reasoning_effort: Option<aicoder_runtime::ReasoningOverride>,
+    #[arg(long)]
     profile: Option<String>,
     #[arg(long)]
     max_output_tokens: Option<u32>,
@@ -194,6 +196,11 @@ enum Command {
     SwitchSessionModel {
         id: String,
         model: String,
+    },
+    /// Validate and record a branch reasoning choice without a model request.
+    SetSessionReasoning {
+        id: String,
+        effort: aicoder_runtime::ReasoningOverride,
     },
     /// Select an entry as the parent of the next turn; other branches remain available.
     CheckoutSession {
@@ -582,7 +589,8 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             | Command::ExportSession { .. }
             | Command::ShareSession { .. }
             | Command::ReadArtifact { .. }
-            | Command::SwitchSessionModel { .. },
+            | Command::SwitchSessionModel { .. }
+            | Command::SetSessionReasoning { .. },
         )
         | None => Ok(false),
     }
@@ -625,6 +633,10 @@ async fn application() -> Result<()> {
                 provider_profile: Setting::from_option(cli.profile.clone()),
                 model: Setting::from_option(cli.model.clone()),
                 options: ModelSettings {
+                    reasoning_effort: cli
+                        .reasoning_effort
+                        .map(|v| v.setting())
+                        .unwrap_or(Setting::Inherit),
                     max_output_tokens: Setting::from_option(cli.max_output_tokens),
                     ..Default::default()
                 },
@@ -723,6 +735,27 @@ async fn application() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&page.output)?);
         return Ok(());
     }
+    if let Some(Command::SetSessionReasoning { id, effort }) = &cli.command {
+        let repository = runtime.sessions()?;
+        let agent = Agent::new(
+            runtime
+                .executor_builder(Arc::new(runtime.session_client()?))?
+                .build()?,
+            runtime.agent_config(),
+        )
+        .following_session_models();
+        let context = aicoder_core::TurnExecutionContext::new();
+        let result = execution::cancellable(
+            context.clone(),
+            agent.switch_session_reasoning(&repository, id, effort.0, context.clone()),
+        )
+        .await?;
+        if context.is_cancelled() {
+            return Err(input::Interrupted.into());
+        }
+        println!("{}", serde_json::to_string_pretty(&result?)?);
+        return Ok(());
+    }
     if let Some(Command::SwitchSessionModel { id, model }) = &cli.command {
         let repository = runtime.sessions()?;
         let agent = Agent::new(
@@ -731,6 +764,11 @@ async fn application() -> Result<()> {
                 .build()?,
             runtime.agent_config(),
         );
+        let agent = if runtime.follows_session_reasoning() {
+            agent.following_session_reasoning()
+        } else {
+            agent
+        };
         let context = aicoder_core::TurnExecutionContext::new();
         let result = execution::cancellable(
             context.clone(),

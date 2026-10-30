@@ -4,6 +4,8 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelSelectionReport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub spec: ModelSpec,
     pub input_token_estimate: u64,
     pub output_reservation: u64,
@@ -216,6 +218,7 @@ impl TurnExecutor {
             anyhow::bail!("context policy rejected model selection: {code}");
         }
         Ok(ModelSelectionReport {
+            reasoning_effort: request.options.reasoning_effort,
             context_limit: spec.context_tokens,
             spec,
             input_token_estimate: estimate,

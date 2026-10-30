@@ -396,6 +396,33 @@ impl Session {
                     }
                 }
                 SessionEntryData::Extension { namespace, data } => {
+                    if namespace == super::REASONING_NAMESPACE {
+                        let choice: super::ReasoningSelection =
+                            serde_json::from_value(data.clone())?;
+                        choice.validate()?;
+                        let mut parent = entry.parent_id.as_deref();
+                        let mut model = None;
+                        while let Some(id) = parent {
+                            let ancestor = self
+                                .entry(id)
+                                .or_else(|| new_entries.get(id).copied())
+                                .expect("validated parent");
+                            if let SessionEntryData::ModelChanged {
+                                provider,
+                                model: identity,
+                            } = &ancestor.data
+                            {
+                                model = Some((provider.as_str(), identity.as_str()));
+                                break;
+                            }
+                            parent = ancestor.parent_id.as_deref();
+                        }
+                        ensure!(
+                            model == Some((choice.provider.as_str(), choice.model.as_str())),
+                            "reasoning selection requires its model epoch"
+                        );
+                    }
+
                     ensure!(
                         !namespace.is_empty(),
                         "extension namespace must not be empty"

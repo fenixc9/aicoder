@@ -36,6 +36,8 @@ impl<T: Serialize> Serialize for Setting<T> {
 #[serde(default, deny_unknown_fields)]
 pub struct ModelSettings {
     #[serde(skip_serializing_if = "Setting::is_inherit")]
+    pub reasoning_effort: Setting<aicoder_core::model::ReasoningEffort>,
+    #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub max_output_tokens: Setting<u32>,
     #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub temperature: Setting<f32>,
@@ -138,6 +140,8 @@ pub struct Settings {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderProfile {
+    #[serde(default)]
+    pub models: Vec<aicoder_core::model::ModelSpec>,
     pub base_url: String,
     pub api_key_env: String,
     #[serde(default)]
@@ -197,5 +201,24 @@ impl Default for ConfigDiscovery {
             user_file: None,
             project_file: None,
         }
+    }
+}
+
+/// Frontend option parser: `default` clears, while `none` is an explicit model capability.
+#[derive(Debug, Clone, Copy)]
+pub struct ReasoningOverride(pub Option<aicoder_core::model::ReasoningEffort>);
+impl std::str::FromStr for ReasoningOverride {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s == "default" {
+            Ok(Self(None))
+        } else {
+            s.parse().map(|effort| Self(Some(effort)))
+        }
+    }
+}
+impl ReasoningOverride {
+    pub fn setting(self) -> Setting<aicoder_core::model::ReasoningEffort> {
+        self.0.map_or(Setting::Clear, Setting::Value)
     }
 }

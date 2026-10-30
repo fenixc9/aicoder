@@ -36,6 +36,8 @@ struct Cli {
 
     #[arg(long)]
     model: Option<String>,
+    #[arg(long)]
+    reasoning_effort: Option<aicoder_runtime::ReasoningOverride>,
 
     #[arg(long, value_name = "TOKENS")]
     context_window: Option<usize>,
@@ -95,6 +97,13 @@ async fn main() -> Result<()> {
             settings: Settings {
                 provider_profile: Setting::from_option(cli.profile.clone()),
                 model: Setting::from_option(cli.model.clone()),
+                options: aicoder_runtime::ModelSettings {
+                    reasoning_effort: cli
+                        .reasoning_effort
+                        .map(|v| v.setting())
+                        .unwrap_or(Setting::Inherit),
+                    ..Default::default()
+                },
                 resources: ResourceSettings {
                     enabled: if cli.no_resources {
                         Setting::Value(false)
@@ -139,12 +148,19 @@ async fn main() -> Result<()> {
     }
     init_logging(application.state_root()?)?;
     let model = application.config().provider.model.clone();
+    let initial_reasoning = application.config().options.reasoning_effort;
     let runtime = AgentRuntime::new(application)?;
     let mut app = App::new(runtime.sessions()?);
+    app.reasoning_effort = initial_reasoning;
     if let Some(session_id) = cli.session {
         if cli.model.is_some() || cli.profile.is_some() {
             runtime
                 .select_model(&session_id, &model, runtime.execution_context())
+                .await?;
+        }
+        if let Some(choice) = cli.reasoning_effort {
+            runtime
+                .select_reasoning(&session_id, choice.0, runtime.execution_context())
                 .await?;
         }
         let session = runtime.open_run_session(&session_id)?;
@@ -169,11 +185,26 @@ async fn run(
     mut runtime: AgentRuntime,
     model: &str,
 ) -> Result<()> {
+    let result = drive(terminal, &mut app, &mut runtime, model).await;
+    if app.is_running() {
+        app.cancel("TUI exited");
+    }
+    while let Some(run) = &mut app.run {
+        let event = run.recv().await;
+        app.apply(event);
+    }
+    result
+}
+async fn drive(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut App,
+    runtime: &mut AgentRuntime,
+    model: &str,
+) -> Result<()> {
     let mut terminal_events = EventStream::new();
     let mut tick = tokio::time::interval(Duration::from_millis(100));
     loop {
-        terminal
-            .draw(|frame| ui::draw(frame, &app, app.model_label.as_deref().unwrap_or(model)))?;
+        terminal.draw(|frame| ui::draw(frame, app, app.model_label.as_deref().unwrap_or(model)))?;
         if app.should_quit {
             break;
         }
@@ -207,16 +238,13 @@ async fn run(
             }
             Action::Terminal(event) => match event {
                 Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press => {
-                    handle_key(&mut app, &mut runtime, key)?
+                    handle_key(app, runtime, key)?
                 }
                 Some(Ok(_)) => {}
                 Some(Err(error)) => return Err(error).context("Failed to read terminal event"),
                 None => break,
             },
         }
-    }
-    if app.is_running() {
-        app.cancel("TUI exited");
     }
     Ok(())
 }
@@ -342,6 +370,42 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                 return;
             }
             match commands::parse(&prompt) {
+                Some(Ok(commands::SlashCommand::Thinking)) => {
+                    if app.is_running() {
+                        app.input.replace(prompt);
+                        app.timeline.push(TimelineItem::Notice(
+                            "Finish or cancel the operation before changing reasoning.".into(),
+                        ));
+                        return;
+                    }
+                    let args = commands::arguments(&prompt);
+                    if args.is_empty() {
+                        match runtime
+                            .reasoning_summary(&app.session_selection, app.pending_reasoning)
+                        {
+                            Ok(text) => app.timeline.push(TimelineItem::Notice(text)),
+                            Err(error) => app.timeline.push(TimelineItem::Error(error.to_string())),
+                        };
+                        return;
+                    }
+                    let choice = match args.parse::<aicoder_runtime::ReasoningOverride>() {
+                        Ok(v) => v,
+                        Err(error) => {
+                            app.input.replace(prompt);
+                            app.timeline.push(TimelineItem::Error(error));
+                            return;
+                        }
+                    };
+                    let context = runtime.execution_context();
+                    app.run = Some(runtime.start_reasoning_selection(
+                        app.session_selection.clone(),
+                        choice.0,
+                        context.clone(),
+                    ));
+                    app.begin_reasoning_selection(context);
+                    return;
+                }
+
                 Some(Ok(commands::SlashCommand::Exit)) => {
                     handle_slash_command(app, &prompt);
                     return;
@@ -519,8 +583,9 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                 },
             )
             .expect("default TUI run controls");
-            match runtime.start_turn(selection, prompt.clone(), control) {
+            match runtime.start_turn(selection, prompt.clone(), app.pending_reasoning, control) {
                 Ok(run) => {
+                    app.pending_reasoning = None;
                     app.begin_turn(prompt, context);
                     app.active_handle = Some(handle);
                     app.run = Some(run);
@@ -578,7 +643,8 @@ fn handle_slash_command(app: &mut App, input: &str) -> bool {
             | commands::SlashCommand::Checkout
             | commands::SlashCommand::Branch
             | commands::SlashCommand::Recover
-            | commands::SlashCommand::Model,
+            | commands::SlashCommand::Model
+            | commands::SlashCommand::Thinking,
         ) => {}
         Err(error) => {
             app.timeline.push(TimelineItem::Error(error.to_string()));

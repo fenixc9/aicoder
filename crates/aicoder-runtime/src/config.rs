@@ -34,6 +34,7 @@ pub struct RuntimeConfig {
     /// Environment reference names only, including unselected trusted profiles.
     pub credential_references: Vec<String>,
     pub options: ModelOptions,
+    pub models: Vec<aicoder_core::model::ModelSpec>,
     pub system_prompt: Option<String>,
     pub execution: ResolvedExecution,
     pub context: ResolvedContext,
@@ -463,6 +464,15 @@ pub(crate) fn resolve(
             .insert("provider.api_key_env".into(), env.source(variable));
     }
     let options = ModelOptions {
+        reasoning_effort: optional(
+            pick!("options.reasoning_effort", options.reasoning_effort, || {
+                env_setting::<aicoder_core::model::ReasoningEffort>(
+                    env.as_ref(),
+                    "AICODER_REASONING_EFFORT",
+                )
+            }),
+            None,
+        ),
         max_output_tokens: optional(
             pick!(
                 "options.max_output_tokens",
@@ -858,6 +868,36 @@ pub(crate) fn resolve(
         .collect::<Vec<_>>();
     credential_references.sort();
     credential_references.dedup();
+    let declared = overrides
+        .provider
+        .as_ref()
+        .or(selected_profile)
+        .map(|p| &p.models);
+    ensure!(
+        declared.is_none_or(|m| m.len() <= 128),
+        "trusted model metadata limit exceeded"
+    );
+    let models = declared.cloned().unwrap_or_default();
+    let mut identities = std::collections::BTreeSet::new();
+    for spec in &models {
+        spec.validate()?;
+        ensure!(
+            spec.provider == provider.provider_id,
+            "model metadata belongs to another provider route"
+        );
+        ensure!(
+            identities.insert(spec.id.clone()),
+            "duplicate model metadata identity"
+        );
+    }
+    selector.sources.insert(
+        "provider.models".into(),
+        if overrides.provider.is_some() {
+            ConfigSource::Explicit
+        } else {
+            profile_source.clone()
+        },
+    );
     Ok(RuntimeConfig {
         version: SETTINGS_VERSION,
         workspace,
@@ -867,6 +907,7 @@ pub(crate) fn resolve(
         provider_profile: profile_name,
         credential_references,
         options,
+        models,
         system_prompt,
         execution,
         context,

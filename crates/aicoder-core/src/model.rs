@@ -131,9 +131,59 @@ pub enum ResponseFormat {
     },
 }
 
+/// Requested reasoning effort. Absence of this option is distinct from explicit `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningEffort {
+    None,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+impl ReasoningEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Minimal => "minimal",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
+        }
+    }
+}
+impl std::str::FromStr for ReasoningEffort {
+    type Err = String;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "minimal" => Ok(Self::Minimal),
+            "low" => Ok(Self::Low),
+            "medium" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            "xhigh" => Ok(Self::XHigh),
+            "max" => Ok(Self::Max),
+            _ => Err(
+                "reasoning effort must be none, minimal, low, medium, high, xhigh or max".into(),
+            ),
+        }
+    }
+}
+impl fmt::Display for ReasoningEffort {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub max_output_tokens: Option<u32>,
@@ -187,6 +237,11 @@ impl ModelRequest {
             return Err(invalid("messages must not be empty"));
         }
         let caps = &spec.capabilities;
+        if let Some(effort) = self.options.reasoning_effort
+            && !caps.reasoning_efforts.contains(&effort)
+        {
+            return Err(unsupported(&format!("reasoning effort {effort}")));
+        }
         for (requested, supported, name) in [
             (
                 !self.tools.is_empty()
@@ -459,6 +514,8 @@ pub fn emit_response(response: &ModelResponse, sink: &dyn ModelEventSink) {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelCapabilities {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub reasoning_efforts: Vec<ReasoningEffort>,
     pub tools: bool,
     pub images: bool,
     pub reasoning_history: bool,
@@ -507,6 +564,16 @@ impl ModelSpec {
         };
         if self.provider.is_empty() || self.id.is_empty() {
             return Err(invalid("model identity must be nonempty"));
+        }
+        if self.capabilities.reasoning_efforts.len() > 7
+            || self
+                .capabilities
+                .reasoning_efforts
+                .iter()
+                .enumerate()
+                .any(|(i, value)| self.capabilities.reasoning_efforts[..i].contains(value))
+        {
+            return Err(invalid("reasoning efforts must be unique and bounded"));
         }
         if self.context_tokens == Some(0) || self.max_output_tokens == Some(0) {
             return Err(invalid("model token limits must be positive"));

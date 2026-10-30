@@ -1,5 +1,9 @@
 # Provider-neutral model API (S1)
 
+[Reasoning controls](reasoning-controls.md) add a typed requested effort and explicit model
+declarations. Service default, disabled reasoning, visible reasoning history and billed work
+are separate concepts; branch choices use validated metadata rather than prompt text.
+
 `aicoder_core::model` defines model-facing data independently of HTTP, SSE,
 terminal UI, and any provider's request format. `ChatClient` implements its
 `ModelProvider` trait in `aicoder-providers`.

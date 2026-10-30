@@ -269,8 +269,10 @@ fn draw_status(frame: &mut Frame<'_>, app: &App, model: &str, area: Rect) {
         .map(|started| started.elapsed())
         .unwrap_or(app.elapsed);
     let status = format!(
-        " {} | {} | round {} | {} tokens | {:.1}s | Esc cancel  Ctrl-C quit ",
+        " {} | think {} | {} | round {} | {} tokens | {:.1}s | Esc cancel  Ctrl-C quit ",
         model,
+        app.reasoning_effort
+            .map_or("default".into(), |value| value.to_string()),
         app.state.name(),
         app.round,
         app.usage

@@ -183,6 +183,11 @@ fn descriptor(entry: &SessionEntry) -> SessionEntry {
                 data: json!({}),
             }
         }
+        SessionEntryData::Extension { namespace, .. }
+            if namespace == aicoder_core::session::REASONING_NAMESPACE =>
+        {
+            entry.data.clone()
+        }
         SessionEntryData::Extension { namespace, data }
             if namespace != aicoder_core::session::NAVIGATION_NAMESPACE
                 && namespace != aicoder_core::summary::MANUAL_USAGE_NAMESPACE =>
@@ -580,7 +585,8 @@ fn materialize(index: &ArchiveIndex, limits: &SessionLoadLimits) -> Result<Sessi
         model,
         unfinished,
         index.session.selected_branch().accounting()?,
-    )?;
+    )?
+    .with_reasoning(index.session.reasoning_selection()?)?;
     window.attach_backend_state(WindowCursor {
         cursor: cursor_for(
             index.path.clone(),

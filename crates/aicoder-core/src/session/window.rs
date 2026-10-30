@@ -50,6 +50,7 @@ pub struct SessionWindow {
     context: Vec<Message>,
     source: SessionContextSource,
     model: Option<(String, String)>,
+    pub(super) reasoning: Option<ReasoningSelection>,
     unfinished: Option<String>,
     backend: Option<Arc<dyn Any + Send + Sync>>,
     run_token: Option<String>,
@@ -98,11 +99,25 @@ impl SessionWindow {
             context,
             source,
             model,
+            reasoning: None,
             unfinished,
             backend: None,
             run_token: None,
             accounting,
         })
+    }
+    /// Attach validated branch metadata when a backend materializes an archive window.
+    pub fn with_reasoning(mut self, reasoning: Option<ReasoningSelection>) -> Result<Self> {
+        if let Some(choice) = &reasoning {
+            choice.validate()?;
+            ensure!(
+                self.model.as_ref().map(|(p, m)| (p.as_str(), m.as_str()))
+                    == Some((choice.provider.as_str(), choice.model.as_str())),
+                "window reasoning belongs to another model"
+            );
+        }
+        self.reasoning = reasoning;
+        Ok(self)
     }
     pub fn metadata(&self) -> &SessionMetadata {
         &self.metadata
@@ -172,6 +187,37 @@ impl SessionWindow {
                 && metadata.revision == self.metadata.revision + 1,
             "invalid window commit identity or revision"
         );
+        let mut reasoning = self.reasoning.clone();
+        let mut epoch = self.model.clone();
+        for entry in &entries {
+            match &entry.data {
+                SessionEntryData::ModelChanged { provider, model } => {
+                    reasoning = None;
+                    epoch = Some((provider.clone(), model.clone()));
+                }
+                SessionEntryData::Extension { namespace, data }
+                    if namespace == REASONING_NAMESPACE =>
+                {
+                    let choice: ReasoningSelection = serde_json::from_value(data.clone())?;
+                    choice.validate()?;
+                    ensure!(
+                        epoch.as_ref().map(|(p, m)| (p.as_str(), m.as_str()))
+                            == Some((choice.provider.as_str(), choice.model.as_str())),
+                        "window reasoning belongs to another model"
+                    );
+                    reasoning = Some(choice);
+                }
+                _ => {}
+            }
+        }
+        ensure!(
+            reasoning.as_ref().is_none_or(|choice| model
+                .as_ref()
+                .map(|(p, m)| (p.as_str(), m.as_str()))
+                == Some((choice.provider.as_str(), choice.model.as_str()))),
+            "window reasoning belongs to another model"
+        );
+        self.reasoning = reasoning;
         self.source.recorded_messages = self.source.recorded_messages.saturating_add(
             entries
                 .iter()

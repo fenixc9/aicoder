@@ -2300,4 +2300,142 @@ mod tests {
             AgentRawEvent::ModelResponseStarted
         ));
     }
+    #[tokio::test]
+    async fn reasoning_controls_encode_exact_declared_values_and_modern_output_caps() {
+        use aicoder_core::{ModelProvider, TurnExecutionContext, model::*};
+        let response = r#"{"id":"fixture","object":"chat.completion","created":1,"model":"deepseek-chat","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+        for effort in [
+            None,
+            Some(ReasoningEffort::None),
+            Some(ReasoningEffort::Low),
+            Some(ReasoningEffort::Max),
+        ] {
+            let (url, captured) = spawn_mock_server("200 OK", "application/json", response).await;
+            let mut client = test_client(url);
+            let mut spec = ModelSpec::new("openai-compatible", "deepseek-chat");
+            spec.capabilities.reasoning_efforts = vec![
+                ReasoningEffort::None,
+                ReasoningEffort::Low,
+                ReasoningEffort::Max,
+            ];
+            client.register_model(spec).unwrap();
+            let mut request = ModelRequest::new(
+                "deepseek-chat",
+                vec![Message::text(MessageRole::User, "test")],
+            );
+            request.stream = false;
+            request.options.reasoning_effort = effort;
+            request.options.max_output_tokens = Some(128);
+            client
+                .generate(request, Arc::new(()), TurnExecutionContext::new())
+                .await
+                .unwrap();
+            let raw = captured.await.unwrap();
+            let body: serde_json::Value =
+                serde_json::from_str(raw.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            assert_eq!(body["max_completion_tokens"], 128);
+            assert!(body.get("max_tokens").is_none());
+            if let Some(effort) = effort {
+                assert_eq!(body["reasoning_effort"], effort.as_str());
+            } else {
+                assert!(body.get("reasoning_effort").is_none());
+            }
+        }
+    }
+    #[tokio::test]
+    async fn unsupported_reasoning_never_resolves_a_credential_and_profiles_do_not_coerce() {
+        use aicoder_core::{ModelProvider, TurnExecutionContext, model::*};
+        struct NeverCredential;
+        #[async_trait::async_trait]
+        impl crate::CredentialProvider for NeverCredential {
+            async fn bearer_token(&self) -> Result<crate::BearerToken, ProviderError> {
+                panic!("invalid request must not acquire credentials")
+            }
+        }
+        for compatibility in [
+            crate::CompatibilityProfile::Generic,
+            crate::CompatibilityProfile::DeepseekThinking,
+            crate::CompatibilityProfile::DeepseekChat,
+        ] {
+            let client = ChatClient::with_credentials(
+                ClientConfig {
+                    model: "fixture".into(),
+                    proxy: ProxyMode::Disabled,
+                    compatibility,
+                    ..Default::default()
+                },
+                Arc::new(NeverCredential),
+            )
+            .unwrap();
+            let mut request =
+                ModelRequest::new("fixture", vec![Message::text(MessageRole::User, "test")]);
+            request.options.reasoning_effort = Some(ReasoningEffort::Low);
+            let error = client
+                .generate(request, Arc::new(()), TurnExecutionContext::new())
+                .await
+                .unwrap_err();
+            assert_eq!(error.kind, ProviderErrorKind::Unsupported);
+        }
+        let mut client = ChatClient::new(ClientConfig {
+            api_key: "fixture-key".into(),
+            compatibility: crate::CompatibilityProfile::DeepseekThinking,
+            proxy: ProxyMode::Disabled,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut spec = ModelSpec::new("openai-compatible", "fixture");
+        spec.capabilities.reasoning_efforts = vec![ReasoningEffort::Low];
+        assert!(client.register_model(spec).is_err());
+    }
+    #[tokio::test]
+    async fn explicit_deepseek_choices_keep_the_profile_wire_contract() {
+        use aicoder_core::{ModelProvider, TurnExecutionContext, model::*};
+        let response = r#"{"id":"fixture","object":"chat.completion","created":1,"model":"deepseek-chat","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#;
+        for (compatibility, effort, mode) in [
+            (
+                crate::CompatibilityProfile::DeepseekThinking,
+                ReasoningEffort::High,
+                "enabled",
+            ),
+            (
+                crate::CompatibilityProfile::DeepseekChat,
+                ReasoningEffort::None,
+                "disabled",
+            ),
+        ] {
+            let (url, captured) = spawn_mock_server("200 OK", "application/json", response).await;
+            let client = ChatClient::new(ClientConfig {
+                base_url: url,
+                api_key: "fixture-key".into(),
+                model: "deepseek-chat".into(),
+                proxy: ProxyMode::Disabled,
+                compatibility,
+                max_retries: 0,
+                ..Default::default()
+            })
+            .unwrap();
+            let mut request = ModelRequest::new(
+                "deepseek-chat",
+                vec![Message::text(MessageRole::User, "test")],
+            );
+            request.stream = false;
+            request.options.reasoning_effort = Some(effort);
+            request.options.max_output_tokens = Some(128);
+            client
+                .generate(request, Arc::new(()), TurnExecutionContext::new())
+                .await
+                .unwrap();
+            let raw = captured.await.unwrap();
+            let body: serde_json::Value =
+                serde_json::from_str(raw.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+            assert_eq!(body["thinking"]["type"], mode);
+            assert_eq!(body["max_tokens"], 128);
+            assert!(body.get("max_completion_tokens").is_none());
+            if mode == "enabled" {
+                assert_eq!(body["reasoning_effort"], "high");
+            } else {
+                assert!(body.get("reasoning_effort").is_none());
+            }
+        }
+    }
 }

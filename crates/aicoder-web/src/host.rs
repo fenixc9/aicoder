@@ -125,8 +125,19 @@ impl WebHost {
         );
         config.budget.max_tool_calls = Some(config.budget.max_tool_calls.unwrap_or(32).min(32));
         let executor = runtime.executor_builder(provider)?.config(config).build()?;
-        let agent =
-            Arc::new(Agent::new(executor, runtime.agent_config()).following_session_models());
+        let agent = Agent::new(executor, runtime.agent_config()).following_session_models();
+        let agent = if !runtime.follows_session_reasoning()
+            && runtime.config().options.reasoning_effort.is_none()
+        {
+            agent.recording_reasoning_defaults()
+        } else {
+            agent
+        };
+        let agent = Arc::new(if runtime.follows_session_reasoning() {
+            agent.following_session_reasoning()
+        } else {
+            agent
+        });
         let repository: Arc<dyn SessionRepository> = if options.memory {
             Arc::new(MemorySessionRepository::new())
         } else {

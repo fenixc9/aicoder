@@ -334,6 +334,7 @@ impl TurnExecutor {
         let mut progress = RunProgress::new(history);
         progress.input_context = prepared_context;
         progress.model_context = Some(crate::ModelContextInfo {
+            reasoning_effort: request.options.reasoning_effort,
             source,
             initial_history_messages: progress.messages.len(),
             initial_context_messages: request.messages.len(),
@@ -1577,6 +1578,7 @@ mod tests {
         ) -> std::result::Result<crate::model::ModelSpec, crate::model::ProviderError> {
             let mut spec = crate::model::ModelSpec::new("scripted", model);
             spec.capabilities = crate::model::ModelCapabilities {
+                reasoning_efforts: Vec::new(),
                 tools: true,
                 images: true,
                 reasoning_history: true,
@@ -1632,6 +1634,7 @@ mod tests {
         ) -> std::result::Result<crate::model::ModelSpec, crate::model::ProviderError> {
             let mut spec = crate::model::ModelSpec::new("scripted", model);
             spec.capabilities = crate::model::ModelCapabilities {
+                reasoning_efforts: Vec::new(),
                 tools: true,
                 images: true,
                 reasoning_history: self.reasoning_history,

@@ -30,8 +30,9 @@ Canonical sessions support [bounded JSON/HTML exports](docs/session-exports.md),
 explicit publication adapters and no automatic third-party sharing.
 The [provider-neutral model API](docs/model-api.md) is shared by the agent
 loop, tools, sessions and frontends. Structured [run outcomes and budgets](docs/run-outcomes.md) retain progress on
-limits, failures and cancellation. [Provider profiles](docs/provider-configuration.md) configure proxy, credentials,
-timeouts and compatible-service behavior. [Tree sessions and recovery](docs/sessions.md)
+limits, failures and cancellation. [Provider profiles](docs/provider-configuration.md) configure proxy,
+credentials, timeouts and compatible-service behavior. [Reasoning controls](docs/reasoning-controls.md)
+expose declared effort levels through SDK, CLI and TUI. [Tree sessions and recovery](docs/sessions.md)
 cover branches, durable tool checkpoints, interrupted turns and backed-up v1/v2 migration.
 [RunHandle controls](docs/run-control.md) add bounded steer/follow-up queues and scoped
 asynchronous approvals over the same execution loop. [Versioned events](docs/events.md)

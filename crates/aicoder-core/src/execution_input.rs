@@ -7,6 +7,9 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ModelContextInfo {
+    /// Requested coding effort, not proof of actual/billed reasoning work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<crate::model::ReasoningEffort>,
     pub source: Option<SessionContextSource>,
     pub initial_history_messages: usize,
     pub initial_context_messages: usize,

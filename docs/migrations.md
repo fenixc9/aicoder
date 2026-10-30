@@ -574,3 +574,30 @@ than copying raw transaction framing, private backend checkpoints, provider repa
 ephemeral authority. Torn-tail completeness and unfinished turns remain explicit. Output
 artifacts are referenced, not automatically bundled. Failures after file visibility expose
 CommitFailure.visible; callers must inspect before retrying. See [the contract](session-exports.md).
+
+## S5 declared reasoning controls
+
+ModelOptions adds optional reasoning_effort, ModelCapabilities adds reasoning_efforts,
+and ModelContextInfo/ModelSelectionReport add optional requested effort. Existing JSON
+without these fields defaults correctly; absent options and empty declarations are omitted
+on serialization. Rust struct literals must add the fields or ..Default::default().
+ProviderProfile/RuntimeConfig also gain trusted models metadata; route identity must match,
+and project files cannot define profiles. Defaults do not perform model discovery.
+
+Explicit none is a declared capability; null/default omits the option. CLI/RPC/Web explicit
+configuration overrides history; TUI treats configuration as initial fallback and validates
+interactive branch changes. --reasoning-effort and set-session-reasoning expose host controls;
+/thinking can stage a validated first-turn choice without creating a session or model call.
+Generic models declaring controls use max_completion_tokens; classic empty declarations
+retain max_tokens. DeepSeek compatibility profiles retain their fixed wire contracts.
+
+Branch choices use aicoder.reasoning.v1 extensions inside existing JSONL v3. No new message
+role/event type or authority is restored. Old readers can ignore the extension; updated
+readers validate its model epoch. Event v1 gains optional requested-effort context metadata;
+strict external validators must update the published schema. Requested effort does not
+prove actual reasoning or billing. Capability/adapter checks precede user/turn writes.
+
+Agent::with_reasoning_effort shares the live executor/registry while varying parameters;
+rebuilding a registry for a preference change can invalidate ephemeral grants. TUI now
+cancels and awaits owned operations after terminal EOF/errors as well as normal exit.
+See [contract](reasoning-controls.md) and [acceptance](s5-reasoning-acceptance.md).

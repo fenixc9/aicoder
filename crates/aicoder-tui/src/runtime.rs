@@ -67,8 +67,18 @@ impl AgentRuntime {
         let repository = Arc::new(runtime.sessions()?);
         let provider: Arc<dyn aicoder_core::ModelProvider> = Arc::new(runtime.session_client()?);
         let executor = runtime.executor_builder(provider.clone())?.build()?;
-        let agent =
-            Arc::new(Agent::new(executor, runtime.agent_config()).following_session_models());
+        let agent = Agent::new(executor, runtime.agent_config())
+            .following_session_models()
+            .following_session_reasoning();
+        let agent = Arc::new(
+            if !runtime.follows_session_reasoning()
+                && runtime.config().options.reasoning_effort.is_none()
+            {
+                agent.recording_reasoning_defaults()
+            } else {
+                agent
+            },
+        );
         Ok(Self {
             agent,
             repository,
@@ -103,8 +113,18 @@ impl AgentRuntime {
     pub fn reload_resources(&mut self) -> Result<()> {
         let runtime = self.runtime.reload_resources()?;
         let executor = runtime.executor_builder(self.provider.clone())?.build()?;
-        let agent =
-            Arc::new(Agent::new(executor, runtime.agent_config()).following_session_models());
+        let agent = Agent::new(executor, runtime.agent_config())
+            .following_session_models()
+            .following_session_reasoning();
+        let agent = Arc::new(
+            if !runtime.follows_session_reasoning()
+                && runtime.config().options.reasoning_effort.is_none()
+            {
+                agent.recording_reasoning_defaults()
+            } else {
+                agent
+            },
+        );
         self.approvals.clear();
         self.agent = agent;
         self.runtime = runtime;
@@ -245,6 +265,127 @@ impl AgentRuntime {
             completion: RunCompletion::Model(received),
         }
     }
+    pub async fn select_reasoning(
+        &self,
+        id: &str,
+        effort: Option<aicoder_core::model::ReasoningEffort>,
+        context: TurnExecutionContext,
+    ) -> Result<aicoder_core::session::ModelSelectionReport> {
+        let report = self
+            .agent
+            .switch_session_reasoning(self.repository.as_ref(), id, effort, context)
+            .await?;
+        self.approvals.remove(&self.workspace, id);
+        Ok(report)
+    }
+    pub fn reasoning_summary(
+        &self,
+        selection: &SessionSelection,
+        pending: Option<Option<aicoder_core::model::ReasoningEffort>>,
+    ) -> Result<String> {
+        let session = match selection {
+            SessionSelection::Existing(id) => Some(self.open_run_session(id)?),
+            _ => None,
+        };
+        let model = session
+            .as_ref()
+            .and_then(|s| s.selected_model().map(|(_, m)| m.to_string()))
+            .unwrap_or_else(|| self.runtime.config().provider.model.clone());
+        let spec = self.provider.model_spec(&model)?;
+        let choice = session
+            .as_ref()
+            .map(|s| s.reasoning_selection())
+            .transpose()?
+            .flatten();
+        let effort = pending.unwrap_or_else(|| {
+            choice
+                .map(|c| c.effort)
+                .unwrap_or(self.runtime.config().options.reasoning_effort)
+        });
+        let supported = spec
+            .capabilities
+            .reasoning_efforts
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        Ok(format!(
+            "Reasoning: {}; declared levels: {}. Use /thinking LEVEL or /thinking default.",
+            effort.map_or("service/host default".into(), |v| v.to_string()),
+            if supported.is_empty() {
+                "no declared controls"
+            } else {
+                &supported
+            }
+        ))
+    }
+    pub fn start_reasoning_selection(
+        &self,
+        selection: SessionSelection,
+        effort: Option<aicoder_core::model::ReasoningEffort>,
+        context: TurnExecutionContext,
+    ) -> ActiveRun {
+        let agent = self.agent.clone();
+        let repository = self.repository.clone();
+        let approvals = self.approvals.clone();
+        let workspace = self.workspace.clone();
+        let config = self.runtime.agent_config();
+        let (sent, received) = oneshot::channel();
+        tokio::spawn(async move {
+            let report = async {
+                match selection {
+                    SessionSelection::Existing(id) => {
+                        let report = agent
+                            .switch_session_reasoning(
+                                repository.as_ref(),
+                                &id,
+                                effort,
+                                context.clone(),
+                            )
+                            .await?;
+                        approvals.remove(&workspace, &id);
+                        Ok(report)
+                    }
+                    _ => {
+                        let mut request = aicoder_core::model::ModelRequest::new(
+                            config.model,
+                            config
+                                .system_prompt
+                                .map(|p| {
+                                    aicoder_core::model::Message::text(
+                                        aicoder_core::model::MessageRole::System,
+                                        p,
+                                    )
+                                })
+                                .into_iter()
+                                .collect(),
+                        );
+                        request.options = config.options;
+                        request.options.reasoning_effort = effort;
+                        let input = agent
+                            .turn_executor()
+                            .prepare_input(
+                                aicoder_core::ExecutionInput::from_request(request),
+                                &context,
+                            )
+                            .await?;
+                        let report = agent.turn_executor().validate_model_selection(&input)?;
+                        if context.is_cancelled() {
+                            return Err(context.error().into());
+                        }
+                        Ok::<_, anyhow::Error>(report)
+                    }
+                }
+            }
+            .await
+            .map_err(|error| aicoder_core::redaction::sanitize_text(&error.to_string(), 2048));
+            let _ = sent.send(report);
+        });
+        ActiveRun {
+            events: None,
+            completion: RunCompletion::Model(received),
+        }
+    }
     pub fn execution_context(&self) -> TurnExecutionContext {
         TurnExecutionContext::new().with_approval_sessions(self.approvals.clone())
     }
@@ -285,10 +426,14 @@ impl AgentRuntime {
         &self,
         selection: SessionSelection,
         prompt: String,
+        reasoning: Option<Option<aicoder_core::model::ReasoningEffort>>,
         control: RunControl,
     ) -> Result<ActiveRun> {
         let events = control.subscribe(EventBufferConfig::default())?;
-        let agent = self.agent.clone();
+        let agent = reasoning.map_or_else(
+            || self.agent.clone(),
+            |effort| Arc::new(self.agent.with_reasoning_effort(effort)),
+        );
         let repository = self.repository.clone();
         let (sender, completion) = oneshot::channel();
         tokio::spawn(async move {

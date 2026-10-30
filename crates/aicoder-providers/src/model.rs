@@ -25,6 +25,19 @@ impl ChatClient {
                 "model belongs to another provider",
             ));
         }
+        if spec.capabilities.reasoning_efforts.iter().any(|effort| {
+            match self.config.compatibility {
+                crate::CompatibilityProfile::Generic => false,
+                crate::CompatibilityProfile::DeepseekThinking => *effort != ReasoningEffort::High,
+                crate::CompatibilityProfile::DeepseekChat => *effort != ReasoningEffort::None,
+            }
+        }) {
+            return Err(ProviderError::new(
+                &self.config.provider_id,
+                ProviderErrorKind::InvalidRequest,
+                "reasoning metadata conflicts with the compatibility profile",
+            ));
+        }
         self.models.register(spec)
     }
 }
@@ -57,11 +70,13 @@ impl ModelProvider for ChatClient {
             crate::CompatibilityProfile::Generic => {}
             crate::CompatibilityProfile::DeepseekThinking => {
                 spec.capabilities.reasoning_history = true;
+                spec.capabilities.reasoning_efforts = vec![ReasoningEffort::High];
                 spec.capabilities.temperature = false;
                 spec.capabilities.top_p = false;
                 spec.capabilities.seed = false;
             }
             crate::CompatibilityProfile::DeepseekChat => {
+                spec.capabilities.reasoning_efforts = vec![ReasoningEffort::None];
                 spec.capabilities.top_p = false;
                 spec.capabilities.seed = false;
             }
@@ -96,6 +111,17 @@ impl ModelProvider for ChatClient {
         {
             return Err(unsupported(
                 "DeepSeek compatibility profiles support JSON object output, not JSON Schema output",
+            ));
+        }
+        if let Some(effort) = request.options.reasoning_effort
+            && match self.config.compatibility {
+                crate::CompatibilityProfile::Generic => false,
+                crate::CompatibilityProfile::DeepseekThinking => effort != ReasoningEffort::High,
+                crate::CompatibilityProfile::DeepseekChat => effort != ReasoningEffort::None,
+            }
+        {
+            return Err(unsupported(
+                "reasoning effort conflicts with compatibility profile",
             ));
         }
         for message in &request.messages {
@@ -147,9 +173,21 @@ impl ModelProvider for ChatClient {
             }
             self.validate_request(&request)?;
             let stream = request.stream;
+            let modern_output = self.config.compatibility == crate::CompatibilityProfile::Generic
+                && !self
+                    .model_spec(&request.model)?
+                    .capabilities
+                    .reasoning_efforts
+                    .is_empty();
             let mut body = encode_request(request)?;
             match self.config.compatibility {
-                crate::CompatibilityProfile::Generic => {}
+                crate::CompatibilityProfile::Generic => {
+                    if modern_output
+                        && let Some(cap) = body.as_object_mut().unwrap().remove("max_tokens")
+                    {
+                        body["max_completion_tokens"] = cap;
+                    }
+                }
                 crate::CompatibilityProfile::DeepseekThinking => {
                     body["thinking"] = json!({"type":"enabled"});
                     body["reasoning_effort"] = json!("high");
@@ -162,6 +200,7 @@ impl ModelProvider for ChatClient {
                     }
                 }
                 crate::CompatibilityProfile::DeepseekChat => {
+                    body.as_object_mut().unwrap().remove("reasoning_effort");
                     body["thinking"] = json!({"type":"disabled"})
                 }
             }
@@ -347,6 +386,9 @@ fn encode_request(request: ModelRequest) -> Result<Value, ProviderError> {
         };
     }
     let opts = request.options;
+    if let Some(effort) = opts.reasoning_effort {
+        body["reasoning_effort"] = json!(effort);
+    }
     for (key, value) in [
         ("temperature", opts.temperature.map(|v| json!(v))),
         ("top_p", opts.top_p.map(|v| json!(v))),

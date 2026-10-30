@@ -95,21 +95,63 @@ impl AgentTurnOutcome {
 }
 pub struct Agent {
     follow_session_models: bool,
-    turn_executor: TurnExecutor,
+    follow_session_reasoning: bool,
+    persist_reasoning_default: bool,
+    turn_executor: Arc<TurnExecutor>,
     config: AgentConfig,
 }
 impl Agent {
     pub fn new(turn_executor: TurnExecutor, config: AgentConfig) -> Self {
         Self {
-            turn_executor,
+            turn_executor: Arc::new(turn_executor),
             config,
             follow_session_models: false,
+            follow_session_reasoning: false,
+            persist_reasoning_default: false,
         }
     }
     /// Honor recorded models only through this host's provider; never route credentials from history.
     pub fn following_session_models(mut self) -> Self {
         self.follow_session_models = true;
         self
+    }
+    /// Opt into branch reasoning metadata within this host-selected provider/model route.
+    pub fn following_session_reasoning(mut self) -> Self {
+        self.follow_session_reasoning = true;
+        self
+    }
+    /// Persist an explicit service-default choice, including on a fresh model epoch.
+    pub fn recording_reasoning_defaults(mut self) -> Self {
+        self.persist_reasoning_default = true;
+        self
+    }
+    /// Fork only the request preference, sharing the same live executor/tool registry.
+    /// This explicit override wins over saved reasoning and persists service default too.
+    pub fn with_reasoning_effort(&self, effort: Option<crate::model::ReasoningEffort>) -> Self {
+        let mut config = self.config.clone();
+        config.options.reasoning_effort = effort;
+        Self {
+            follow_session_models: self.follow_session_models,
+            follow_session_reasoning: false,
+            persist_reasoning_default: true,
+            turn_executor: self.turn_executor.clone(),
+            config,
+        }
+    }
+    fn apply_session_reasoning(
+        &self,
+        request: &mut ModelRequest,
+        session: &crate::session::RunSession,
+    ) -> Result<()> {
+        if self.follow_session_reasoning
+            && let Some(choice) = session.reasoning_selection()?
+        {
+            let spec = self.turn_executor.model_spec(&request.model)?;
+            if choice.provider == spec.provider && choice.model == spec.id {
+                request.options.reasoning_effort = choice.effort;
+            }
+        }
+        Ok(())
     }
     fn selected_model(&self, session: &crate::session::RunSession) -> Result<String> {
         if self.follow_session_models
@@ -131,7 +173,42 @@ impl Agent {
         model: &str,
         context: TurnExecutionContext,
     ) -> Result<crate::session::ModelSelectionReport> {
-        crate::session::navigation::name(model)?;
+        self.change_session_parameters(repository, id, Some(model), None, context)
+            .await
+    }
+    pub async fn switch_session_reasoning(
+        &self,
+        repository: &dyn SessionRepository,
+        id: &str,
+        effort: Option<crate::model::ReasoningEffort>,
+        context: TurnExecutionContext,
+    ) -> Result<crate::session::ModelSelectionReport> {
+        self.change_session_parameters(repository, id, None, Some(effort), context)
+            .await
+    }
+    /// Atomically validate and select a model and explicit effort (None means service default).
+    pub async fn switch_session_model_with_reasoning(
+        &self,
+        repository: &dyn SessionRepository,
+        id: &str,
+        model: &str,
+        effort: Option<crate::model::ReasoningEffort>,
+        context: TurnExecutionContext,
+    ) -> Result<crate::session::ModelSelectionReport> {
+        self.change_session_parameters(repository, id, Some(model), Some(effort), context)
+            .await
+    }
+    async fn change_session_parameters(
+        &self,
+        repository: &dyn SessionRepository,
+        id: &str,
+        model: Option<&str>,
+        effort: Option<Option<crate::model::ReasoningEffort>>,
+        context: TurnExecutionContext,
+    ) -> Result<crate::session::ModelSelectionReport> {
+        if let Some(model) = model {
+            crate::session::navigation::name(model)?;
+        }
         let mut session = repository.open_run(id)?;
         ensure!(
             session.metadata().cwd == self.turn_executor.workspace_root(),
@@ -140,10 +217,24 @@ impl Agent {
         let _lease = session.acquire(repository)?;
         ensure!(
             session.unfinished_turn().is_none(),
-            "recover the unfinished turn before changing its model"
+            "recover the unfinished turn before changing model parameters"
         );
         let mut request = self.completion_request(self.system_messages());
-        request.model = model.to_string();
+        request.model = if let Some(model) = model {
+            model.to_string()
+        } else {
+            self.selected_model(&session)?
+        };
+        if model.is_none()
+            || session
+                .selected_model()
+                .is_some_and(|(_, current)| current == request.model)
+        {
+            self.apply_session_reasoning(&mut request, &session)?;
+        }
+        if let Some(effort) = effort {
+            request.options.reasoning_effort = effort;
+        }
         let input = crate::ExecutionInput::from_run_session(request, &session)?;
         let input = self.turn_executor.prepare_input(input, &context).await?;
         let report = self.turn_executor.validate_model_selection(&input)?;
@@ -151,16 +242,21 @@ impl Agent {
         if context.is_cancelled() {
             return Err(context.error().into());
         }
+        let choice = reasoning_record(&session, &report, effort.is_some())?;
+        let mut entries = Vec::new();
         if session.selected_model()
             != Some((report.spec.provider.as_str(), report.spec.id.as_str()))
         {
-            session.append(
-                repository,
-                vec![SessionEntryData::ModelChanged {
-                    provider: report.spec.provider.clone(),
-                    model: report.spec.id.clone(),
-                }],
-            )?;
+            entries.push(SessionEntryData::ModelChanged {
+                provider: report.spec.provider.clone(),
+                model: report.spec.id.clone(),
+            });
+        }
+        if let Some(choice) = choice {
+            entries.push(choice);
+        }
+        if !entries.is_empty() {
+            session.append(repository, entries)?;
         }
         Ok(report)
     }
@@ -354,6 +450,7 @@ impl Agent {
             preparation_stage = RunStage::Preparing;
             let mut request = self.completion_request(initial.clone());
             request.model = requested_model;
+            self.apply_session_reasoning(&mut request, &session)?;
             let mut input = crate::ExecutionInput::from_run_session(request, &session)?;
             input.started = Some(started);
             let mut input = self.turn_executor.prepare_input(input, &context).await?;
@@ -362,6 +459,7 @@ impl Agent {
             if context.is_cancelled() {
                 return Err(context.error().into());
             }
+            let reasoning = reasoning_record(&session, &report, self.persist_reasoning_default)?;
             let mut entries = Vec::new();
             if let Some(previous) = session.unfinished_turn() {
                 entries.push(SessionEntryData::TurnEnd {
@@ -376,6 +474,9 @@ impl Agent {
                     provider: report.spec.provider,
                     model: report.spec.id,
                 });
+            }
+            if let Some(choice) = reasoning {
+                entries.push(choice);
             }
             entries.push(SessionEntryData::TurnStart {
                 turn_id: turn_id.clone(),
@@ -505,6 +606,30 @@ fn select_session(
         SessionSelection::Existing(id) => repository.open_run(&id),
     }
 }
+
+fn reasoning_record(
+    session: &crate::session::RunSession,
+    report: &crate::session::ModelSelectionReport,
+    explicit: bool,
+) -> Result<Option<SessionEntryData>> {
+    let current = session
+        .reasoning_selection()?
+        .filter(|choice| choice.provider == report.spec.provider && choice.model == report.spec.id);
+    let changed = current
+        .as_ref()
+        .map_or(report.reasoning_effort.is_some() || explicit, |choice| {
+            choice.effort != report.reasoning_effort
+        });
+    Ok(changed.then(|| {
+        crate::session::ReasoningSelection::new(
+            &report.spec.provider,
+            &report.spec.id,
+            report.reasoning_effort,
+        )
+        .data()
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use crate::TurnCancelled;
@@ -540,6 +665,7 @@ mod tests {
         ) -> std::result::Result<crate::model::ModelSpec, crate::model::ProviderError> {
             let mut spec = crate::model::ModelSpec::new("scripted", model);
             spec.capabilities = crate::model::ModelCapabilities {
+                reasoning_efforts: Vec::new(),
                 tools: true,
                 images: true,
                 reasoning_history: true,
@@ -584,6 +710,7 @@ mod tests {
         ) -> std::result::Result<crate::model::ModelSpec, crate::model::ProviderError> {
             let mut spec = crate::model::ModelSpec::new("scripted", model);
             spec.capabilities = crate::model::ModelCapabilities {
+                reasoning_efforts: Vec::new(),
                 tools: true,
                 images: true,
                 reasoning_history: true,

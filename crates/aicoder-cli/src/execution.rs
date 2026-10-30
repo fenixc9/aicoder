@@ -67,6 +67,18 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
             .build()?
     };
     let agent = Agent::new(executor, runtime.agent_config());
+    let agent = if !runtime.follows_session_reasoning()
+        && runtime.config().options.reasoning_effort.is_none()
+    {
+        agent.recording_reasoning_defaults()
+    } else {
+        agent
+    };
+    let agent = if runtime.follows_session_reasoning() {
+        agent.following_session_reasoning()
+    } else {
+        agent
+    };
     let agent = if cli.model.is_none() && cli.profile.is_none() {
         agent.following_session_models()
     } else {

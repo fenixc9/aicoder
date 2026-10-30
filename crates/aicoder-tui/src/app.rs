@@ -150,6 +150,9 @@ pub struct App {
     pub state: AgentRunState,
     pub usage: ModelUsage,
     pub model_label: Option<String>,
+    pub reasoning_effort: Option<aicoder_core::model::ReasoningEffort>,
+    pub pending_reasoning: Option<Option<aicoder_core::model::ReasoningEffort>>,
+    reasoning_operation: bool,
     pub round: usize,
     pub active_context: Option<TurnExecutionContext>,
     pub active_handle: Option<RunHandle>,
@@ -178,6 +181,9 @@ impl App {
             state: AgentRunState::Idle,
             usage: ModelUsage::zero(),
             model_label: None,
+            reasoning_effort: None,
+            pending_reasoning: None,
+            reasoning_operation: false,
             round: 0,
             active_context: None,
             active_handle: None,
@@ -252,12 +258,17 @@ impl App {
     }
 
     pub fn begin_model_selection(&mut self, context: TurnExecutionContext) {
+        self.reasoning_operation = false;
         self.active_context = Some(context);
         self.active_handle = None;
         self.started_at = Some(Instant::now());
         self.state = AgentRunState::Preparing;
         self.timeline
             .push(TimelineItem::Notice("Checking selected model...".into()));
+    }
+    pub fn begin_reasoning_selection(&mut self, context: TurnExecutionContext) {
+        self.begin_model_selection(context);
+        self.reasoning_operation = true;
     }
     pub fn begin_compaction(&mut self, context: TurnExecutionContext) {
         self.active_context = Some(context);
@@ -338,18 +349,50 @@ impl App {
             AppEvent::Agent(envelope) => self.apply_agent_event(envelope),
             AppEvent::TurnFinished(outcome) => self.finish_turn(*outcome),
             AppEvent::ModelSelected(report) => {
+                let reasoning_operation = std::mem::take(&mut self.reasoning_operation);
+                let cancelled = self
+                    .active_context
+                    .as_ref()
+                    .is_some_and(|c| c.is_cancelled());
+
                 self.run = None;
                 self.active_context = None;
                 self.active_handle = None;
                 self.started_at = None;
                 match *report {
                     Ok(report) => {
+                        if reasoning_operation
+                            && cancelled
+                            && matches!(self.session_selection, SessionSelection::New)
+                        {
+                            self.state = AgentRunState::Idle;
+                            self.timeline.push(TimelineItem::Notice(
+                                "Reasoning selection cancelled.".into(),
+                            ));
+                            return;
+                        }
+                        self.reasoning_effort = report.reasoning_effort;
+                        if reasoning_operation
+                            && matches!(self.session_selection, SessionSelection::New)
+                        {
+                            self.pending_reasoning = Some(report.reasoning_effort);
+                        }
                         self.model_label =
                             Some(format!("{}/{}", report.spec.provider, report.spec.id));
                         self.state = AgentRunState::Completed { rounds: 0 };
+                        let action = if reasoning_operation
+                            && matches!(self.session_selection, SessionSelection::New)
+                        {
+                            "Validated for next conversation"
+                        } else {
+                            "Model selected"
+                        };
                         self.timeline.push(TimelineItem::Notice(format!(
-                            "Model selected: {}; input {} tokens ({})",
+                            "{action}: {}; reasoning {}; input {} tokens ({})",
                             self.model_label.as_deref().unwrap_or_default(),
+                            report
+                                .reasoning_effort
+                                .map_or("default".into(), |v| v.to_string()),
                             report.input_token_estimate,
                             report.token_count.as_ref().map_or(
                                 "legacy estimate".into(),
@@ -413,6 +456,14 @@ impl App {
     }
 
     fn apply_agent_event(&mut self, envelope: AgentRawEventEnvelope) {
+        if let Some(info) = envelope
+            .termination
+            .as_ref()
+            .and_then(|t| t.model_context.as_ref())
+        {
+            self.reasoning_effort = info.reasoning_effort;
+        }
+
         self.round = self.round.max(envelope.round.unwrap_or(0));
         match envelope.event {
             AgentRawEvent::AgentStarted { model } => self.model_label = Some(model.to_string()),
@@ -532,6 +583,10 @@ impl App {
     }
 
     fn finish_turn(&mut self, outcome: AgentTurnOutcome) {
+        if let Some(info) = &outcome.progress().model_context {
+            self.reasoning_effort = info.reasoning_effort;
+        }
+
         if self.observation_incomplete {
             self.timeline.clear();
             self.tool_indexes.clear();
@@ -614,6 +669,13 @@ impl App {
     }
 
     pub fn load_run_session(&mut self, session: &aicoder_core::session::RunSession) {
+        self.pending_reasoning = None;
+        self.reasoning_effort = session
+            .reasoning_selection()
+            .ok()
+            .flatten()
+            .and_then(|c| c.effort);
+
         match session {
             aicoder_core::session::RunSession::Full(session) => self.load_session(session),
             aicoder_core::session::RunSession::Window(window) => {
@@ -644,6 +706,13 @@ impl App {
         }
     }
     pub fn load_session(&mut self, session: &Session) {
+        self.pending_reasoning = None;
+        self.reasoning_effort = session
+            .reasoning_selection()
+            .ok()
+            .flatten()
+            .and_then(|c| c.effort);
+
         self.model_label = session
             .selected_model()
             .map(|(provider, model)| format!("{provider}/{model}"));
@@ -703,6 +772,9 @@ impl App {
     }
 
     pub fn select_new_session(&mut self) {
+        self.pending_reasoning = None;
+        self.reasoning_effort = None;
+
         self.session_selection = SessionSelection::New;
         self.model_label = None;
         self.timeline.clear();
@@ -882,6 +954,7 @@ mod tests {
         app.apply(AppEvent::ModelSelected(Box::new(Err("unsupported".into()))));
         assert_eq!(app.model_label.as_deref(), Some("previous"));
         let report = aicoder_core::session::ModelSelectionReport {
+            reasoning_effort: None,
             spec: aicoder_core::model::ModelSpec::new("host", "selected"),
             input_token_estimate: 30,
             output_reservation: 10,
@@ -1089,7 +1162,7 @@ mod tests {
     fn slash_menu_tracks_filtering_selection_and_dismissal() {
         let mut app = App::new(Vec::new());
         app.input.insert('/');
-        assert_eq!(app.slash_suggestions().len(), 16);
+        assert_eq!(app.slash_suggestions().len(), 17);
         assert_eq!(app.selected_slash_command().unwrap().name, "exit");
 
         app.dismiss_slash_menu();
@@ -1150,5 +1223,46 @@ mod tests {
             &app.timeline[1],
             TimelineItem::Tool { status, .. } if status == "done"
         ));
+    }
+    #[test]
+    fn reasoning_previews_preserve_drafts_and_only_stage_for_the_new_conversation() {
+        use aicoder_core::model::ReasoningEffort;
+        let report = || aicoder_core::session::ModelSelectionReport {
+            reasoning_effort: Some(ReasoningEffort::Low),
+            spec: aicoder_core::model::ModelSpec::new("host", "m1"),
+            input_token_estimate: 1,
+            output_reservation: 1,
+            context_limit: None,
+            needs_compaction: false,
+            omitted_reasoning_blocks: 0,
+            token_count: None,
+            context_decision: None,
+        };
+        let mut app = App::new(vec![]);
+        app.input.replace("unsent draft".into());
+        app.begin_reasoning_selection(TurnExecutionContext::new());
+        app.apply(AppEvent::ModelSelected(Box::new(Ok(report()))));
+        assert_eq!(app.pending_reasoning, Some(Some(ReasoningEffort::Low)));
+        assert_eq!(app.input.value(), "unsent draft");
+        assert!(
+            !app.timeline
+                .iter()
+                .any(|v| matches!(v, TimelineItem::User(_)))
+        );
+        app.begin_reasoning_selection(TurnExecutionContext::new());
+        app.apply(AppEvent::ModelSelected(Box::new(Err("unsupported".into()))));
+        assert_eq!(app.pending_reasoning, Some(Some(ReasoningEffort::Low)));
+        app.select_new_session();
+        assert_eq!(app.pending_reasoning, None);
+        let context = TurnExecutionContext::new();
+        app.begin_reasoning_selection(context.clone());
+        context.cancel("cancel preview");
+        app.apply(AppEvent::ModelSelected(Box::new(Ok(report()))));
+        assert_eq!(app.pending_reasoning, None);
+        app.session_selection = SessionSelection::Existing("stored".into());
+        app.begin_reasoning_selection(TurnExecutionContext::new());
+        app.apply(AppEvent::ModelSelected(Box::new(Ok(report()))));
+        assert_eq!(app.pending_reasoning, None);
+        assert_eq!(app.reasoning_effort, Some(ReasoningEffort::Low));
     }
 }

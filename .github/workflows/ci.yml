@@ -69,6 +69,12 @@ jobs:
         run: cargo run --locked -p aicoder-runtime --example offline_archive
       - name: Canonical exports and explicit local publication
         run: cargo run --locked -p aicoder-runtime --example offline_exports
+      - name: Branch reasoning selection and codec-independent metadata
+        run: cargo run --locked -p aicoder-runtime --example offline_reasoning
+      - name: Real TUI reasoning controls and terminal-disconnect cleanup
+        run: |
+          cargo build --locked -p aicoder-tui
+          python3 scripts/check_reasoning_tui.py
       - name: Build optional Web and SDK parity entry
         run: cargo build --locked -p aicoder-cli -p aicoder-web --features server --bins --examples
       - name: SDK, CLI JSON, RPC and Web consistency

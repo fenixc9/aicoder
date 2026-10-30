@@ -18,6 +18,7 @@ pub enum SlashCommand {
     Branch,
     Recover,
     Model,
+    Thinking,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +150,13 @@ const COMMANDS: &[CommandSpec] = &[
         description: "Validate and select a model",
         arguments: ArgumentPolicy::Required,
     },
+    CommandSpec {
+        command: SlashCommand::Thinking,
+        name: "thinking",
+        usage: "/thinking [LEVEL|default]",
+        description: "Inspect or validate a reasoning choice",
+        arguments: ArgumentPolicy::Optional,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,7 +243,7 @@ mod tests {
 
     #[test]
     fn registry_exposes_metadata_for_every_command() {
-        assert_eq!(all().len(), 16);
+        assert_eq!(all().len(), 17);
         assert_eq!(all()[0].usage, "/exit");
         assert!(!all()[0].description.is_empty());
     }
@@ -263,7 +271,8 @@ mod tests {
                 "checkout",
                 "branch",
                 "recover",
-                "model"
+                "model",
+                "thinking"
             ]
         );
         assert_eq!(

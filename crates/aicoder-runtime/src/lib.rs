@@ -27,7 +27,7 @@ pub use config::{
 pub use environment::{Environment, ProcessEnvironment, environment_file};
 pub use settings::{
     ConfigDiscovery, ContextSettings, ContextStrategy, ExecutionSettings, ModelSettings,
-    ProviderProfile, RuntimeOverrides, Setting, Settings, TokenizerMode,
+    ProviderProfile, ReasoningOverride, RuntimeOverrides, Setting, Settings, TokenizerMode,
 };
 use std::{
     path::Path,
@@ -130,6 +130,13 @@ impl Runtime {
     pub fn prepare_prompt(&self, prompt: &str) -> Result<resources::PreparedPrompt> {
         self.resources()?.prepare_prompt(prompt)
     }
+    /// A configured effort or explicit clear wins over recorded branch metadata.
+    pub fn follows_session_reasoning(&self) -> bool {
+        matches!(
+            self.config.sources.get("options.reasoning_effort"),
+            Some(ConfigSource::Default)
+        )
+    }
     pub fn session_dir(&self) -> Result<&Path> {
         self.config.session_dir.as_deref().context("Session storage is disabled or has no path; set AICODER_HOME, HOME or an explicit session directory")
     }
@@ -169,7 +176,7 @@ impl Runtime {
         })
     }
     pub fn client(&self) -> Result<ChatClient> {
-        ChatClient::with_credentials(self.config.provider.clone(), self.credential_provider())
+        self.client_with_credentials(self.credential_provider())
     }
     /// Opt into model selection within this fixed host-selected protocol/credential route.
     pub fn session_client(&self) -> Result<SessionModelClient> {
@@ -179,7 +186,11 @@ impl Runtime {
         &self,
         credentials: Arc<dyn CredentialProvider>,
     ) -> Result<ChatClient> {
-        ChatClient::with_credentials(self.config.provider.clone(), credentials)
+        let mut client = ChatClient::with_credentials(self.config.provider.clone(), credentials)?;
+        for spec in &self.config.models {
+            client.register_model(spec.clone())?;
+        }
+        Ok(client)
     }
     /// Default capabilities are assembled here; callers can override tools, approval and policies.
     pub fn default_registry(&self) -> Result<ToolRegistry> {

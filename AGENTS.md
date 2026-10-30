@@ -62,6 +62,9 @@
 - Exports preserve canonical records and all branches, never provider repairs or authority.
   Validate a pinned idle source before accepting immutable output; publish only by explicit
   adapter call. Keep text inert and report post-visibility failures without automatic retries.
+- Model controls require declared capabilities and adapter validation before journal writes.
+  Keep requested effort distinct from service default, visible reasoning and billed work.
+  Bind branch choices to model epochs; request overrides must preserve live registry identity.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

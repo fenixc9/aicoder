@@ -45,6 +45,7 @@ impl ModelProvider for ScriptedProvider {
     {
         let mut spec = aicoder_core::model::ModelSpec::new("scripted", model);
         spec.capabilities = aicoder_core::model::ModelCapabilities {
+            reasoning_efforts: Vec::new(),
             tools: true,
             images: true,
             reasoning_history: true,
