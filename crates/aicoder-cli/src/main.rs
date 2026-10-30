@@ -127,6 +127,14 @@ enum Command {
         #[arg(long)]
         cursor: Option<String>,
     },
+    /// Read complete canonical archive records with bounded pages.
+    SessionArchive {
+        id: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        cursor: Option<String>,
+    },
     /// Search visible recorded text, with bounded revision-bound pages.
     SearchSession {
         id: String,
@@ -317,9 +325,7 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             let cursor = cursor.as_deref().map(serde_json::from_str).transpose()?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(
-                    &navigator.open(id)?.tree_page(*limit, cursor.as_ref())?
-                )?
+                serde_json::to_string_pretty(&navigator.tree(id, *limit, cursor.as_ref())?)?
             );
             Ok(true)
         }
@@ -334,7 +340,8 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             let cursor = cursor.as_deref().map(serde_json::from_str).transpose()?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&navigator.open(id)?.search_messages(
+                serde_json::to_string_pretty(&navigator.search(
+                    id,
                     query,
                     *limit,
                     cursor.as_ref()
@@ -342,9 +349,23 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             );
             Ok(true)
         }
+        Some(Command::SessionArchive { id, limit, cursor }) => {
+            let nav = aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?;
+            let cursor = cursor.as_deref().map(serde_json::from_str).transpose()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&nav.archive(id, *limit, cursor.as_ref())?)?
+            );
+            Ok(true)
+        }
         Some(Command::RenameSession { id, title }) => {
             let session = aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?
-                .rename(id, title)?;
+                .execute(
+                    id,
+                    aicoder_core::session::ArchiveNavigation::Rename {
+                        title: title.clone(),
+                    },
+                )?;
             println!("{}", serde_json::to_string_pretty(session.metadata())?);
             Ok(true)
         }
@@ -352,7 +373,13 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             id, entry, label, ..
         }) => {
             let session = aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?
-                .label(id, entry, label.as_deref())?;
+                .execute(
+                    id,
+                    aicoder_core::session::ArchiveNavigation::Label {
+                        entry_id: entry.clone(),
+                        label: label.clone(),
+                    },
+                )?;
             println!("{}", serde_json::to_string_pretty(session.metadata())?);
             Ok(true)
         }
@@ -365,20 +392,25 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             let navigator =
                 aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?;
             let source = if *root {
-                None
+                aicoder_core::session::BranchSource::Root
+            } else if let Some(from) = from {
+                aicoder_core::session::BranchSource::Entry(from.clone())
             } else {
-                match from {
-                    Some(entry) => Some(entry.clone()),
-                    None => navigator.open(id)?.metadata().leaf_id.clone(),
-                }
+                aicoder_core::session::BranchSource::Current
             };
-            let session = navigator.branch(id, source.as_deref(), label.as_deref())?;
+            let session = navigator.execute(
+                id,
+                aicoder_core::session::ArchiveNavigation::Branch {
+                    source,
+                    name: label.clone(),
+                },
+            )?;
             println!("{}", serde_json::to_string_pretty(session.metadata())?);
             Ok(true)
         }
         Some(Command::RecoverSession { id }) => {
             let session = aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?
-                .recover(id)?;
+                .execute(id, aicoder_core::session::ArchiveNavigation::Recover)?;
             println!("{}", serde_json::to_string_pretty(session.metadata())?);
             Ok(true)
         }
@@ -446,8 +478,12 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             Ok(true)
         }
         Some(Command::CheckoutSession { id, entry, .. }) => {
-            aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?
-                .checkout(id, entry.as_deref())?;
+            aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?.execute(
+                id,
+                aicoder_core::session::ArchiveNavigation::Checkout {
+                    target: entry.clone(),
+                },
+            )?;
             println!(
                 "Session {id}: selected {}",
                 entry.as_deref().unwrap_or("root")
@@ -470,7 +506,7 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
             Ok(true)
         }
         Some(Command::DeleteSession { id }) => {
-            aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?.open(id)?;
+            aicoder_core::session::SessionNavigator::new(repository, &cli.workspace)?.info(id)?;
             repository.delete(id)?;
             println!("已删除 session {id}");
             Ok(true)

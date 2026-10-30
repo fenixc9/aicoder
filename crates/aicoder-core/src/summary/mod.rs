@@ -70,6 +70,8 @@ pub struct SummaryDraft {
     pub tokens: TokenAccounting,
     pub attempts: usize,
     pub uncertain_operations: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub archived_raw_messages: usize,
 }
 #[derive(Clone, Copy)]
 pub struct CompactionRequest<'a> {
@@ -78,6 +80,7 @@ pub struct CompactionRequest<'a> {
     pub system_prefix_len: usize,
     pub force: bool,
     pub token_budget: Option<u64>,
+    pub archived_messages: usize,
 }
 pub struct RecordedCompaction {
     pub compaction: ContextCompaction,
@@ -173,4 +176,8 @@ pub(crate) async fn legacy(
     context: TurnExecutionContext,
 ) -> Result<RecordedCompaction> {
     tokio::select! {biased;cancelled=context.cancelled()=>Err(cancelled.into()),result=compactor.compact(request.input)=>result.map(RecordedCompaction::transient)}
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }

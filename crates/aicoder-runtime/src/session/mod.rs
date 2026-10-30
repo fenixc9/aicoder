@@ -1,5 +1,8 @@
 //! Filesystem session repositories; domain types and memory storage live in core.
+mod archive;
 mod jsonl;
+mod limits;
+pub use limits::{SessionLoadLimit, SessionLoadLimits};
 mod legacy;
 use aicoder_core::session::*;
 pub use jsonl::JsonlSessionRepository;

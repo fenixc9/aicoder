@@ -65,6 +65,8 @@ jobs:
           cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
           cargo test --locked --workspace --all-features
           cargo run --locked -p aicoder-runtime --features tokenizer-tiktoken --example offline_context_policy -- cl100k_base
+      - name: Bounded archive continuation
+        run: cargo run --locked -p aicoder-runtime --example offline_archive
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings

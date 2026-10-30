@@ -147,13 +147,13 @@ async fn main() -> Result<()> {
                 .select_model(&session_id, &model, runtime.execution_context())
                 .await?;
         }
-        let session = runtime.open_session(&session_id)?;
+        let session = runtime.open_run_session(&session_id)?;
         app.selected_session = app
             .sessions
             .iter()
             .position(|candidate| candidate.id == session_id)
             .context("Selected session is missing from the workspace session list")?;
-        app.load_session(&session);
+        app.load_run_session(&session);
     }
 
     let _guard = TerminalGuard::enter()?;
@@ -320,7 +320,7 @@ fn handle_session_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) -> R
         }
         KeyCode::Enter => {
             if let Some(session) = app.sessions.get(app.selected_session) {
-                app.load_session(&runtime.open_session(&session.id)?);
+                app.load_run_session(&runtime.open_run_session(&session.id)?);
             }
         }
         KeyCode::Char('n') => app.select_new_session(),
@@ -391,7 +391,7 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                         match runtime.navigate(&app.session_selection, command, args) {
                             Ok((session, notice)) => {
                                 if let Some(session) = session {
-                                    app.load_session(&session);
+                                    app.load_run_session(&session);
                                     app.sessions = runtime.sessions().unwrap_or_default();
                                 }
                                 app.timeline.push(TimelineItem::Notice(notice));

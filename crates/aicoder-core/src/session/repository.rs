@@ -26,6 +26,80 @@ impl Error for SessionConflict {}
 pub trait SessionRepository: Send + Sync {
     fn create(&self, cwd: &Path) -> Result<Session>;
     fn open(&self, id: &str) -> Result<Session>;
+    /// Default compatibility path. Window-capable backends override without materializing cold payloads.
+    fn open_run(&self, id: &str) -> Result<super::RunSession> {
+        self.open(id)
+            .map(|session| super::RunSession::Full(Box::new(session)))
+    }
+    fn append_window(
+        &self,
+        _window: &mut super::SessionWindow,
+        _entries: Vec<SessionEntryData>,
+    ) -> Result<()> {
+        anyhow::bail!("repository does not support window commits")
+    }
+    fn acquire_window(&self, _window: &mut super::SessionWindow) -> Result<SessionRunLease> {
+        anyhow::bail!("repository does not support window ownership")
+    }
+    fn archive_page(
+        &self,
+        id: &str,
+        limit: usize,
+        cursor: Option<&super::ArchiveCursor>,
+    ) -> Result<super::ArchivePage> {
+        anyhow::ensure!(
+            (1..=100).contains(&limit),
+            "archive page limit must be 1..100"
+        );
+        let session = self.open(id)?;
+        let offset = if let Some(cursor) = cursor {
+            anyhow::ensure!(
+                cursor.session_id == id && cursor.revision == session.metadata().revision,
+                "stale or foreign archive cursor"
+            );
+            cursor.offset
+        } else {
+            0
+        };
+        anyhow::ensure!(offset <= session.entries().len(), "invalid archive offset");
+        let end = offset.saturating_add(limit).min(session.entries().len());
+        Ok(super::ArchivePage {
+            metadata: session.metadata().clone(),
+            entries: session.entries()[offset..end].to_vec(),
+            next: (end < session.entries().len()).then(|| super::ArchiveCursor {
+                session_id: id.into(),
+                revision: session.metadata().revision,
+                offset: end,
+            }),
+        })
+    }
+    fn navigate_window(
+        &self,
+        _window: &mut super::SessionWindow,
+        _action: super::ArchiveNavigation,
+    ) -> Result<()> {
+        anyhow::bail!("repository does not support window navigation")
+    }
+    fn session_info(&self, id: &str) -> Result<SessionInfo> {
+        self.open(id).map(|session| SessionInfo::from(&session))
+    }
+    fn tree_page(
+        &self,
+        id: &str,
+        limit: usize,
+        cursor: Option<&super::TreeCursor>,
+    ) -> Result<super::TreePage> {
+        self.open(id)?.tree_page(limit, cursor)
+    }
+    fn search_page(
+        &self,
+        id: &str,
+        query: &str,
+        limit: usize,
+        cursor: Option<&super::SearchCursor>,
+    ) -> Result<super::SearchPage> {
+        self.open(id)?.search_messages(query, limit, cursor)
+    }
     fn list(&self, cwd: &Path) -> Result<Vec<SessionInfo>>;
     fn commit(&self, session: &mut Session, transaction: SessionTransaction) -> Result<()>;
     fn acquire_run(&self, session: &mut Session) -> Result<SessionRunLease>;

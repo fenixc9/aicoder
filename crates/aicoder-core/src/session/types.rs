@@ -219,6 +219,9 @@ impl Session {
     pub fn entries(&self) -> &[SessionEntry] {
         &self.entries
     }
+    pub fn entry_position(&self, id: &str) -> Option<usize> {
+        self.index.get(id).copied()
+    }
     pub fn entry(&self, id: &str) -> Option<&SessionEntry> {
         self.index.get(id).map(|index| &self.entries[*index])
     }

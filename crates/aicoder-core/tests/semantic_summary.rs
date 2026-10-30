@@ -172,6 +172,7 @@ async fn compact(
                 system_prefix_len: 1,
                 force,
                 token_budget: budget,
+                archived_messages: 0,
             },
             TurnExecutionContext::new(),
         )

@@ -489,3 +489,25 @@ Runtime adds context.tokenizer/AICODER_TOKENIZER with heuristic/auto/cl100k_base
 Heuristic remains default. Explicit BPE requires tokenizer-tiktoken; auto exposes fallback
 when unavailable or missing a model hint. Optional tiktoken-rs is lockfile-pinned and has no
 runtime downloads. See [scope, accuracy and build costs](context-policy.md).
+
+## S4 bounded archive windows
+
+SessionRepository gains default-compatible open_run/archive_page/info/tree/search and
+window commit/lease/navigation entry points. Existing custom stores retain Full defaults.
+Runtime selects a window beyond its materialization threshold and bounds explicit open()
+snapshots. Hosts needing the entire canonical archive must page it rather than assume
+RunProgress.messages includes every old message. Source archived_messages and global
+recorded_messages disclose the omitted raw prefix; generated/journal positions stay local
+to the loaded canonical input, while summary anchors/counts remain global.
+
+RunSession explicitly wraps Full or Window. Window backend checkpoints/ownership remain
+opaque and nonserialized; committing invalidates its old projected context. Reload before
+requesting a current model view. SessionNavigator.execute supports both forms; old Full
+helpers remain subject to snapshot budgets. CLI adds session-archive; bounded tree/search,
+continuation, model changes, summaries and TUI use the shared run/page paths.
+
+SessionContextSource literals need archived_messages (zero for full history). SummaryDraft
+literals need archived_raw_messages (zero), and CompactionRequest includes archived_messages.
+Old JSON reads default zero and omits zeros, so event envelopes remain v1/JSONL v3.
+Summary provenance distinguishes a materialized projection from all replaced raw records.
+See [load limits, legacy behavior and IO tradeoffs](archive-windows.md).

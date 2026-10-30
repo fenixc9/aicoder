@@ -3,14 +3,14 @@ use std::{path::PathBuf, sync::Arc};
 
 use aicoder_core::{
     Agent, RunControl, SessionSelection, TurnExecutionContext,
-    session::{Session, SessionInfo, SessionRepository},
+    session::{SessionInfo, SessionRepository},
     tools::{ApprovalSessions, ApprovalSnapshot},
 };
 use aicoder_core::{
     AgentTurnOutcome,
     events::{EventBufferConfig, EventSubscription},
 };
-use anyhow::{Result, ensure};
+use anyhow::Result;
 use tokio::sync::oneshot;
 
 use crate::app::AppEvent;
@@ -114,20 +114,13 @@ impl AgentRuntime {
         self.repository.list(&self.workspace)
     }
 
-    pub fn open_session(&self, id: &str) -> Result<Session> {
-        let session = self.repository.open(id)?;
-        ensure!(
-            session.metadata().cwd == self.workspace,
-            "Session {} belongs to workspace {}, not {}",
-            session.metadata().id,
-            session.metadata().cwd.display(),
-            self.workspace.display()
-        );
-        Ok(session)
+    pub fn open_run_session(&self, id: &str) -> Result<aicoder_core::session::RunSession> {
+        aicoder_core::session::SessionNavigator::new(self.repository.as_ref(), &self.workspace)?
+            .open_run(id)
     }
-
     pub fn delete_session(&self, id: &str) -> Result<()> {
-        self.open_session(id)?;
+        aicoder_core::session::SessionNavigator::new(self.repository.as_ref(), &self.workspace)?
+            .info(id)?;
         self.repository.delete(id)?;
         self.approvals.remove(&self.workspace, id);
         Ok(())
@@ -138,7 +131,7 @@ impl AgentRuntime {
         selection: &SessionSelection,
         command: crate::commands::SlashCommand,
         args: &str,
-    ) -> Result<(Option<Session>, String)> {
+    ) -> Result<(Option<aicoder_core::session::RunSession>, String)> {
         use crate::commands::SlashCommand;
         let SessionSelection::Existing(id) = selection else {
             anyhow::bail!("Select a stored session first")
@@ -147,7 +140,8 @@ impl AgentRuntime {
             self.repository.as_ref(),
             &self.workspace,
         )?;
-        let session = match command {
+        use aicoder_core::session::{ArchiveNavigation as Action, BranchSource};
+        let action = match command {
             SlashCommand::Tree => {
                 let cursor = if args.is_empty() {
                     None
@@ -156,52 +150,56 @@ impl AgentRuntime {
                 };
                 return Ok((
                     None,
-                    serde_json::to_string_pretty(&nav.open(id)?.tree_page(50, cursor.as_ref())?)?,
+                    serde_json::to_string_pretty(&nav.tree(id, 50, cursor.as_ref())?)?,
                 ));
             }
             SlashCommand::Search => {
                 return Ok((
                     None,
-                    serde_json::to_string_pretty(&nav.open(id)?.search_messages(args, 20, None)?)?,
+                    serde_json::to_string_pretty(&nav.search(id, args, 20, None)?)?,
                 ));
             }
             SlashCommand::SearchNext => {
                 let cursor: aicoder_core::session::SearchCursor = serde_json::from_str(args)?;
                 return Ok((
                     None,
-                    serde_json::to_string_pretty(&nav.open(id)?.search_messages(
+                    serde_json::to_string_pretty(&nav.search(
+                        id,
                         &cursor.query,
                         20,
                         Some(&cursor),
                     )?)?,
                 ));
             }
-            SlashCommand::Rename => nav.rename(id, args)?,
-            SlashCommand::Label => {
-                let selected = nav.open(id)?;
-                let entry = selected
-                    .metadata()
+            SlashCommand::Rename => Action::Rename { title: args.into() },
+            SlashCommand::Label => Action::Label {
+                entry_id: nav
+                    .info(id)?
                     .leaf_id
-                    .as_deref()
-                    .ok_or_else(|| anyhow::anyhow!("Empty root has no entry to label"))?;
-                nav.label(id, entry, Some(args))?
-            }
-            SlashCommand::Unlabel => nav.label(id, args, None)?,
-            SlashCommand::Checkout => nav.checkout(id, (args != "root").then_some(args))?,
-            SlashCommand::Branch => {
-                let current = nav.open(id)?;
-                let target = if args == "root" {
-                    None
+                    .ok_or_else(|| anyhow::anyhow!("Empty root has no entry to label"))?,
+                label: Some(args.into()),
+            },
+            SlashCommand::Unlabel => Action::Label {
+                entry_id: args.into(),
+                label: None,
+            },
+            SlashCommand::Checkout => Action::Checkout {
+                target: (args != "root").then(|| args.into()),
+            },
+            SlashCommand::Branch => Action::Branch {
+                source: if args == "root" {
+                    BranchSource::Root
                 } else if args.is_empty() {
-                    current.metadata().leaf_id.as_deref()
+                    BranchSource::Current
                 } else {
-                    Some(args)
-                };
-                nav.branch(id, target, None)?
-            }
-            SlashCommand::Recover => nav.recover(id)?,
+                    BranchSource::Entry(args.into())
+                },
+                name: None,
+            },
+            SlashCommand::Recover => Action::Recover,
             _ => anyhow::bail!("Unsupported navigation command"),
         };
+        let session = nav.execute(id, action)?;
         self.approvals.remove(&self.workspace, id);
         Ok((
             Some(session),

@@ -14,6 +14,8 @@ pub struct SessionContextSource {
     pub recovered_tool_results: usize,
     pub reordered_tool_results: usize,
     pub interrupted_turns: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub archived_messages: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary_checkpoint: Option<String>,
 }
@@ -199,6 +201,7 @@ impl<'a> SessionBranch<'a> {
                 recovered_tool_results: 0,
                 reordered_tool_results: 0,
                 interrupted_turns: 0,
+                archived_messages: 0,
                 summary_checkpoint: None,
             },
         };
@@ -421,4 +424,8 @@ fn interrupted<'a>(output: &mut SessionContext<'a>, entry_id: Option<&'a str>, t
         .origins
         .push(ContextOrigin::InterruptedTurn { entry_id, turn_id });
     output.source.interrupted_turns += 1;
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }

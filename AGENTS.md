@@ -46,6 +46,10 @@
   exact provider framing or billed usage. Share counting across preflight, compaction and
   budgets; custom policies cannot bypass known windows, protected prefixes or tool units.
   Keep optional vocabularies/dependencies outside default core/runtime builds.
+- Archive loading must bound records, indexes, snapshots and pages. Window history contains
+  only real materialized records; private metadata descriptors must never become prompts or
+  canonical facts. Retain global provenance and raw archive access, and stream fingerprint
+  verification without weakening conflicts, ownership or torn-batch recovery.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

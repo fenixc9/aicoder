@@ -10,10 +10,12 @@ pub use model_selection::*;
 mod projection;
 mod repository;
 mod types;
+mod window;
 pub use navigation::*;
 pub use projection::{
     BranchAccounting, ContextOrigin, SessionBranch, SessionContext, SessionContextSource,
 };
+pub use window::*;
 
 pub use memory::MemorySessionRepository;
 pub use repository::{SessionConflict, SessionRepository, SessionRunLease};

@@ -613,6 +613,36 @@ impl App {
         self.approval = None;
     }
 
+    pub fn load_run_session(&mut self, session: &aicoder_core::session::RunSession) {
+        match session {
+            aicoder_core::session::RunSession::Full(session) => self.load_session(session),
+            aicoder_core::session::RunSession::Window(window) => {
+                self.timeline.clear();
+                self.tool_indexes.clear();
+                self.model_label = window
+                    .selected_model()
+                    .map(|(provider, model)| format!("{provider}/{model}"));
+                self.usage = window.accounting().usage.clone();
+                self.timeline.push(TimelineItem::Notice(format!("Showing a bounded archive tail; {} older messages remain available through archive pages.",window.source().archived_messages)));
+                for entry in window.entries() {
+                    if let aicoder_core::session::SessionEntryData::Message { message } =
+                        &entry.data
+                    {
+                        push_message(&mut self.timeline, message);
+                    }
+                }
+                if window.unfinished_turn().is_some() {
+                    self.timeline.push(TimelineItem::Notice(
+                        "Previous execution is unfinished; inspect before retrying operations."
+                            .into(),
+                    ));
+                }
+                self.session_selection = SessionSelection::Existing(window.metadata().id.clone());
+                self.focus = Focus::Input;
+                self.scroll_back = 0;
+            }
+        }
+    }
     pub fn load_session(&mut self, session: &Session) {
         self.model_label = session
             .selected_model()

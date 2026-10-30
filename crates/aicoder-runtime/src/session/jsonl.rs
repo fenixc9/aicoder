@@ -14,7 +14,7 @@ use uuid::Uuid;
 const MAX_HEADER_BYTES: u64 = 1024 * 1024;
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum StoredRecord {
+pub(super) enum StoredRecord {
     Session {
         version: u32,
         id: String,
@@ -43,11 +43,14 @@ struct TransactionRef<'a> {
     entries: &'a [SessionEntry],
     leaf_id: &'a Option<String>,
 }
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct JsonlSessionRepository {
     root: PathBuf,
+    pub(super) limits: super::SessionLoadLimits,
+    pub(super) archive_cache:
+        std::sync::Arc<std::sync::Mutex<Option<super::archive::ArchiveIndex>>>,
 }
-struct Lock(File);
+pub(super) struct Lock(pub(super) File);
 impl Drop for Lock {
     fn drop(&mut self) {
         let _ = FileExt::unlock(&self.0);
@@ -67,7 +70,11 @@ impl JsonlSessionRepository {
             );
             private_directory(&path)?;
         }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            limits: super::SessionLoadLimits::default(),
+            archive_cache: Default::default(),
+        })
     }
     pub fn root(&self) -> &Path {
         &self.root
@@ -79,12 +86,17 @@ impl JsonlSessionRepository {
             if entry.file_type()?.is_file()
                 && entry.path().extension().is_some_and(|ext| ext == "jsonl")
             {
+                super::limits::check(
+                    "session files",
+                    paths.len().saturating_add(1) as u64,
+                    self.limits.max_session_files as u64,
+                )?;
                 paths.push(entry.path());
             }
         }
         Ok(paths)
     }
-    fn find(&self, id: &str) -> Result<PathBuf> {
+    pub(super) fn find(&self, id: &str) -> Result<PathBuf> {
         validate_id(id)?;
         let mut found = None;
         for path in self.paths()? {
@@ -97,7 +109,7 @@ impl JsonlSessionRepository {
         }
         found.context("session not found")
     }
-    fn metadata_lock(&self, id: &str, exclusive: bool) -> Result<Lock> {
+    pub(super) fn metadata_lock(&self, id: &str, exclusive: bool) -> Result<Lock> {
         validate_id(id)?;
         let file = open_lock(&self.root.join(".locks").join(format!("{id}.lock")))?;
         if exclusive {
@@ -107,12 +119,12 @@ impl JsonlSessionRepository {
         }
         Ok(Lock(file))
     }
-    fn run_file(&self, id: &str) -> Result<File> {
+    pub(super) fn run_file(&self, id: &str) -> Result<File> {
         validate_id(id)?;
         open_lock(&self.root.join(".runs").join(format!("{id}.lock")))
     }
     // Called under the metadata lock: owner changes and owner-token reads cannot race.
-    fn write_lease(&self, id: &str, token: Option<&str>) -> Result<Option<Lock>> {
+    pub(super) fn write_lease(&self, id: &str, token: Option<&str>) -> Result<Option<Lock>> {
         let mut file = self.run_file(id)?;
         match FileExt::try_lock_exclusive(&file) {
             Ok(()) => Ok(Some(Lock(file))),
@@ -134,9 +146,7 @@ impl JsonlSessionRepository {
             "session path is outside repository"
         );
         let mut file = open_data(path, true, false)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        Ok(bytes)
+        super::archive::read_full(&mut file, &self.limits)
     }
     fn commit_inner(
         &self,
@@ -156,13 +166,15 @@ impl JsonlSessionRepository {
         let _run = self.write_lease(&session.metadata().id, session.run_token())?;
         let mut file = open_data(&path, true, true)?;
         FileExt::lock_exclusive(&file)?;
-        let mut actual = Vec::new();
-        file.read_to_end(&mut actual)?;
+        let (actual_len, actual_hash, valid_hash) = super::archive::hash_file(
+            &mut file,
+            cursor_boundary(session),
+            self.limits.max_scan_bytes,
+        )?;
         let cursor = session
             .backend_state::<StorageCursor>()
             .context("session view has no JSONL checkpoint")?;
-        if actual.len() as u64 != cursor.expected_len || fingerprint(&actual) != cursor.fingerprint
-        {
+        if actual_len != cursor.expected_len || actual_hash != cursor.fingerprint {
             return Err(SessionConflict {
                 id: session.metadata().id.clone(),
             }
@@ -176,6 +188,8 @@ impl JsonlSessionRepository {
             now_millis()?
         };
         if session.metadata().version < SESSION_VERSION {
+            file.seek(SeekFrom::Start(0))?;
+            let actual = super::archive::read_full(&mut file, &self.limits)?;
             let mut backup_name = path.as_os_str().to_os_string();
             backup_name.push(format!(".v{}.bak", session.metadata().version));
             let backup = PathBuf::from(backup_name);
@@ -247,7 +261,7 @@ impl JsonlSessionRepository {
         }
         file.write_all(&encoded)?;
         file.sync_data()?;
-        let mut hash = fingerprint(&actual[..cursor.valid_len as usize]);
+        let mut hash = valid_hash.context("missing valid-prefix fingerprint")?;
         if cursor.needs_separator {
             hash = hash_more(hash, b"\n");
         }
@@ -257,11 +271,9 @@ impl JsonlSessionRepository {
         attach_cursor(session, cursor_for(path, length, length, false, hash));
         Ok(None)
     }
-    fn read_backup(&self, path: &Path) -> Result<Vec<u8>> {
+    pub(super) fn read_backup(&self, path: &Path) -> Result<Vec<u8>> {
         let mut file = open_data(path, true, false)?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        Ok(bytes)
+        super::archive::read_full(&mut file, &self.limits)
     }
 }
 impl SessionRepository for JsonlSessionRepository {
@@ -305,6 +317,64 @@ impl SessionRepository for JsonlSessionRepository {
         ensure!(session.metadata().id == id, "session identity changed");
         Ok(session)
     }
+    fn open_run(&self, id: &str) -> Result<RunSession> {
+        let path = self.find(id)?;
+        if fs::metadata(&path)?.len()
+            <= self
+                .limits
+                .max_snapshot_bytes
+                .min(self.limits.max_window_bytes as u64)
+        {
+            return self
+                .open(id)
+                .map(|session| RunSession::Full(Box::new(session)));
+        }
+        super::archive::open_window(self, id).map(|window| RunSession::Window(Box::new(window)))
+    }
+    fn append_window(
+        &self,
+        window: &mut SessionWindow,
+        entries: Vec<SessionEntryData>,
+    ) -> Result<()> {
+        super::archive::append(self, window, entries)
+    }
+    fn acquire_window(&self, window: &mut SessionWindow) -> Result<SessionRunLease> {
+        let _metadata = self.metadata_lock(&window.metadata().id, true)?;
+        let mut file = self.run_file(&window.metadata().id)?;
+        FileExt::try_lock_exclusive(&file).context("session already has an active run")?;
+        let token = Uuid::new_v4().to_string();
+        file.set_len(0)?;
+        file.write_all(token.as_bytes())?;
+        file.flush()?;
+        window.attach_run_token(Some(token));
+        Ok(Box::new(Lock(file)))
+    }
+    fn archive_page(
+        &self,
+        id: &str,
+        limit: usize,
+        cursor: Option<&ArchiveCursor>,
+    ) -> Result<ArchivePage> {
+        super::archive::page(self, id, limit, cursor)
+    }
+    fn session_info(&self, id: &str) -> Result<SessionInfo> {
+        super::archive::info(self, id)
+    }
+    fn navigate_window(&self, window: &mut SessionWindow, action: ArchiveNavigation) -> Result<()> {
+        super::archive::navigate(self, window, action)
+    }
+    fn tree_page(&self, id: &str, limit: usize, cursor: Option<&TreeCursor>) -> Result<TreePage> {
+        super::archive::tree(self, id, limit, cursor)
+    }
+    fn search_page(
+        &self,
+        id: &str,
+        query: &str,
+        limit: usize,
+        cursor: Option<&SearchCursor>,
+    ) -> Result<SearchPage> {
+        super::archive::search(self, id, query, limit, cursor)
+    }
     fn list(&self, cwd: &Path) -> Result<Vec<SessionInfo>> {
         let cwd = cwd.canonicalize()?;
         let mut sessions = Vec::new();
@@ -312,10 +382,8 @@ impl SessionRepository for JsonlSessionRepository {
             let Ok((id, _, _, _)) = read_header(&path) else {
                 continue;
             };
-            match self.open(&id) {
-                Ok(session) if session.metadata().cwd == cwd => {
-                    sessions.push(SessionInfo::from(&session))
-                }
+            match super::archive::info(self, &id) {
+                Ok(session) if session.cwd == cwd => sessions.push(session),
                 Ok(_) => {}
                 Err(error) => tracing::warn!(error=%error,"skipping invalid session"),
             }
@@ -372,7 +440,7 @@ fn line(record: &impl Serialize) -> Result<Vec<u8>> {
     bytes.push(b'\n');
     Ok(bytes)
 }
-fn transaction_line(
+pub(super) fn transaction_line(
     revision: u64,
     updated_at: u64,
     entries: &[SessionEntry],
@@ -519,7 +587,7 @@ fn load_bytes(path: &Path, bytes: &[u8]) -> Result<Session> {
     );
     Ok(session)
 }
-fn read_header(path: &Path) -> Result<(String, u32, u64, PathBuf)> {
+pub(super) fn read_header(path: &Path) -> Result<(String, u32, u64, PathBuf)> {
     let file = open_data(path, true, false)?;
     let mut bytes = Vec::new();
     BufReader::new(file.take(MAX_HEADER_BYTES + 1)).read_until(b'\n', &mut bytes)?;
@@ -540,7 +608,7 @@ fn read_header(path: &Path) -> Result<(String, u32, u64, PathBuf)> {
         _ => bail!("first record is not a session header"),
     }
 }
-fn cursor_for(
+pub(super) fn cursor_for(
     path: PathBuf,
     expected_len: u64,
     valid_len: u64,
@@ -555,14 +623,14 @@ fn cursor_for(
         fingerprint,
     }
 }
-fn validate_id(id: &str) -> Result<()> {
+pub(super) fn validate_id(id: &str) -> Result<()> {
     Uuid::parse_str(id).context("invalid session ID")?;
     Ok(())
 }
-fn fingerprint(bytes: &[u8]) -> u64 {
+pub(super) fn fingerprint(bytes: &[u8]) -> u64 {
     hash_more(0xcbf29ce484222325, bytes)
 }
-fn hash_more(mut hash: u64, bytes: &[u8]) -> u64 {
+pub(super) fn hash_more(mut hash: u64, bytes: &[u8]) -> u64 {
     for byte in bytes {
         hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x100000001b3);
@@ -591,7 +659,7 @@ fn options() -> OpenOptions {
 fn create_private(path: &Path) -> std::io::Result<File> {
     options().write(true).create_new(true).open(path)
 }
-fn open_data(path: &Path, read: bool, write: bool) -> Result<File> {
+pub(super) fn open_data(path: &Path, read: bool, write: bool) -> Result<File> {
     let file = options().read(read).write(write).open(path)?;
     ensure!(
         file.metadata()?.is_file(),
@@ -609,7 +677,7 @@ fn open_lock(path: &Path) -> Result<File> {
     ensure!(file.metadata()?.is_file(), "lock must be a regular file");
     Ok(file)
 }
-fn sync_directory(root: &Path) -> Result<()> {
+pub(super) fn sync_directory(root: &Path) -> Result<()> {
     File::open(root)?.sync_all()?;
     Ok(())
 }
@@ -859,5 +927,30 @@ mod compatibility_tests {
         let reopened = repository.open(&session.metadata().id).unwrap();
         assert_eq!(reopened.messages()[0].message, &user);
         assert_eq!(reopened.messages()[1].message, &assistant);
+    }
+}
+
+fn cursor_boundary(session: &Session) -> Option<u64> {
+    session
+        .backend_state::<StorageCursor>()
+        .map(|cursor| cursor.valid_len)
+}
+impl std::fmt::Debug for JsonlSessionRepository {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JsonlSessionRepository")
+            .field("root", &self.root)
+            .field("limits", &self.limits)
+            .finish_non_exhaustive()
+    }
+}
+impl JsonlSessionRepository {
+    pub fn with_limits(root: impl AsRef<Path>, limits: super::SessionLoadLimits) -> Result<Self> {
+        limits.validate()?;
+        let mut repository = Self::new(root)?;
+        repository.limits = limits;
+        Ok(repository)
+    }
+    pub fn limits(&self) -> &super::SessionLoadLimits {
+        &self.limits
     }
 }

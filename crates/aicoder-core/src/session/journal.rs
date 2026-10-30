@@ -1,4 +1,4 @@
-use super::{Session, SessionEntryData, SessionMetadata, SessionRepository, TurnRecord};
+use super::{RunSession, SessionEntryData, SessionMetadata, SessionRepository, TurnRecord};
 use crate::{
     RunJournal, RunOutcome,
     model::{Message, MessageRole},
@@ -14,17 +14,25 @@ pub(crate) struct SessionJournal<'a> {
     state: Mutex<State>,
 }
 struct State {
-    session: Session,
+    session: RunSession,
     saved: HashMap<usize, String>,
     failure: Option<RunFailure>,
     finished: bool,
-    initial_leaf: Option<String>,
+    initial_ids: Vec<String>,
     initial_message_count: usize,
 }
 impl<'a> SessionJournal<'a> {
-    pub fn new(repository: &'a dyn SessionRepository, session: Session, turn_id: String) -> Self {
-        let initial_leaf = session.metadata().leaf_id.clone();
-        let initial_message_count = session.selected_branch().messages().count();
+    pub fn new(
+        repository: &'a dyn SessionRepository,
+        session: RunSession,
+        turn_id: String,
+    ) -> Self {
+        let initial_ids = session
+            .messages()
+            .iter()
+            .map(|entry| entry.id.to_string())
+            .collect::<Vec<_>>();
+        let initial_message_count = initial_ids.len();
         Self {
             repository,
             turn_id,
@@ -33,7 +41,7 @@ impl<'a> SessionJournal<'a> {
                 saved: HashMap::new(),
                 failure: None,
                 finished: false,
-                initial_leaf,
+                initial_ids,
                 initial_message_count,
             }),
         }
@@ -51,7 +59,7 @@ impl<'a> SessionJournal<'a> {
         if let Some(failure) = &state.failure {
             return Err(failure.clone().into());
         }
-        if let Err(error) = self.repository.append_entries(&mut state.session, entries) {
+        if let Err(error) = state.session.append(self.repository, entries) {
             let failure = RunFailure::from_error(RunStage::Persistence, &error);
             state.failure = Some(failure.clone());
             return Err(failure.into());
@@ -149,21 +157,43 @@ impl RunJournal for SessionJournal<'_> {
                 .checked_sub(remaining)
                 .ok_or_else(|| anyhow::anyhow!("summary would replace runtime instructions"))?;
             state
-                .session
-                .branch(state.initial_leaf.as_deref())?
-                .messages()
-                .nth(position)
+                .initial_ids
+                .get(position)
+                .cloned()
                 .ok_or_else(|| anyhow::anyhow!("initial summary anchor missing"))?
-                .id
-                .to_string()
         };
-        match crate::summary::session::commit_summary(
-            self.repository,
-            &mut state.session,
-            draft.clone(),
-            first,
-            Some(self.turn_id.clone()),
-        ) {
+        let result = match &mut state.session {
+            RunSession::Full(session) => crate::summary::session::commit_summary(
+                self.repository,
+                session,
+                draft.clone(),
+                first,
+                Some(self.turn_id.clone()),
+            ),
+            RunSession::Window(window) => {
+                let checkpoint = crate::summary::SummaryCheckpoint {
+                    version: 1,
+                    source_leaf: window
+                        .metadata()
+                        .leaf_id
+                        .clone()
+                        .ok_or_else(|| anyhow::anyhow!("empty summary source"))?,
+                    source_revision: window.metadata().revision,
+                    first_kept_entry_id: first,
+                    summarized_messages: window
+                        .source()
+                        .recorded_messages
+                        .checked_sub(draft.keep_messages)
+                        .ok_or_else(|| anyhow::anyhow!("invalid summary tail"))?,
+                    accounted_by_turn: Some(self.turn_id.clone()),
+                    draft: draft.clone(),
+                };
+                self.repository
+                    .append_window(window, vec![checkpoint.data()])
+                    .map(|()| window.metadata().leaf_id.clone().expect("summary entry"))
+            }
+        };
+        match result {
             Ok(id) => Ok(Some(id)),
             Err(error) => {
                 let failure = RunFailure::from_error(RunStage::Persistence, &error);
@@ -172,6 +202,7 @@ impl RunJournal for SessionJournal<'_> {
             }
         }
     }
+
     async fn finish(&self, outcome: &RunOutcome) -> Result<()> {
         let mut state = self.state.lock().expect("session journal poisoned");
         let progress = outcome.progress();

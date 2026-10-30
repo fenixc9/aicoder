@@ -112,6 +112,31 @@ impl ExecutionInput {
         input.source = Some(source);
         Ok(input)
     }
+    pub fn from_run_session(
+        mut request: ModelRequest,
+        session: &crate::session::RunSession,
+    ) -> Result<Self> {
+        let prefix = request
+            .messages
+            .iter()
+            .take_while(|message| message.role == MessageRole::System)
+            .count();
+        let fresh = request.messages.split_off(prefix);
+        let mut history = request.messages.clone();
+        history.extend(
+            session
+                .messages()
+                .into_iter()
+                .map(|entry| entry.message.clone()),
+        );
+        history.extend(fresh.clone());
+        let (source, context) = session.source_and_context()?;
+        request.messages.extend(context);
+        request.messages.extend(fresh);
+        let mut input = Self::projected(request, history, prefix)?;
+        input.source = Some(source);
+        Ok(input)
+    }
     pub fn request(&self) -> &ModelRequest {
         &self.request
     }

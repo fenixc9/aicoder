@@ -529,6 +529,7 @@ impl SemanticContextCompactor {
                 tokens: meter.tokens.clone(),
                 attempts: meter.attempts,
                 uncertain_operations: uncertain,
+                archived_raw_messages: request.archived_messages,
             };
             Ok(RecordedCompaction {
                 compaction: ContextCompaction {
@@ -611,6 +612,7 @@ impl ContextCompactor for SemanticContextCompactor {
                     .count(),
                 force: false,
                 token_budget: None,
+                archived_messages: 0,
             },
             TurnExecutionContext::new(),
             None,

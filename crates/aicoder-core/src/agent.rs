@@ -3,9 +3,7 @@ use crate::{
     AgentEventHandler, TurnExecutionContext, TurnExecutionResult, TurnExecutor,
     model::{Message, MessageRole, ModelOptions, ModelRequest},
     run::{InterruptedTurn, RunFailure, RunOutcome, RunProgress, RunStage, RunStop},
-    session::{
-        Session, SessionEntryData, SessionJournal, SessionMetadata, SessionRepository, TurnRecord,
-    },
+    session::{SessionEntryData, SessionJournal, SessionMetadata, SessionRepository, TurnRecord},
 };
 use anyhow::{Result, ensure};
 use std::{ops::Deref, sync::Arc};
@@ -113,7 +111,7 @@ impl Agent {
         self.follow_session_models = true;
         self
     }
-    fn selected_model(&self, session: &Session) -> Result<String> {
+    fn selected_model(&self, session: &crate::session::RunSession) -> Result<String> {
         if self.follow_session_models
             && let Some((provider, model)) = session.selected_model()
         {
@@ -134,16 +132,19 @@ impl Agent {
         context: TurnExecutionContext,
     ) -> Result<crate::session::ModelSelectionReport> {
         crate::session::navigation::name(model)?;
-        let mut session = repository.open(id)?;
-        ensure_session_workspace(&session, self.turn_executor.workspace_root())?;
-        let _lease = repository.acquire_run(&mut session)?;
+        let mut session = repository.open_run(id)?;
+        ensure!(
+            session.metadata().cwd == self.turn_executor.workspace_root(),
+            "session belongs to another workspace"
+        );
+        let _lease = session.acquire(repository)?;
         ensure!(
             session.unfinished_turn().is_none(),
             "recover the unfinished turn before changing its model"
         );
         let mut request = self.completion_request(self.system_messages());
         request.model = model.to_string();
-        let input = crate::ExecutionInput::from_branch(request, &session.selected_branch())?;
+        let input = crate::ExecutionInput::from_run_session(request, &session)?;
         let input = self.turn_executor.prepare_input(input, &context).await?;
         let report = self.turn_executor.validate_model_selection(&input)?;
         self.turn_executor.check_preparation_budget(&input)?;
@@ -153,8 +154,8 @@ impl Agent {
         if session.selected_model()
             != Some((report.spec.provider.as_str(), report.spec.id.as_str()))
         {
-            repository.append_entries(
-                &mut session,
+            session.append(
+                repository,
                 vec![SessionEntryData::ModelChanged {
                     provider: report.spec.provider.clone(),
                     model: report.spec.id.clone(),
@@ -300,7 +301,10 @@ impl Agent {
         } else {
             select_session(repository, self.turn_executor.workspace_root(), selection).and_then(
                 |session| {
-                    ensure_session_workspace(&session, self.turn_executor.workspace_root())?;
+                    ensure!(
+                        session.metadata().cwd == self.turn_executor.workspace_root(),
+                        "session belongs to another workspace"
+                    );
                     Ok(session)
                 },
             )
@@ -333,7 +337,10 @@ impl Agent {
             metadata = Some(session.metadata().clone());
             preparation_stage = RunStage::Preparing;
             model?;
-            ensure_session_workspace(&session, workspace)?;
+            ensure!(
+                session.metadata().cwd == workspace,
+                "session belongs to another workspace"
+            );
             context.bind_approvals(workspace, &session.metadata().id)?;
             if let Some(control) = &context.control {
                 control.session(session.metadata().id.clone());
@@ -343,12 +350,11 @@ impl Agent {
                 .events
                 .bind_session(session.metadata().id.clone(), turn_id.clone());
             preparation_stage = RunStage::Persistence;
-            let lease = repository.acquire_run(&mut session)?;
+            let lease = session.acquire(repository)?;
             preparation_stage = RunStage::Preparing;
             let mut request = self.completion_request(initial.clone());
             request.model = requested_model;
-            let mut input =
-                crate::ExecutionInput::from_branch(request, &session.selected_branch())?;
+            let mut input = crate::ExecutionInput::from_run_session(request, &session)?;
             input.started = Some(started);
             let mut input = self.turn_executor.prepare_input(input, &context).await?;
             let report = self.turn_executor.validate_model_selection(&input)?;
@@ -376,7 +382,7 @@ impl Agent {
             });
             entries.push(SessionEntryData::Message { message: user });
             preparation_stage = RunStage::Persistence;
-            repository.append_entries(&mut session, entries)?;
+            session.append(repository, entries)?;
             if let Some(source) = &mut input.source {
                 source.revision = session.metadata().revision;
                 source.leaf_id = session.metadata().leaf_id.clone();
@@ -481,28 +487,22 @@ fn interrupted(
         RunStop::Failed(_) => AgentTurnOutcome::Failed(turn),
     }
 }
-fn ensure_session_workspace(session: &Session, workspace: &std::path::Path) -> Result<()> {
-    ensure!(
-        session.metadata().cwd == workspace,
-        "Session {} belongs to workspace {}, not {}",
-        session.metadata().id,
-        session.metadata().cwd.display(),
-        workspace.display()
-    );
-    Ok(())
-}
 fn select_session(
     repository: &dyn SessionRepository,
     workspace: &std::path::Path,
     selection: SessionSelection,
-) -> Result<Session> {
+) -> Result<crate::session::RunSession> {
     match selection {
-        SessionSelection::New => repository.create(workspace),
+        SessionSelection::New => repository
+            .create(workspace)
+            .map(|session| crate::session::RunSession::Full(Box::new(session))),
         SessionSelection::ContinueMostRecent => match repository.most_recent(workspace)? {
-            Some(recent) => repository.open(&recent.id),
-            None => repository.create(workspace),
+            Some(recent) => repository.open_run(&recent.id),
+            None => repository
+                .create(workspace)
+                .map(|session| crate::session::RunSession::Full(Box::new(session))),
         },
-        SessionSelection::Existing(id) => repository.open(&id),
+        SessionSelection::Existing(id) => repository.open_run(&id),
     }
 }
 #[cfg(test)]

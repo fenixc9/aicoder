@@ -657,6 +657,11 @@ impl TurnExecutor {
                                     .count(),
                                 force: false,
                                 token_budget: limits.remaining_tokens(),
+                                archived_messages: progress
+                                    .model_context
+                                    .as_ref()
+                                    .and_then(|info| info.source.as_ref())
+                                    .map_or(0, |source| source.archived_messages),
                             },
                             crate::context::ContextMeasure {
                                 counting: self.counting.clone(),

@@ -604,6 +604,7 @@ async fn nonadditive_pruning_recounts_candidates_without_splitting_tool_units() 
                 system_prefix_len: 1,
                 force: false,
                 token_budget: None,
+                archived_messages: 0,
             },
             ContextMeasure {
                 counting: TokenCounting::new(Arc::new(PerMessage)),

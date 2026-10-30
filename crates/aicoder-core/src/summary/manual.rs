@@ -90,14 +90,14 @@ pub(crate) async fn compact(
             compactor.persistent_summaries(),
             "manual summary requires semantic context strategy"
         );
-        let mut session = repository.open(id)?;
+        let mut session = repository.open_run(id)?;
         report.session = Some(session.metadata().clone());
         ensure!(
             session.metadata().cwd == host.workspace,
             "summary session belongs to another workspace"
         );
-        let lease = repository.acquire_run(&mut session)?;
-        let input = crate::ExecutionInput::from_branch(template, &session.selected_branch())?;
+        let lease = session.acquire(repository)?;
+        let input = crate::ExecutionInput::from_run_session(template, &session)?;
         Ok((session, lease, input, compactor))
     })();
     let (mut session, _lease, mut input, compactor) = match setup {
@@ -170,6 +170,10 @@ pub(crate) async fn compact(
                     system_prefix_len: input.system_prefix_len,
                     force: true,
                     token_budget: host.budget.max_tokens,
+                    archived_messages: input
+                        .source
+                        .as_ref()
+                        .map_or(0, |source| source.archived_messages),
                 },
                 measure,
                 context.clone(),
@@ -248,7 +252,29 @@ pub(crate) async fn compact(
             report.persistence_error = Some("summary tail is empty".into());
             return report;
         };
-        match super::session::commit_summary(repository, &mut session, draft, first, None) {
+        let committed = match &mut session {
+            RunSession::Full(session) => {
+                super::session::commit_summary(repository, session, draft, first, None)
+            }
+            RunSession::Window(window) => {
+                let checkpoint = super::SummaryCheckpoint {
+                    version: 1,
+                    source_leaf: window.metadata().leaf_id.clone().unwrap_or_default(),
+                    source_revision: window.metadata().revision,
+                    first_kept_entry_id: first,
+                    summarized_messages: window
+                        .source()
+                        .recorded_messages
+                        .saturating_sub(draft.keep_messages),
+                    accounted_by_turn: None,
+                    draft,
+                };
+                repository
+                    .append_window(window, vec![checkpoint.data()])
+                    .map(|()| window.metadata().leaf_id.clone().expect("summary entry"))
+            }
+        };
+        match committed {
             Ok(id) => report.checkpoint_entry_id = Some(id),
             Err(error) => {
                 report.persistence_error =
@@ -266,8 +292,8 @@ pub(crate) async fn compact(
             stop: report.stop.clone(),
         })
         .expect("manual usage");
-        if let Err(error) = repository.append_entries(
-            &mut session,
+        if let Err(error) = session.append(
+            repository,
             vec![SessionEntryData::Extension {
                 namespace: MANUAL_USAGE_NAMESPACE.into(),
                 data,
@@ -277,11 +303,7 @@ pub(crate) async fn compact(
                 Some(crate::redaction::sanitize_text(&error.to_string(), 2048));
         }
     }
-    report.branch_usage = session
-        .selected_branch()
-        .accounting()
-        .ok()
-        .map(|accounting| accounting.usage);
+    report.branch_usage = session.accounting().ok().map(|accounting| accounting.usage);
     report.session = Some(session.metadata().clone());
     report
 }

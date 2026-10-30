@@ -238,111 +238,130 @@ impl Session {
         limit: usize,
         cursor: Option<&SearchCursor>,
     ) -> Result<SearchPage> {
-        ensure!(
-            !query.is_empty() && query.len() <= 256,
-            "query must be 1..256 bytes"
-        );
-        ensure!((1..=100).contains(&limit), "search limit must be 1..100");
-        let (mut index, mut block, mut offset) = if let Some(cursor) = cursor {
-            ensure!(
-                cursor.session_id == self.metadata.id
-                    && cursor.revision == self.metadata.revision
-                    && cursor.query == query,
-                "stale, foreign or mismatched search cursor"
-            );
-            (cursor.entry, cursor.block, cursor.offset)
-        } else {
-            (0, 0, 0)
-        };
-        ensure!(index <= self.entries.len(), "invalid search entry");
-        let mut page = SearchPage {
-            hits: Vec::new(),
-            next: None,
-            scanned_bytes: 0,
-            scanned_entries: 0,
-        };
-        let mut blocks = 0;
-        'entries: while index < self.entries.len()
-            && page.scanned_entries < 512
-            && page.scanned_bytes < 256 * 1024
-            && page.hits.len() < limit
-            && blocks < 4096
-        {
-            let entry = &self.entries[index];
-            page.scanned_entries += 1;
-            if let SessionEntryData::Message { message } = &entry.data {
-                ensure!(block <= message.content.len(), "invalid search block");
-                while block < message.content.len() {
-                    if blocks >= 4096 || page.scanned_bytes >= 256 * 1024 {
-                        break 'entries;
-                    }
-                    blocks += 1;
-                    if let ContentBlock::Text { text } = &message.content[block] {
-                        ensure!(
-                            offset <= text.len() && text.is_char_boundary(offset),
-                            "invalid search byte offset"
-                        );
-                        let remaining = 256 * 1024 - page.scanned_bytes;
-                        if remaining <= query.len() + 4 {
-                            break 'entries;
-                        }
-                        let mut end = offset.saturating_add(remaining).min(text.len());
-                        while !text.is_char_boundary(end) {
-                            end -= 1;
-                        }
-                        page.scanned_bytes += end - offset;
-                        if let Some(found) = text[offset..end].find(query) {
-                            let found = offset + found;
-                            let mut left = found.saturating_sub(64);
-                            while !text.is_char_boundary(left) {
-                                left -= 1;
-                            }
-                            let snippet = text[left..].chars().take(160).collect();
-                            page.hits.push(SearchHit {
-                                entry_id: entry.id.clone(),
-                                role: message.role,
-                                snippet,
-                            });
-                            index += 1;
-                            block = 0;
-                            offset = 0;
-                            continue 'entries;
-                        }
-                        if end < text.len() {
-                            let mut next = end.saturating_sub(query.len().saturating_sub(1));
-                            while !text.is_char_boundary(next) {
-                                next -= 1;
-                            }
-                            ensure!(next > offset, "search cannot advance");
-                            offset = next;
-                            break 'entries;
-                        }
-                    } else {
-                        ensure!(offset == 0, "invalid non-text search offset");
-                    }
-                    block += 1;
-                    offset = 0;
-                }
-            } else {
-                ensure!(block == 0 && offset == 0, "invalid metadata search cursor");
-            }
-            index += 1;
-            block = 0;
-            offset = 0;
-        }
-        if index < self.entries.len() {
-            page.next = Some(SearchCursor {
-                session_id: self.metadata.id.clone(),
-                revision: self.metadata.revision,
-                query: query.into(),
-                entry: index,
-                block,
-                offset,
-            });
-        }
-        Ok(page)
+        search_archive_entries(
+            &self.metadata,
+            self.entries.len(),
+            query,
+            limit,
+            cursor,
+            |index| Ok(std::borrow::Cow::Borrowed(&self.entries[index])),
+        )
     }
 }
+/// Shared bounded visible-text scan for in-memory snapshots and paged archive readers.
+pub fn search_archive_entries<'a>(
+    metadata: &SessionMetadata,
+    entry_count: usize,
+    query: &str,
+    limit: usize,
+    cursor: Option<&SearchCursor>,
+    mut read: impl FnMut(usize) -> Result<std::borrow::Cow<'a, SessionEntry>>,
+) -> Result<SearchPage> {
+    ensure!(
+        !query.is_empty() && query.len() <= 256,
+        "query must be 1..256 bytes"
+    );
+    ensure!((1..=100).contains(&limit), "search limit must be 1..100");
+    let (mut index, mut block, mut offset) = if let Some(cursor) = cursor {
+        ensure!(
+            cursor.session_id == metadata.id
+                && cursor.revision == metadata.revision
+                && cursor.query == query,
+            "stale, foreign or mismatched search cursor"
+        );
+        (cursor.entry, cursor.block, cursor.offset)
+    } else {
+        (0, 0, 0)
+    };
+    ensure!(index <= entry_count, "invalid search entry");
+    let mut page = SearchPage {
+        hits: Vec::new(),
+        next: None,
+        scanned_bytes: 0,
+        scanned_entries: 0,
+    };
+    let mut blocks = 0;
+    'entries: while index < entry_count
+        && page.scanned_entries < 512
+        && page.scanned_bytes < 256 * 1024
+        && page.hits.len() < limit
+        && blocks < 4096
+    {
+        let entry = read(index)?;
+        page.scanned_entries += 1;
+        if let SessionEntryData::Message { message } = &entry.data {
+            ensure!(block <= message.content.len(), "invalid search block");
+            while block < message.content.len() {
+                if blocks >= 4096 || page.scanned_bytes >= 256 * 1024 {
+                    break 'entries;
+                }
+                blocks += 1;
+                if let ContentBlock::Text { text } = &message.content[block] {
+                    ensure!(
+                        offset <= text.len() && text.is_char_boundary(offset),
+                        "invalid search byte offset"
+                    );
+                    let remaining = 256 * 1024 - page.scanned_bytes;
+                    if remaining <= query.len() + 4 {
+                        break 'entries;
+                    }
+                    let mut end = offset.saturating_add(remaining).min(text.len());
+                    while !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    page.scanned_bytes += end - offset;
+                    if let Some(found) = text[offset..end].find(query) {
+                        let found = offset + found;
+                        let mut left = found.saturating_sub(64);
+                        while !text.is_char_boundary(left) {
+                            left -= 1;
+                        }
+                        let snippet = text[left..].chars().take(160).collect();
+                        page.hits.push(SearchHit {
+                            entry_id: entry.id.clone(),
+                            role: message.role,
+                            snippet,
+                        });
+                        index += 1;
+                        block = 0;
+                        offset = 0;
+                        continue 'entries;
+                    }
+                    if end < text.len() {
+                        let mut next = end.saturating_sub(query.len().saturating_sub(1));
+                        while !text.is_char_boundary(next) {
+                            next -= 1;
+                        }
+                        ensure!(next > offset, "search cannot advance");
+                        offset = next;
+                        break 'entries;
+                    }
+                } else {
+                    ensure!(offset == 0, "invalid non-text search offset");
+                }
+                block += 1;
+                offset = 0;
+            }
+        } else {
+            ensure!(block == 0 && offset == 0, "invalid metadata search cursor");
+        }
+        index += 1;
+        block = 0;
+        offset = 0;
+    }
+    if index < entry_count {
+        page.next = Some(SearchCursor {
+            session_id: metadata.id.clone(),
+            revision: metadata.revision,
+            query: query.into(),
+            entry: index,
+            block,
+            offset,
+        });
+    }
+    Ok(page)
+}
+
 /// Scope every idle operation to the host's canonical workspace and repository lease.
 pub struct SessionNavigator<'a> {
     repository: &'a dyn SessionRepository,
@@ -362,6 +381,111 @@ impl<'a> SessionNavigator<'a> {
             "session belongs to another workspace"
         );
         Ok(clear_token(session))
+    }
+    pub fn open_run(&self, id: &str) -> Result<RunSession> {
+        let session = self.repository.open_run(id)?;
+        ensure!(
+            session.metadata().cwd == self.workspace,
+            "session belongs to another workspace"
+        );
+        Ok(session)
+    }
+    pub fn info(&self, id: &str) -> Result<SessionInfo> {
+        let info = self.repository.session_info(id)?;
+        ensure!(
+            info.cwd == self.workspace,
+            "session belongs to another workspace"
+        );
+        Ok(info)
+    }
+    pub fn tree(&self, id: &str, limit: usize, cursor: Option<&TreeCursor>) -> Result<TreePage> {
+        self.info(id)?;
+        self.repository.tree_page(id, limit, cursor)
+    }
+    pub fn search(
+        &self,
+        id: &str,
+        query: &str,
+        limit: usize,
+        cursor: Option<&SearchCursor>,
+    ) -> Result<SearchPage> {
+        self.info(id)?;
+        self.repository.search_page(id, query, limit, cursor)
+    }
+    pub fn archive(
+        &self,
+        id: &str,
+        limit: usize,
+        cursor: Option<&ArchiveCursor>,
+    ) -> Result<ArchivePage> {
+        self.info(id)?;
+        self.repository.archive_page(id, limit, cursor)
+    }
+    /// Unified metadata mutations for full snapshots and bounded archive windows.
+    pub fn execute(&self, id: &str, action: ArchiveNavigation) -> Result<RunSession> {
+        let mut state = self.open_run(id)?;
+        let lease = state.acquire(self.repository)?;
+        match &mut state {
+            RunSession::Window(window) => self.repository.navigate_window(window, action)?,
+            RunSession::Full(session) => {
+                let data = match action {
+                    ArchiveNavigation::Rename { title } => Some(NavigationRecord::Rename { title }),
+                    ArchiveNavigation::Label { entry_id, label } => {
+                        let entry_id = session.resolve_entry(&entry_id)?.to_string();
+                        Some(NavigationRecord::Label { entry_id, label })
+                    }
+                    ArchiveNavigation::Checkout { target } => {
+                        let target = target
+                            .as_deref()
+                            .map(|target| session.resolve_entry(target).map(str::to_string))
+                            .transpose()?;
+                        self.repository.checkout(session, target.as_deref())?;
+                        None
+                    }
+                    ArchiveNavigation::Branch { source, name } => {
+                        let parent = match source {
+                            BranchSource::Current => session.metadata().leaf_id.clone(),
+                            BranchSource::Root => None,
+                            BranchSource::Entry(target) => {
+                                Some(session.resolve_entry(&target)?.to_string())
+                            }
+                        };
+                        session.branch(parent.as_deref())?.model_context()?;
+                        let entry = SessionEntry {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            parent_id: parent,
+                            created_at: super::now_millis()?,
+                            data: NavigationRecord::Branch { name }.data(),
+                        };
+                        let transaction = SessionTransaction {
+                            leaf_id: Some(entry.id.clone()),
+                            entries: vec![entry],
+                        };
+                        self.repository.commit(session, transaction)?;
+                        None
+                    }
+                    ArchiveNavigation::Recover => {
+                        session.selected_branch().model_context()?;
+                        if let Some(turn) = session.unfinished_turn().map(str::to_string) {
+                            self.repository.append_entries(
+                                session,
+                                vec![SessionEntryData::TurnEnd {
+                                    turn_id: turn,
+                                    record: Box::new(TurnRecord::recovered()),
+                                }],
+                            )?;
+                        }
+                        None
+                    }
+                };
+                if let Some(data) = data {
+                    self.repository.append_entries(session, vec![data.data()])?;
+                }
+            }
+        }
+        drop(lease);
+        state.clear_run_token();
+        Ok(state)
     }
     pub fn rename(&self, id: &str, title: &str) -> Result<Session> {
         name(title)?;
