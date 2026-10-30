@@ -27,6 +27,7 @@ use async_trait::async_trait;
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 mod execution;
 mod input;
+mod rpc;
 
 #[derive(Debug, Parser)]
 #[command(name = "aicoder", about = "A small tool-using coding agent")]
@@ -50,6 +51,9 @@ struct Cli {
     /// Read sequential conversation turns; --no-session uses an in-memory session.
     #[arg(long, conflicts_with = "stdin")]
     repl: bool,
+    /// Serve versioned local JSONL requests on stdin/stdout.
+    #[arg(long, conflicts_with_all = ["input", "prompt", "stdin", "print", "json", "repl"])]
+    rpc: bool,
     /// Automatically approve mutating tools and commands.
     #[arg(long)]
     yes: bool,
@@ -576,7 +580,7 @@ async fn application() -> Result<()> {
     let cli = Cli::from_arg_matches(&matches)?;
     anyhow::ensure!(
         cli.command.is_none()
-            || !(cli.repl || cli.stdin || cli.print || cli.json || cli.input.is_some()),
+            || !(cli.repl || cli.stdin || cli.print || cli.json || cli.rpc || cli.input.is_some()),
         "execution input/output flags cannot be combined with metadata commands"
     );
 
@@ -732,7 +736,11 @@ async fn application() -> Result<()> {
             return Ok(());
         }
     }
-    execution::run(&cli, explicit_prompt, &runtime).await
+    if cli.rpc {
+        rpc::run(&cli, &runtime).await
+    } else {
+        execution::run(&cli, explicit_prompt, &runtime).await
+    }
 }
 
 #[cfg(test)]

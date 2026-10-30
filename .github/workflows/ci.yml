@@ -82,3 +82,5 @@ jobs:
           "$RUNNER_TEMP/aicoder-schema/bin/python" -m pip install -r scripts/requirements-schema.txt
       - name: Validate published event fixture
         run: '"$RUNNER_TEMP/aicoder-schema/bin/python" scripts/check_event_schema.py'
+      - name: Validate published RPC fixture
+        run: '"$RUNNER_TEMP/aicoder-schema/bin/python" scripts/check_rpc_schema.py'

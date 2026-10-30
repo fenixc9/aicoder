@@ -525,3 +525,18 @@ noninteractive mutations require explicit --yes. Legacy explicit-prompt streamin
 approvals remain. Readers expire with their question receiver. Ctrl-C awaits cancellation/
 persistence and exits 130 for one-shot runs. REPL uses core disk/memory sessions and resets
 the context between turns. See [mode and compatibility details](cli-execution.md).
+
+## S5 stdio RPC v1
+
+`aicoder --rpc` is an alternative execution mode with versioned JSONL requests,
+responses, core events and authoritative completion metadata. It conflicts with other
+execution modes and metadata subcommands. Existing CLI and core event/session formats
+are unchanged; RPC has its own version 1 envelope. Request IDs are strictly increasing
+positive JavaScript-safe integers, including rejected commands, to prevent duplicate
+execution without an unbounded ID cache. Clients must match run and approval identities.
+
+EOF/shutdown/SIGINT cancel and await owned execution. A failed or stalled transport exits
+nonzero after cleanup; clients must not assume a complete event stream after disconnect.
+`--no-session` RPC uses an ephemeral core repository for conversation continuity.
+See [RPC v1](rpc.md), [schema](protocol/rpc-v1.schema.json) and
+[client example](../scripts/rpc_client.py). This protocol does not emulate Pi/JSON-RPC wire formats.

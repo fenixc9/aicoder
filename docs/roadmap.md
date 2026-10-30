@@ -1,6 +1,6 @@
 # aicoder 路线图
 
-状态：S0、S1、S2、S3 已完成；当前阶段 S4。本文替代旧 TODO 的排期。
+状态：S0、S1、S2、S3、S4 已完成当前 Linux 范围验收；当前阶段 S5。本文替代旧 TODO 的排期。
 基线和验证依据见 [S0 开发基线](development-baseline.md)。
 S1 的统一模型契约已贯穿执行器、工具、会话、CLI/TUI 和 bench，wire types 已移至
 providers；部分结果、任务预算和 provider 配置均已接通。S1 验收见 [验收记录](s1-acceptance.md)。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
@@ -217,8 +217,9 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 - [ ] TUI：多行/历史、文件引用、命令面板、模型切换与思考级别、分支、审批 diff、steer/follow-up，
   展示 usage、上下文占用及可选成本；主题配置保持独立。
 - [ ] 图片内容通过统一消息 API 进入；TUI/CLI 明确文件限制及 provider 能力。
-- [ ] 版本化 stdin/stdout RPC：request ID、控制命令、响应、事件和错误；
+- [x] 版本化 stdin/stdout RPC：request ID、控制命令、响应、事件和错误；
   日志只去 stderr/文件，不能污染协议输出。
+  见 [RPC v1 契约](rpc.md) 与 [验收记录](s5-rpc-acceptance.md)。
 - [ ] 最小 Web 示例：HTTP 提交、SSE 事件、取消和审批；宿主负责认证、工作区授权
   与运行生命周期，浏览器不获得任意文件/命令入口。
 - [ ] JSON/HTML 本地导出；分享功能作为显式调用的发布 adapter。

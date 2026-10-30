@@ -38,6 +38,12 @@ impl Lines {
         &mut self,
         signal: &mut tokio::signal::unix::Signal,
     ) -> Result<Option<String>> {
+        tokio::select! {
+            _=signal.recv()=>Err(Interrupted.into()),
+            line=self.next_line()=>line,
+        }
+    }
+    pub async fn next_line(&mut self) -> Result<Option<String>> {
         loop {
             if let Some(end) = self.pending.iter().position(|byte| *byte == b'\n') {
                 ensure!(end < MAX_INPUT, "stdin line exceeds 1 MiB");
@@ -57,7 +63,7 @@ impl Lines {
                 Ok(0) => self.eof = true,
                 Ok(n) => self.pending.extend_from_slice(&buf[..n]),
                 Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                    tokio::select! {_=signal.recv()=>return Err(Interrupted.into()),_=tokio::time::sleep(Duration::from_millis(10))=>{}}
+                    tokio::time::sleep(Duration::from_millis(10)).await;
                 }
                 Err(error) if error.kind() == ErrorKind::Interrupted => {}
                 Err(error) => return Err(error.into()),

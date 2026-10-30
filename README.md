@@ -79,6 +79,10 @@ REPL reuses core sessions; `--no-session` retains history in memory. Piped input
 prompt data and cannot approve tools. Ctrl-C cancels and awaits the active turn.
 See [CLI modes](docs/cli-execution.md) for input bounds, approvals and exit behavior.
 
+`--rpc` serves [versioned JSONL requests](docs/rpc.md) with run controls, approvals,
+session selection and events. An optional [Python client example](scripts/rpc_client.py)
+shows the request/notification lifecycle; Python is not required by the agent binary.
+
 ## TUI
 
 Set an OpenAI-compatible API key and optional endpoint, then start the TUI from

@@ -53,6 +53,9 @@
 - CLI payload stdin must not become authorization input. Keep machine stdout limited to
   its declared format, report incomplete delivery, and cancel/await the execution owner
   before exiting. Reuse core sessions for REPL history instead of rebuilding a second loop.
+- RPC request IDs must prevent duplicate execution with bounded state. Scope controls and
+  approval choices to the owned run, keep protocol queues/serialization bounded, and await
+  the owner after EOF, shutdown or transport failure. Notifications cannot fabricate delivery.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

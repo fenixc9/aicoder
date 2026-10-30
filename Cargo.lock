@@ -21,6 +21,7 @@ dependencies = [
  "async-trait",
  "clap",
  "libc",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

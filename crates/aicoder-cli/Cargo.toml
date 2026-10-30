@@ -19,6 +19,7 @@ async-trait.workspace = true
 libc = "0.2"
 clap.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 tracing-subscriber.workspace = true
 
