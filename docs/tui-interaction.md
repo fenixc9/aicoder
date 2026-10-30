@@ -68,7 +68,10 @@ cancel through the owning context; terminal errors/EOF await owners before runti
 Recognized paste events cannot authorize a plan, and UI themes cannot change permission rules.
 
 [Acceptance](s5-tui-acceptance.md) records unit, rendered-backend and actual PTY evidence.
-Image attachment input is a separate remaining S5 item; `/file` is a bounded text reference.
+[Image input](image-input.md) adds `/image PATH` and `/unimage [INDEX|all]` using immutable
+normalized captures and explicit vision capabilities. Images can accompany initial, steer
+and follow-up input; TUI bounds these queues at 2 MiB/input and 4 MiB pending.
+`/file` remains a bounded text reference; `/detach` removes text references independently.
 
 Terminal backends can buffer a complete paste event before the composer validates its size.
 The 64 KiB limit bounds accepted drafts; it is not a transport-level memory ceiling for an

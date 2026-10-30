@@ -435,10 +435,42 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
             }
             let prompt = app.input.take();
             app.slash_input_changed();
-            if prompt.trim().is_empty() && app.references.is_empty() {
+            if prompt.trim().is_empty() && app.references.is_empty() && app.images.is_empty() {
                 return;
             }
             match commands::parse(&prompt) {
+                Some(Ok(commands::SlashCommand::Image)) => {
+                    if app.reference.is_some() {
+                        app.input.replace(prompt);
+                        app.timeline.push(TimelineItem::Notice(
+                            "Wait for the pending capture or cancel it.".into(),
+                        ));
+                        return;
+                    }
+                    app.reference = Some(runtime.start_image(
+                        commands::arguments(&prompt).into(),
+                        runtime.execution_context(),
+                    ));
+                    return;
+                }
+                Some(Ok(commands::SlashCommand::Unimage)) => {
+                    let args = commands::arguments(&prompt);
+                    if args.is_empty() || args == "all" {
+                        app.reference = None;
+                        app.images.clear();
+                    } else {
+                        match args.parse::<usize>() {
+                            Ok(i) if i > 0 && i <= app.images.len() => {
+                                app.images.remove(i - 1);
+                            }
+                            _ => app.timeline.push(TimelineItem::Error(
+                                "Use /unimage INDEX (1-based) or /unimage all".into(),
+                            )),
+                        }
+                    }
+                    return;
+                }
+
                 Some(Ok(commands::SlashCommand::File)) => {
                     if app.reference.is_some() {
                         app.input.replace(prompt);
@@ -680,7 +712,29 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                     return;
                 }
             };
-            let prompt = app.compose(&prepared.text);
+            if !app.images.is_empty() {
+                match runtime.supports_images(&app.session_selection) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        app.input.replace(raw_prompt);
+                        app.timeline.push(TimelineItem::Error("Selected model does not declare image input; choose a vision model before submitting.".into()));
+                        return;
+                    }
+                    Err(error) => {
+                        app.input.replace(raw_prompt);
+                        app.timeline.push(TimelineItem::Error(error.to_string()));
+                        return;
+                    }
+                }
+            }
+            let prompt = match app.compose_input(&prepared.text) {
+                Ok(input) => input,
+                Err(error) => {
+                    app.input.replace(raw_prompt);
+                    app.timeline.push(TimelineItem::Error(error.to_string()));
+                    return;
+                }
+            };
             if app.is_running() {
                 let kind = if key.modifiers.contains(KeyModifiers::ALT) {
                     RunInputKind::FollowUp
@@ -690,6 +744,7 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                 if app.queue_input(kind, prompt) {
                     app.history.record(&raw_prompt);
                     app.references.clear();
+                    app.images.clear();
                 } else {
                     app.input.replace(raw_prompt);
                 }
@@ -701,6 +756,8 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                 context.clone(),
                 RunControlConfig {
                     handle_approvals: true,
+                    max_input_bytes: 2 * 1024 * 1024,
+                    max_pending_bytes: 4 * 1024 * 1024,
                     ..Default::default()
                 },
             )
@@ -709,8 +766,10 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                 Ok(run) => {
                     app.history.record(&raw_prompt);
                     app.references.clear();
+                    app.images.clear();
                     app.pending_reasoning = None;
-                    app.begin_turn(prompt, context);
+                    let displayed = prompt.message().text_content();
+                    app.begin_turn(displayed, context);
                     app.active_handle = Some(handle);
                     app.run = Some(run);
                 }
@@ -790,6 +849,8 @@ fn handle_slash_command(app: &mut App, input: &str) -> bool {
             | commands::SlashCommand::Recover
             | commands::SlashCommand::Model
             | commands::SlashCommand::Thinking
+            | commands::SlashCommand::Image
+            | commands::SlashCommand::Unimage
             | commands::SlashCommand::File
             | commands::SlashCommand::Detach
             | commands::SlashCommand::Theme

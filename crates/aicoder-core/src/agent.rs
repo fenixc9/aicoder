@@ -266,7 +266,7 @@ impl Agent {
     }
     pub async fn run(
         &self,
-        prompt: impl Into<String>,
+        prompt: impl Into<crate::AgentInput>,
         handler: Arc<dyn AgentEventHandler>,
     ) -> Result<AgentTurnResult> {
         self.run_with_context(prompt, handler, TurnExecutionContext::new())
@@ -274,7 +274,7 @@ impl Agent {
     }
     pub async fn run_with_context(
         &self,
-        prompt: impl Into<String>,
+        prompt: impl Into<crate::AgentInput>,
         handler: Arc<dyn AgentEventHandler>,
         context: TurnExecutionContext,
     ) -> Result<AgentTurnResult> {
@@ -284,12 +284,12 @@ impl Agent {
     }
     pub async fn run_outcome(
         &self,
-        prompt: impl Into<String>,
+        prompt: impl Into<crate::AgentInput>,
         handler: Arc<dyn AgentEventHandler>,
         context: TurnExecutionContext,
     ) -> AgentTurnOutcome {
         let mut messages = self.system_messages();
-        messages.push(Message::text(MessageRole::User, prompt));
+        messages.push(prompt.into().into_message());
         from_execution(
             self.turn_executor
                 .run_outcome(self.completion_request(messages), handler, context)
@@ -314,7 +314,7 @@ impl Agent {
     }
     pub async fn run_controlled(
         &self,
-        prompt: impl Into<String>,
+        prompt: impl Into<crate::AgentInput>,
         handler: Arc<dyn AgentEventHandler>,
         control: crate::RunControl,
     ) -> AgentTurnOutcome {
@@ -325,7 +325,7 @@ impl Agent {
         &self,
         repository: &dyn SessionRepository,
         selection: SessionSelection,
-        prompt: impl Into<String>,
+        prompt: impl Into<crate::AgentInput>,
         handler: Arc<dyn AgentEventHandler>,
         control: crate::RunControl,
     ) -> AgentTurnOutcome {
@@ -358,7 +358,7 @@ impl Agent {
         &self,
         repository: &dyn SessionRepository,
         selection: SessionSelection,
-        prompt: impl Into<String>,
+        prompt: impl Into<crate::AgentInput>,
         handler: Arc<dyn AgentEventHandler>,
     ) -> Result<AgentTurnResult> {
         self.run_with_session_context(
@@ -374,7 +374,7 @@ impl Agent {
         &self,
         repository: &dyn SessionRepository,
         selection: SessionSelection,
-        prompt: impl Into<String>,
+        prompt: impl Into<crate::AgentInput>,
         handler: Arc<dyn AgentEventHandler>,
         context: TurnExecutionContext,
     ) -> Result<AgentTurnResult> {
@@ -386,7 +386,7 @@ impl Agent {
         &self,
         repository: &dyn SessionRepository,
         selection: SessionSelection,
-        prompt: impl Into<String>,
+        prompt: impl Into<crate::AgentInput>,
         handler: Arc<dyn AgentEventHandler>,
         context: TurnExecutionContext,
     ) -> AgentTurnOutcome {
@@ -419,7 +419,7 @@ impl Agent {
         let scope = self
             .turn_executor
             .start_scope(&requested_model, handler, &context);
-        let user = Message::text(MessageRole::User, prompt);
+        let user = prompt.into().into_message();
         let mut initial = self.system_messages();
         initial.push(user.clone());
         let mut metadata = None;

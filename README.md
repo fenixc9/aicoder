@@ -32,7 +32,8 @@ The [provider-neutral model API](docs/model-api.md) is shared by the agent
 loop, tools, sessions and frontends. Structured [run outcomes and budgets](docs/run-outcomes.md) retain progress on
 limits, failures and cancellation. [Provider profiles](docs/provider-configuration.md) configure proxy,
 credentials, timeouts and compatible-service behavior. [Reasoning controls](docs/reasoning-controls.md)
-expose declared effort levels through SDK, CLI and TUI. [Tree sessions and recovery](docs/sessions.md)
+expose declared effort levels through SDK, CLI and TUI. [Image input](docs/image-input.md)
+uses the same Agent API, with bounded local captures via CLI `--image` and TUI `/image`. [Tree sessions and recovery](docs/sessions.md)
 cover branches, durable tool checkpoints, interrupted turns and backed-up v1/v2 migration.
 [RunHandle controls](docs/run-control.md) add bounded steer/follow-up queues and scoped
 asynchronous approvals over the same execution loop. [Versioned events](docs/events.md)
@@ -42,7 +43,7 @@ bench traces. S0–S3 are complete on the verified Linux platform. Runtime provi
 [concrete tools/storage](docs/runtime-backends.md), [bounded read/search](docs/file-tools.md),
 [checked edits and diffs](docs/file-mutations.md), [shell supervision](docs/shell-tools.md)
 and [session tool grants](docs/approvals.md). S4 long-context management is complete;
-current work advances to S5 frontends. [Branch model-context projections](docs/model-context.md) keep recovery
+S5 frontends have passed [Linux acceptance](docs/s5-images-acceptance.md); the next stage is S6 extensions. [Branch model-context projections](docs/model-context.md) keep recovery
 views separate from recorded history. See the settings guide for the explicit `--env-file` migration and
 [S3 acceptance](docs/s3-approvals-acceptance.md) for verification and cumulative costs.
 

@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 aicoder-core.workspace = true
-aicoder-runtime.workspace = true
+aicoder-runtime = { workspace = true, features = ["images"] }
 anyhow.workspace = true
 async-trait.workspace = true
 clap.workspace = true

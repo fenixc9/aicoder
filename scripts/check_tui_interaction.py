@@ -83,7 +83,13 @@ try:
                     values.extend(e['data'] for e in record.get('entries',[]))
             return values
         def command(text,expected,applied=None):
-            output.clear();send(text+'\r');until(lambda: applied() if applied else marker(expected),text)
+            output.clear();send(text+'\r')
+            if applied:
+                deadline=time.monotonic()+10
+                while not applied() and time.monotonic()<deadline:
+                    drain();time.sleep(.1)
+                    if not applied():send('\r')
+            until(lambda: applied() if applied else marker(expected),text)
         def ends():
             entries=[]
             for file in (state/'sessions').glob('*.jsonl'):
@@ -93,6 +99,13 @@ try:
                     entries.extend(e['data'] for e in record.get('entries',[]) if e['data']['kind']=='turn_end')
             return entries
         def finished(requests_count,turns):
+            # Journal completion can precede delivery of the owner's result to the UI.
+            # If the next Enter hit a closed handle, only its retained draft retries;
+            # accepted/queued input has already been cleared, so empty Enter is inert.
+            deadline=time.monotonic()+10
+            while len(requests)<requests_count and time.monotonic()<deadline:
+                drain();time.sleep(.1)
+                if len(requests)<requests_count:send('\r')
             until(lambda:len(requests)==requests_count and len(ends())==turns,f'finish {requests_count}')
             time.sleep(.05);drain()
         try:
@@ -110,7 +123,9 @@ try:
             fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',30,140,0,0));os.kill(child.pid,signal.SIGWINCH);time.sleep(.1);drain()
             output.clear();send('hold\r');until(lambda:len(requests)==5,'held request')
             command('/file context.txt','Attached context.txt');output.clear();send('steered-reference\r');until(lambda:marker('Queued Steer'),'steer')
-            output.clear();send('after');send('\x1b\r');until(lambda:marker('Queued FollowUp'),'follow-up');release.set();finished(7,5)
+            # ANSI diff rendering can retain the unchanged 'Queued ' prefix from Steer.
+            # The changed kind is visible; exact delivery is asserted against requests below.
+            output.clear();send('after');send('\x1b\r');until(lambda:marker('FollowUp'),'follow-up');release.set();finished(7,5)
             assert 'steered-reference' in requests[5]['messages'][-1]['content'] and 'changed on disk' in requests[5]['messages'][-1]['content'];assert requests[6]['messages'][-1]['content']=='after'
             output.clear();submit('mutate',8);until(lambda:len(requests)==8 and marker('Approval'),'prepared approval');assert not (workspace/'never.txt').exists()
             send('\x1b[200~y\n\x1b[201~');time.sleep(.15);drain();assert len(requests)==8 and not (workspace/'never.txt').exists()

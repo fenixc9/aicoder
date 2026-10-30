@@ -623,3 +623,20 @@ cursor as user data. It does not fabricate a tool result, re-read captured pages
 or bypass later model-tool approvals. Pending captures are cancelled on navigation/detach.
 TUI preview clipping never guarantees recovery of failed archive writes. See
 [interaction contract](tui-interaction.md) and [acceptance](s5-tui-acceptance.md).
+
+## S5: unified text/image Agent input
+
+Agent run methods now take impl Into<AgentInput> instead of impl Into<String>. Ordinary
+String, &str and &String callers are unchanged. Wrappers generic over Into<String> should
+pass a concrete String (`let text: String = prompt.into()`) or change their bound to
+Into<AgentInput>. Explicit messages use AgentInput::try_from(Message); input roles and
+blocks, inline base64 shape, image count and serialized image envelope are validated.
+This does not introduce a session/event schema version: ImageSource was already part of v3.
+
+CLI/TUI enable runtime's optional images feature. Bare core/runtime consumers keep their
+prior dependency set unless they opt in. TUI controls explicitly allow 2 MiB input / 4 MiB
+pending bytes; core default queue limits stay unchanged. Queued messages undergo model and
+adapter validation before journal application; unsupported images remain pending on the
+terminal result instead of appearing as applied user history. Image-aware heuristic counts
+use explicit estimated allowances instead of counting base64 as text; visual/billed counts
+remain provider-dependent. See [image input](image-input.md) for limits and migration examples.

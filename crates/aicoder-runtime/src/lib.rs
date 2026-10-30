@@ -4,6 +4,8 @@ mod config;
 mod environment;
 pub mod exports;
 mod files;
+#[cfg(feature = "images")]
+pub mod images;
 pub mod references;
 pub mod resources;
 pub mod session;

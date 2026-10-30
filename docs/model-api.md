@@ -52,7 +52,9 @@ The adapter converts named tool selection, JSON Schema response formats,
 mixed text/images and structured tool results into their wire representation.
 Images in this adapter require user messages and HTTP(S) URLs or nonempty
 base64 data with an image media type. A capability flag enables images;
-validation of image bytes remains the remote server's responsibility.
+validation of SDK-supplied image bytes remains the remote server's responsibility. High-level
+Agent methods accept [AgentInput](image-input.md) for user text/images, and runtime offers
+optional bounded local capture/normalization; neither introduces HTTP/UI concerns into core.
 
 Reasoning returned by the server is a separate content block. Replaying it
 requires an explicitly enabled `reasoning_history` capability and an endpoint

@@ -14,7 +14,7 @@ use aicoder_core::{
 use crate::commands::{self, CommandSpec};
 
 pub enum AppEvent {
-    ReferenceReady(Box<Result<aicoder_runtime::references::PromptReference, String>>),
+    ReferenceReady(Box<Result<crate::runtime::CapturedInput, String>>),
     ModelSelected(Box<Result<aicoder_core::session::ModelSelectionReport, String>>),
     Agent(AgentRawEventEnvelope),
     TurnFinished(Box<AgentTurnOutcome>),
@@ -71,6 +71,7 @@ pub struct App {
     pub theme: crate::theme::Theme,
     pub composer_width: usize,
     pub references: Vec<aicoder_runtime::references::PromptReference>,
+    pub images: Vec<aicoder_runtime::images::ImageAttachment>,
     pub reference: Option<crate::runtime::ReferenceJob>,
     pub model_context: Option<aicoder_core::ModelContextInfo>,
     pub model_spec: Option<aicoder_core::model::ModelSpec>,
@@ -112,6 +113,7 @@ impl App {
             theme: crate::theme::Theme::default(),
             composer_width: 80,
             references: Vec::new(),
+            images: Vec::new(),
             reference: None,
             model_context: None,
             model_spec: None,
@@ -147,6 +149,9 @@ impl App {
             result.push_str(reference.encoded());
         }
         result
+    }
+    pub fn compose_input(&self, text: &str) -> anyhow::Result<aicoder_core::AgentInput> {
+        aicoder_runtime::images::input(self.compose(text), &self.images)
     }
     pub fn cost_estimate(&self) -> Option<(String, f64)> {
         if !self.cost_usage_complete
@@ -339,12 +344,13 @@ impl App {
         self.approval = None;
     }
 
-    pub fn queue_input(&mut self, kind: RunInputKind, prompt: String) -> bool {
+    pub fn queue_input(&mut self, kind: RunInputKind, input: aicoder_core::AgentInput) -> bool {
+        let prompt = input.message().text_content();
         let Some(handle) = &self.active_handle else {
             self.input.replace(prompt);
             return false;
         };
-        let message = Message::text(MessageRole::User, prompt.clone());
+        let message = input.into_message();
         let result = match kind {
             RunInputKind::Steer => handle.steer(message),
             RunInputKind::FollowUp => handle.follow_up(message),
@@ -389,7 +395,7 @@ impl App {
                 self.reference = None;
                 if !cancelled {
                     match *result {
-                        Ok(reference) => {
+                        Ok(crate::runtime::CapturedInput::Text(reference)) => {
                             let total = self
                                 .references
                                 .iter()
@@ -413,6 +419,23 @@ impl App {
                                     reference.page()["revision"]
                                 )));
                                 self.references.push(reference);
+                            }
+                        }
+                        Ok(crate::runtime::CapturedInput::Image(image)) => {
+                            let total = self
+                                .images
+                                .iter()
+                                .map(|i| i.info().normalized_bytes)
+                                .sum::<usize>()
+                                + image.info().normalized_bytes;
+                            if self.images.len() >= 4 || total > 1024 * 1024 {
+                                self.timeline.push(TimelineItem::Error("Image limit: four images / 1 MiB normalized bytes. Detach an image first.".into()));
+                            } else {
+                                self.timeline.push(TimelineItem::Notice(format!(
+                                    "Attached image {}",
+                                    image.label()
+                                )));
+                                self.images.push(image);
                             }
                         }
                         Err(error) => self.timeline.push(TimelineItem::Error(error)),
@@ -755,6 +778,7 @@ impl App {
 
         self.reference = None;
         self.references.clear();
+        self.images.clear();
         self.model_context = None;
         self.cost_usage_complete = false;
         self.preview_omitted = false;
@@ -790,6 +814,7 @@ impl App {
     pub fn load_session(&mut self, session: &Session) {
         self.reference = None;
         self.references.clear();
+        self.images.clear();
         self.model_context = None;
         self.cost_usage_complete = false;
         self.preview_omitted = false;
@@ -861,6 +886,7 @@ impl App {
     pub fn select_new_session(&mut self) {
         self.reference = None;
         self.references.clear();
+        self.images.clear();
         self.model_context = None;
         self.model_spec = None;
         self.cost_usage_complete = false;
@@ -957,6 +983,17 @@ fn push_message(timeline: &mut Vec<TimelineItem>, message: &Message) {
                     text: text.clone(),
                     open: false,
                 })
+            }
+            aicoder_core::model::ContentBlock::Image { source } => {
+                timeline.push(TimelineItem::Notice(match source {
+                    aicoder_core::model::ImageSource::Base64 { media_type, data } => format!(
+                        "[Recorded image: {media_type}, {} base64 bytes]",
+                        data.len()
+                    ),
+                    aicoder_core::model::ImageSource::Url { .. } => {
+                        "[Recorded image URL; not fetched by the TUI]".into()
+                    }
+                }))
             }
             aicoder_core::model::ContentBlock::ToolCall { call } => {
                 timeline.push(TimelineItem::Tool {
@@ -1255,7 +1292,7 @@ mod tests {
     fn slash_menu_tracks_filtering_selection_and_dismissal() {
         let mut app = App::new(Vec::new());
         app.input.insert('/');
-        assert_eq!(app.slash_suggestions().len(), 21);
+        assert_eq!(app.slash_suggestions().len(), 23);
         assert_eq!(app.selected_slash_command().unwrap().name, "exit");
 
         app.dismiss_slash_menu();

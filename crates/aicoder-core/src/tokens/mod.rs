@@ -103,6 +103,7 @@ impl TokenCounter for HeuristicTokenCounter {
         true
     }
     fn count(&self, input: TokenInput<'_>) -> Result<TokenCount, TokenFallback> {
+        let mut image_count = 0u64;
         let tokens = match input.content {
             TokenContent::Text(text) => text_tokens(text),
             TokenContent::Output(message) => message
@@ -111,6 +112,10 @@ impl TokenCounter for HeuristicTokenCounter {
                 .map(|block| match block {
                     ContentBlock::Text { text } | ContentBlock::Reasoning { text } => {
                         text_tokens(text)
+                    }
+                    ContentBlock::Image { .. } => {
+                        image_count = image_count.saturating_add(1);
+                        8192
                     }
                     _ => serialized_tokens(block),
                 })
@@ -123,7 +128,34 @@ impl TokenCounter for HeuristicTokenCounter {
             } => {
                 let mut tokens = messages
                     .iter()
-                    .map(|message| serialized_tokens(message).saturating_add(4))
+                    .map(|message| {
+                        let images = message
+                            .content
+                            .iter()
+                            .filter(|block| matches!(block, ContentBlock::Image { .. }))
+                            .count() as u64;
+                        image_count = image_count.saturating_add(images);
+                        if images == 0 {
+                            serialized_tokens(message).saturating_add(4)
+                        } else {
+                            #[derive(Serialize)]
+                            struct TextView<'a> {
+                                role: MessageRole,
+                                content: Vec<&'a ContentBlock>,
+                            }
+                            let view = TextView {
+                                role: message.role,
+                                content: message
+                                    .content
+                                    .iter()
+                                    .filter(|block| !matches!(block, ContentBlock::Image { .. }))
+                                    .collect(),
+                            };
+                            serialized_tokens(&view)
+                                .saturating_add(4)
+                                .saturating_add(8192u64.saturating_mul(images))
+                        }
+                    })
                     .fold(16u64, u64::saturating_add);
                 if let Some(tools) = tools {
                     tokens = tokens.saturating_add(serialized_tokens(tools));
@@ -139,11 +171,19 @@ impl TokenCounter for HeuristicTokenCounter {
                 tokens
             }
         };
-        Ok(TokenCount::estimated(
+        let mut count = TokenCount::estimated(
             tokens,
             input.content.scope(),
-            "heuristic_v1",
-        ))
+            if image_count == 0 {
+                "heuristic_v1"
+            } else {
+                "heuristic_v1_images"
+            },
+        );
+        if image_count > 0 {
+            count.fallback = Some(TokenFallback::UnsupportedContent);
+        }
+        Ok(count)
     }
 }
 // Counting UTF-8 leading bytes also works when serde splits multibyte text across writes.

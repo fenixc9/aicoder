@@ -38,7 +38,7 @@ No plain token summary is appended. Existing event-schema consumers can validate
 JSON output errors or incomplete bounded observer delivery fail the process; a missing
 terminal frame is not synthesized. A blocked downstream reader may receive an incomplete
 prefix and a nonzero process exit rather than unlimited buffering. JSON is an event stream,
-not the separate request/response RPC protocol planned later in S5.
+with the separate request/response [RPC protocol](rpc.md) available through `--rpc`.
 
 Tracing is explicitly sent to stderr. Credential references/routing still come from runtime;
 mode selection does not read credentials or route them through stdin.
@@ -93,5 +93,7 @@ host/filesystem work remains subject to backend behavior; signals cannot preempt
 [Acceptance](s5-cli-acceptance.md) records checks and footprint. CLI loopback tests validate
 real request bodies, final-text-only stdout, complete event traces, memory REPL continuation,
 input limits, approval/data separation and SIGINT lifecycle/exit code. No real credentials
-or remote model service are required. This completes the CLI item; RPC, Web, richer TUI,
-images and exports remain separate S5 work.
+or remote model service are required. Later S5 increments add [RPC](rpc.md), [Web](web.md),
+[TUI interaction](tui-interaction.md), [images](image-input.md) and [exports](session-exports.md).
+Repeatable `--image FILE` captures local images for the initial prompt (including image-only
+input); file/normalization reports stay on stderr. Image limits and model support are explicit.

@@ -20,6 +20,8 @@ pub enum SlashCommand {
     Model,
     Thinking,
     File,
+    Image,
+    Unimage,
     Detach,
     Theme,
     Usage,
@@ -189,6 +191,20 @@ const COMMANDS: &[CommandSpec] = &[
         description: "Inspect context counts and base-rate estimate",
         arguments: ArgumentPolicy::None,
     },
+    CommandSpec {
+        command: SlashCommand::Image,
+        name: "image",
+        usage: "/image PATH",
+        description: "Capture a bounded normalized static image",
+        arguments: ArgumentPolicy::Required,
+    },
+    CommandSpec {
+        command: SlashCommand::Unimage,
+        name: "unimage",
+        usage: "/unimage [INDEX|all]",
+        description: "Remove pending images",
+        arguments: ArgumentPolicy::Optional,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -275,7 +291,7 @@ mod tests {
 
     #[test]
     fn registry_exposes_metadata_for_every_command() {
-        assert_eq!(all().len(), 21);
+        assert_eq!(all().len(), 23);
         assert_eq!(all()[0].usage, "/exit");
         assert!(!all()[0].description.is_empty());
     }
@@ -308,7 +324,9 @@ mod tests {
                 "file",
                 "detach",
                 "theme",
-                "usage"
+                "usage",
+                "image",
+                "unimage"
             ]
         );
         assert_eq!(

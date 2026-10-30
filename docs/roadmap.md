@@ -1,6 +1,6 @@
 # aicoder 路线图
 
-状态：S0、S1、S2、S3、S4 已完成当前 Linux 范围验收；当前阶段 S5。本文替代旧 TODO 的排期。
+状态：S0、S1、S2、S3、S4、S5 已完成当前 Linux 范围验收；下一阶段 S6。本文替代旧 TODO 的排期。
 基线和验证依据见 [S0 开发基线](development-baseline.md)。
 S1 的统一模型契约已贯穿执行器、工具、会话、CLI/TUI 和 bench，wire types 已移至
 providers；部分结果、任务预算和 provider 配置均已接通。S1 验收见 [验收记录](s1-acceptance.md)。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
@@ -217,7 +217,8 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 - [x] TUI：多行/历史、文件引用、命令面板、模型切换与思考级别、分支、审批 diff、steer/follow-up，
   展示 usage、上下文占用及可选成本；主题配置保持独立。
   见 [交互契约](tui-interaction.md) 与 [验收记录](s5-tui-acceptance.md)；思考级别沿用 [统一 API](reasoning-controls.md)。
-- [ ] 图片内容通过统一消息 API 进入；TUI/CLI 明确文件限制及 provider 能力。
+- [x] 图片内容通过统一消息 API 进入；TUI/CLI 明确文件限制及 provider 能力。
+  见 [图片输入契约](image-input.md) 与 [图片 / S5 全项验收](s5-images-acceptance.md)。
 - [x] 版本化 stdin/stdout RPC：request ID、控制命令、响应、事件和错误；
   日志只去 stderr/文件，不能污染协议输出。
   见 [RPC v1 契约](rpc.md) 与 [验收记录](s5-rpc-acceptance.md)。
@@ -227,8 +228,9 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 - [x] JSON/HTML 本地导出；分享功能作为显式调用的发布 adapter。
   导出全部规范分支、保留中断状态；见 [导出契约](session-exports.md) 与 [验收记录](s5-exports-acceptance.md)。
 
-验收：同一 scripted case 可经 SDK、CLI JSON、RPC、Web 示例执行，并产生一致的
-规范化结果；TUI 只适配输入展示，不复制执行逻辑。
+验收：同一 scripted case 已经 SDK、CLI JSON、RPC、Web 示例执行，并产生一致的
+规范化结果；TUI 只适配输入展示，不复制执行逻辑。当前 Linux 范围验证通过，
+见 [S5 全项验收](s5-images-acceptance.md)；下一阶段是 S6，完整 Pi 对标和最终 bench 仍未完成。
 
 ### S6：扩展机制与 Pi 剩余能力
 
@@ -271,4 +273,4 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 - 跨 crate 改动通过 fmt、Clippy、workspace tests；公共文档和示例同步更新。
 - 新依赖说明用途与默认构建成本；宿主可选能力不进入 core 的强制依赖。
 - API/会话格式变更写明迁移，旧入口只在迁移期保留；不维护两套独立执行循环。
-- S4 已完成当前 Linux 范围验收；当前执行 **S5**；按验收结果逐阶段推进，不并行堆叠后续功能。
+- S5 已完成当前 Linux 范围验收；下一阶段 **S6**；按验收结果逐阶段推进，不并行堆叠后续功能。

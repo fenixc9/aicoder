@@ -45,6 +45,11 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
     } else {
         cli.input.clone()
     };
+    let initial = if initial.is_none() && !cli.images.is_empty() {
+        Some(String::new())
+    } else {
+        initial
+    };
     let initial = if !cli.repl && initial.is_none() {
         Some(cli.prompt.clone())
     } else {
@@ -52,9 +57,36 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
     };
     if let Some(prompt) = &initial {
         anyhow::ensure!(
-            prompt.len() <= input::MAX_INPUT && !prompt.trim().is_empty(),
+            prompt.len() <= input::MAX_INPUT
+                && (!prompt.trim().is_empty() || !cli.images.is_empty()),
             "prompt must be nonempty and fit 1 MiB"
         );
+    }
+    anyhow::ensure!(cli.images.len() <= 4, "at most four initial images");
+    let mut pending_images = Vec::new();
+    for path in &cli.images {
+        let path = path
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("image path requires UTF-8"))?;
+        let context = TurnExecutionContext::new();
+        let limits = aicoder_runtime::images::ImageLimits {
+            max_output_bytes: (1024 * 1024 / cli.images.len()).min(512 * 1024),
+            ..Default::default()
+        };
+        let result = cancellable(
+            context.clone(),
+            runtime.read_image(path, limits, context.clone()),
+        )
+        .await?;
+        if context.is_cancelled() {
+            return Err(input::Interrupted.into());
+        }
+        let image = result?;
+        eprintln!(
+            "[Image] {}",
+            aicoder_core::redaction::sanitize_text(&image.label(), 2048)
+        );
+        pending_images.push(image);
     }
     let builder = runtime.executor_builder(Arc::new(runtime.session_client()?))?;
     let executor = if cli.yes {
@@ -135,7 +167,7 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
         if cli.repl && matches!(prompt.trim(), "/exit" | "/quit") {
             break;
         }
-        if prompt.trim().is_empty() {
+        if prompt.trim().is_empty() && pending_images.is_empty() {
             continue;
         }
         let prepared = match runtime.prepare_prompt(&prompt) {
@@ -146,6 +178,15 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
             }
             Err(error) => return Err(error),
         };
+        let prepared_input = match aicoder_runtime::images::input(prepared.text, &pending_images) {
+            Ok(input) => input,
+            Err(error) if cli.repl => {
+                eprintln!("{error}");
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        pending_images.clear();
         let handler: Arc<dyn AgentEventHandler> = if cli.json {
             json.as_ref().expect("JSON writer").clone()
         } else if cli.print {
@@ -162,7 +203,7 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
                         .run_with_session_outcome(
                             repo,
                             turn_selection.clone(),
-                            prepared.text,
+                            prepared_input,
                             handler,
                             context.clone(),
                         )
@@ -170,7 +211,7 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
                 }
                 None => {
                     agent
-                        .run_outcome(prepared.text, handler, context.clone())
+                        .run_outcome(prepared_input, handler, context.clone())
                         .await
                 }
             }

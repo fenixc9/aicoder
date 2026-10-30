@@ -280,8 +280,9 @@ fn draw_input(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let visible = usize::from(area.height.saturating_sub(2).max(1));
     let top = view.y.saturating_sub(visible - 1);
     let files = format!(
-        " {} file pages{} | Ctrl+O newline  Ctrl+P/N history  Enter send ",
+        " {} files / {} images{} | Ctrl+O newline  Ctrl+P/N history  Enter send ",
         app.references.len(),
+        app.images.len(),
         if app.reference.is_some() {
             " (capturing)"
         } else {

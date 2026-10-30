@@ -70,6 +70,9 @@
   input; keep continuation metadata and reject late captures after cancellation/navigation.
   Themes stay outside runtime/core settings. Unknown prices or incomplete usage cannot become
   billed cost; display counting scope/precision and distinguish previews from persisted data.
+- Local images are explicit bounded immutable user snapshots. Keep codecs in optional runtime
+  features; never fetch image URLs implicitly or count base64 as text tokens. Validate queued
+  input capabilities before journal application, and keep cancelled captures out of drafts.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

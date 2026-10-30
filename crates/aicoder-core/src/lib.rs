@@ -4,6 +4,8 @@
 //! CLI, TUI, server, or embedded application can choose its own configuration and presentation.
 
 pub mod agent;
+pub mod agent_input;
+pub use agent_input::AgentInput;
 pub mod cancellation;
 pub mod completion;
 pub mod context;

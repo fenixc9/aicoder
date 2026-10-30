@@ -585,6 +585,7 @@ impl TurnExecutor {
                 journal,
                 InputBoundary::BeforeModel,
                 &round_events,
+                |messages, message| self.validate_control_input(&request, messages, message),
             )
             .await?;
             progress.stage = RunStage::Compaction;
@@ -1101,6 +1102,9 @@ impl TurnExecutor {
                                     round_limit: self.config.max_rounds,
                                 },
                                 &round_events,
+                                |messages, message| {
+                                    self.validate_control_input(&request, messages, message)
+                                },
                             )
                             .await?
                         {
@@ -1225,6 +1229,24 @@ impl TurnExecutor {
         }
         .into())
     }
+    fn validate_control_input(
+        &self,
+        request: &ModelRequest,
+        messages: &[Message],
+        message: &Message,
+    ) -> Result<()> {
+        let input = crate::AgentInput::try_from(message.clone())?;
+        let spec = self.provider.model_spec(&request.model)?;
+        let mut projected = crate::tokens::model_messages(messages, &spec).into_owned();
+        projected.push(input.into_message());
+        let mut check = ModelRequest::new(&request.model, projected);
+        check.tools.clone_from(&request.tools);
+        check.tool_choice.clone_from(&request.tool_choice);
+        check.options.clone_from(&request.options);
+        check.stream = request.stream;
+        self.provider.validate_request(&check)?;
+        Ok(())
+    }
 }
 
 enum InputBoundary {
@@ -1238,6 +1260,7 @@ async fn apply_inputs(
     journal: &dyn crate::RunJournal,
     boundary: InputBoundary,
     events: &AgentEventEmitter,
+    validate: impl Fn(&[Message], &Message) -> Result<()>,
 ) -> Result<bool> {
     let Some(control) = &context.control else {
         return Ok(false);
@@ -1262,6 +1285,7 @@ async fn apply_inputs(
             }
             .into());
         }
+        validate(messages, &input.message)?;
         let index = progress.messages.len();
         progress.messages.push(input.message.clone());
         tokio::select! {

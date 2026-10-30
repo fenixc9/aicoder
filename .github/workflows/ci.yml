@@ -77,6 +77,11 @@ jobs:
           python3 scripts/check_reasoning_tui.py
       - name: Real TUI composer, references, approvals and controls
         run: python3 scripts/check_tui_interaction.py
+      - name: Bounded offline image input
+        run: |
+          cargo run --locked -p aicoder-runtime --features images --example offline_images
+          cargo build --locked -p aicoder-cli -p aicoder-tui
+          python3 scripts/check_images.py
       - name: Build optional Web and SDK parity entry
         run: cargo build --locked -p aicoder-cli -p aicoder-web --features server --bins --examples
       - name: SDK, CLI JSON, RPC and Web consistency

@@ -54,9 +54,13 @@ impl ActiveRun {
     }
 }
 
+pub enum CapturedInput {
+    Text(aicoder_runtime::references::PromptReference),
+    Image(aicoder_runtime::images::ImageAttachment),
+}
 pub struct ReferenceJob {
     pub context: TurnExecutionContext,
-    completed: oneshot::Receiver<Result<aicoder_runtime::references::PromptReference, String>>,
+    completed: oneshot::Receiver<Result<CapturedInput, String>>,
 }
 impl ReferenceJob {
     pub async fn recv(&mut self) -> AppEvent {
@@ -122,10 +126,36 @@ impl AgentRuntime {
             let result = runtime
                 .read_reference(&path, worker)
                 .await
+                .map(CapturedInput::Text)
                 .map_err(|error| aicoder_core::redaction::sanitize_text(&error.to_string(), 2048));
             let _ = sent.send(result);
         });
         ReferenceJob { context, completed }
+    }
+    pub fn start_image(&self, path: String, context: TurnExecutionContext) -> ReferenceJob {
+        let runtime = self.runtime.clone();
+        let worker = context.clone();
+        let (sent, completed) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = runtime
+                .read_image(&path, Default::default(), worker)
+                .await
+                .map(CapturedInput::Image)
+                .map_err(|e| aicoder_core::redaction::sanitize_text(&e.to_string(), 2048));
+            let _ = sent.send(result);
+        });
+        ReferenceJob { context, completed }
+    }
+    pub fn supports_images(&self, selection: &SessionSelection) -> Result<bool> {
+        let model = match selection {
+            SessionSelection::Existing(id) => self
+                .open_run_session(id)?
+                .selected_model()
+                .map(|(_, m)| m.to_string())
+                .unwrap_or_else(|| self.runtime.config().provider.model.clone()),
+            _ => self.runtime.config().provider.model.clone(),
+        };
+        Ok(self.provider.model_spec(&model)?.capabilities.images)
     }
     pub fn model_spec(&self, model: &str) -> Result<aicoder_core::model::ModelSpec> {
         Ok(self.provider.model_spec(model)?)
@@ -467,7 +497,7 @@ impl AgentRuntime {
     pub fn start_turn(
         &self,
         selection: SessionSelection,
-        prompt: String,
+        prompt: aicoder_core::AgentInput,
         reasoning: Option<Option<aicoder_core::model::ReasoningEffort>>,
         control: RunControl,
     ) -> Result<ActiveRun> {
