@@ -16,6 +16,7 @@ pub struct FileArtifactStore {
     root: PathBuf,
     workspace: PathBuf,
     limits: ArtifactLimits,
+    lock_timeout: Duration,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -54,7 +55,17 @@ impl FileArtifactStore {
             },
             workspace,
             limits: limits.validate()?,
+            lock_timeout: Duration::from_millis(100),
         })
+    }
+    /// Bound metadata-lock contention using trusted host policy, without changing IO timeouts.
+    pub fn with_lock_timeout(mut self, timeout: Duration) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            (Duration::from_millis(1)..=Duration::from_secs(5)).contains(&timeout),
+            "Artifact lock timeout must be 1 ms to 5 s"
+        );
+        self.lock_timeout = timeout;
+        Ok(self)
     }
     fn initialize(&self) -> Result<(), ArtifactError> {
         fs::create_dir_all(&self.root).map_err(storage)?;
@@ -80,7 +91,7 @@ impl FileArtifactStore {
         if !file.metadata().map_err(storage)?.is_file() {
             return Err(ArtifactError::new("invalid_storage"));
         }
-        let deadline = std::time::Instant::now() + Duration::from_millis(100);
+        let deadline = std::time::Instant::now() + self.lock_timeout;
         loop {
             match file.try_lock_exclusive() {
                 Ok(()) => return Ok(file),

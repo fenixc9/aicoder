@@ -419,6 +419,11 @@ impl FilePlan {
 }
 #[async_trait]
 impl PreparedTool for FilePlan {
+    fn effects(&self) -> aicoder_core::tools::PreparedToolEffects<'_> {
+        aicoder_core::tools::PreparedToolEffects::FileMutation {
+            paths: std::slice::from_ref(&self.target.path),
+        }
+    }
     fn preview(&self) -> ToolPreview {
         self.preview.clone()
     }

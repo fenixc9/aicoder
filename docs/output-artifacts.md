@@ -69,7 +69,10 @@ A stream archive is complete only after EOF and while all its bytes fit its arch
 The cap preserves a partial prefix and sets `complete: false`; it does not stop the
 command. A scan/time/capture stop can also leave partial artifacts, independently of exit
 code. Storage errors disable archiving for that stream while normal bounded capture
-continues. Begin/write/finish operations each have a 250 ms IO bound; command/tool/run
+continues. Begin/write/finish operations each default to a 250 ms IO bound. Trusted hosts can use
+ConfiguredBash::with_archive_timeout (1 ms–5 s) for a different storage budget; it is not a
+model tool argument and does not extend pipe draining, process cleanup or command deadlines.
+Command/tool/run
 deadlines still apply. Dropping/cancelling the shell discards unpublished staging and
 retains the existing process cleanup path. No partial file is published as a complete
 artifact. A process disappearance may lose unrecorded bytes/references.
@@ -98,7 +101,9 @@ no-follow opens, a mode 0700 root directory/0600 files and bounded footer parsin
 model-facing path. This is workspace scoping, not per-session secrecy or an OS sandbox;
 approved Bash still has the user's filesystem permissions.
 
-Admission uses a short OS lock and accounts other-process reservations. A staged sparse
+Admission uses a short OS lock and accounts other-process reservations. The default wait is
+100 ms; FileArtifactStore::with_lock_timeout permits a trusted 1 ms–5 s bound without eagerly
+creating storage. Capture and lock budgets are independent, and defaults remain unchanged. A staged sparse
 file reserves the per-artifact cap; its own OS lock distinguishes live writers from stale
 process remnants. Complete records contain payload plus a bounded footer and are synced
 before atomic rename under admission ownership. Directory scanning is bounded. Completed

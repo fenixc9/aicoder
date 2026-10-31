@@ -248,7 +248,8 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 - [x] 宿主暴露 UI capability 接口：通知、选择、输入、状态、命令；
   原生宿主的 TUI/Web 适配与无 UI 回退已验收；通道有界、取消后失效，UI 答案不能赋予工具权限。
   见 [UI 契约](extension-ui.md) 与 [验收记录](s6-ui-acceptance.md)；core 不依赖终端或 Web 类型。
-- [ ] 提供 plan、子 Agent、保护路径等扩展示例，验证扩展无需 fork 执行循环。
+- [x] 提供 plan、子 Agent、保护路径等扩展示例，验证扩展无需 fork 执行循环。
+  同一 core 支持规划拦截、已准备目标保护及独立有界只读 worker；见 [示例契约](coding-extension-examples.md) 与 [验收记录](s6-coding-examples-acceptance.md)。
 - [ ] 可选 Code Mode 通过受限组合执行器调用已注册工具；
   若需要 JS 引擎，放到独立可选组件，工具调用仍经过相同审批、取消、预算和记录。
 

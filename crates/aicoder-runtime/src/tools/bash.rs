@@ -77,10 +77,21 @@ impl ShellLimits {
     }
 }
 pub struct ConfiguredBash {
+    archive_timeout: Duration,
     limits: ShellLimits,
     variables: Vec<String>,
 }
 impl ConfiguredBash {
+    /// Trusted host budget per archive IO operation; independent of model shell arguments.
+    pub fn with_archive_timeout(mut self, timeout: Duration) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            (Duration::from_millis(1)..=Duration::from_secs(5)).contains(&timeout),
+            "Archive timeout must be 1 ms to 5 s"
+        );
+        self.archive_timeout = timeout;
+        Ok(self)
+    }
+
     pub fn excluding_environment(mut self, variables: Vec<String>) -> Self {
         self.variables = variables;
         self
@@ -89,6 +100,7 @@ impl ConfiguredBash {
 impl BashTool {
     pub fn excluding_environment(variables: Vec<String>) -> ConfiguredBash {
         ConfiguredBash {
+            archive_timeout: Duration::from_millis(250),
             limits: ShellLimits::default(),
             variables,
         }
@@ -98,6 +110,7 @@ impl BashTool {
             .validate()
             .map_err(|error| anyhow::anyhow!(error.message))?;
         Ok(ConfiguredBash {
+            archive_timeout: Duration::from_millis(250),
             limits,
             variables: Vec::new(),
         })
@@ -141,7 +154,14 @@ impl ExecutableTool for BashTool {
         context: &ToolContext,
         args: Value,
     ) -> Result<ToolSuccess, ToolFailure> {
-        execute(context, args, ShellLimits::default(), &[]).await
+        execute(
+            context,
+            args,
+            ShellLimits::default(),
+            &[],
+            Duration::from_millis(250),
+        )
+        .await
     }
 }
 #[async_trait]
@@ -157,7 +177,14 @@ impl ExecutableTool for ConfiguredBash {
         context: &ToolContext,
         args: Value,
     ) -> Result<ToolSuccess, ToolFailure> {
-        execute(context, args, self.limits, &self.variables).await
+        execute(
+            context,
+            args,
+            self.limits,
+            &self.variables,
+            self.archive_timeout,
+        )
+        .await
     }
 }
 async fn execute(
@@ -165,6 +192,7 @@ async fn execute(
     args: Value,
     limits: ShellLimits,
     excluded: &[String],
+    archive_timeout: Duration,
 ) -> Result<ToolSuccess, ToolFailure> {
     limits.validate()?;
     let args: Arguments = parse_arguments(args)?;
@@ -193,8 +221,9 @@ async fn execute(
             "Shell output budget must be at least 1024 bytes for a complete result",
         ));
     }
-    let mut captures =
-        Captures::new(output_limit / 2).with_store(context.artifact_store().cloned());
+    let mut captures = Captures::new(output_limit / 2)
+        .with_store(context.artifact_store().cloned())
+        .with_archive_timeout(archive_timeout);
     if context.tool_timeout().is_zero() {
         return finish(
             captures,

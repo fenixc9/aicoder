@@ -32,6 +32,8 @@ jobs:
         run: cargo run --locked -p aicoder-core --example model_provider
       - name: Native extension registration and plan guard
         run: cargo run --locked -p aicoder-core --example native_extensions
+      - name: Planning, protected paths and read-only worker Agent extensions
+        run: cargo run --locked -p aicoder-runtime --example coding_extensions
       - name: Versioned process tools and owned-plan approval
         run: |
           cargo build --locked -p aicoder-runtime --features process-extension-fixtures --bin aicoder-process-fixture

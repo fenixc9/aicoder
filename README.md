@@ -37,6 +37,8 @@ and legacy initialization, with bounded discovery, host approvals and scoped med
 frozen reload generations and public session state; executable activation remains explicit
 in SDK hosts. [Extension UI](docs/extension-ui.md) provides scoped native notifications, questions, input,
 status and commands with real TUI/Web adapters and explicit headless behavior.
+[Coding extension examples](docs/coding-extension-examples.md) demonstrate planning, guarded
+prepared paths and explicitly managed read-only worker Agents over the same loop.
 Canonical sessions support [bounded JSON/HTML exports](docs/session-exports.md), with
 explicit publication adapters and no automatic third-party sharing.
 The [provider-neutral model API](docs/model-api.md) is shared by the agent

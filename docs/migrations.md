@@ -735,3 +735,24 @@ open stdin for UI; extensions use an explicit Unsupported fallback. See [UI cont
 
 Interactive commands may declare up to 600 seconds; context/tool hooks retain the existing
 30-second bound. No callback can bypass owner cancellation or UI admission limits.
+
+
+## S6: prepared effects and coding extension examples
+
+PreparedTool gains a default effects() -> PreparedToolEffects borrowed view. Existing plans
+remain Unknown; no implementer change is required. Runtime write/edit replacements declare
+their captured absolute targets. This is host metadata, not authorization, serialized domain
+state or generic proof of side effects. Policy wrappers can fail closed for unknown operations
+while retaining the same preview/owned plan and the backend's conflict checks. See the
+[copyable planning, protection and worker examples](coding-extension-examples.md).
+
+No default extension/tool, new dependency, session/event schema or mandatory runtime is added.
+Read-only workers are explicit host command jobs with their own core budgets, canonical sessions,
+trace and usage; they are not an unaccounted nested model tool or a restored authorization scope.
+
+
+Host storage budgets are now configurable through ConfiguredBash::with_archive_timeout and
+FileArtifactStore::with_lock_timeout, each with a 1 ms–5 s hard bound. Defaults remain 250 ms
+and 100 ms. The additions preserve shell input/output/session formats and do not alter
+process/pipe cleanup limits or retry completed operations. Explicit positive-test budgets
+avoid mistaking slow disk finalization for a missing-archive implementation failure.

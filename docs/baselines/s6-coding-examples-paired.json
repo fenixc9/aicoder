@@ -1,0 +1,419 @@
+{
+  "schema_version": 1,
+  "parent_revision": "e0e6fb82d81e511329d7ba047b6cf1957c0b8f77",
+  "current_source_sha256": "ad1a6c519f3837905eb109459995bdf331eaa6fb1b0408049b75ba3c4e33ac2f",
+  "iterations_per_process": 25,
+  "ordering": "Four predeclared pairs, alternating parent/current then current/parent. All observations retained.",
+  "samples": [
+    {
+      "pair": 1,
+      "variant": "parent",
+      "wall_ms": 597.8218233212829,
+      "case_ms": {
+        "Edit": {
+          "median": 3.841,
+          "max": 7.709,
+          "sum": 99.583
+        },
+        "Search": {
+          "median": 0.513,
+          "max": 0.617,
+          "sum": 12.079
+        },
+        "ToolFailure": {
+          "median": 0.246,
+          "max": 0.289,
+          "sum": 5.813999999999999
+        },
+        "Cancel": {
+          "median": 0.145,
+          "max": 0.185,
+          "sum": 3.4950000000000006
+        },
+        "SessionResume": {
+          "median": 9.692,
+          "max": 215.959,
+          "sum": 448.07400000000007
+        }
+      },
+      "slowest_cases": [
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 215.959
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.757
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.572
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.05
+        }
+      ]
+    },
+    {
+      "pair": 1,
+      "variant": "current",
+      "wall_ms": 393.3658543974161,
+      "case_ms": {
+        "Edit": {
+          "median": 3.982,
+          "max": 4.537,
+          "sum": 97.98700000000001
+        },
+        "Search": {
+          "median": 0.512,
+          "max": 0.765,
+          "sum": 12.647000000000004
+        },
+        "ToolFailure": {
+          "median": 0.248,
+          "max": 0.33,
+          "sum": 6.21
+        },
+        "Cancel": {
+          "median": 0.154,
+          "max": 0.181,
+          "sum": 3.7669999999999995
+        },
+        "SessionResume": {
+          "median": 9.807,
+          "max": 10.156,
+          "sum": 242.26399999999995
+        }
+      },
+      "slowest_cases": [
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.156
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.149
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.104
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.028
+        }
+      ]
+    },
+    {
+      "pair": 2,
+      "variant": "current",
+      "wall_ms": 387.72791624069214,
+      "case_ms": {
+        "Edit": {
+          "median": 3.94,
+          "max": 4.179,
+          "sum": 96.53399999999999
+        },
+        "Search": {
+          "median": 0.521,
+          "max": 0.583,
+          "sum": 12.280000000000001
+        },
+        "ToolFailure": {
+          "median": 0.237,
+          "max": 0.297,
+          "sum": 5.7780000000000005
+        },
+        "Cancel": {
+          "median": 0.149,
+          "max": 0.213,
+          "sum": 3.6350000000000007
+        },
+        "SessionResume": {
+          "median": 9.708,
+          "max": 10.321,
+          "sum": 240.455
+        }
+      },
+      "slowest_cases": [
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.321
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.136
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.116
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.113
+        }
+      ]
+    },
+    {
+      "pair": 2,
+      "variant": "parent",
+      "wall_ms": 372.1899213269353,
+      "case_ms": {
+        "Edit": {
+          "median": 3.709,
+          "max": 4.141,
+          "sum": 93.11200000000002
+        },
+        "Search": {
+          "median": 0.435,
+          "max": 0.572,
+          "sum": 10.94
+        },
+        "ToolFailure": {
+          "median": 0.198,
+          "max": 0.284,
+          "sum": 5.2620000000000005
+        },
+        "Cancel": {
+          "median": 0.122,
+          "max": 0.158,
+          "sum": 3.1420000000000003
+        },
+        "SessionResume": {
+          "median": 9.278,
+          "max": 11.179,
+          "sum": 234.321
+        }
+      },
+      "slowest_cases": [
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 11.179
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.3
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 9.894
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 9.599
+        }
+      ]
+    },
+    {
+      "pair": 3,
+      "variant": "parent",
+      "wall_ms": 398.9470424130559,
+      "case_ms": {
+        "Edit": {
+          "median": 3.932,
+          "max": 4.307,
+          "sum": 98.032
+        },
+        "Search": {
+          "median": 0.49,
+          "max": 0.592,
+          "sum": 12.265000000000002
+        },
+        "ToolFailure": {
+          "median": 0.247,
+          "max": 0.363,
+          "sum": 6.196
+        },
+        "Cancel": {
+          "median": 0.151,
+          "max": 0.235,
+          "sum": 3.751
+        },
+        "SessionResume": {
+          "median": 9.904,
+          "max": 11.576,
+          "sum": 248.47900000000007
+        }
+      },
+      "slowest_cases": [
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 11.576
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 11.352
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.788
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.089
+        }
+      ]
+    },
+    {
+      "pair": 3,
+      "variant": "current",
+      "wall_ms": 386.49939838796854,
+      "case_ms": {
+        "Edit": {
+          "median": 3.835,
+          "max": 4.084,
+          "sum": 95.143
+        },
+        "Search": {
+          "median": 0.512,
+          "max": 0.559,
+          "sum": 12.194000000000003
+        },
+        "ToolFailure": {
+          "median": 0.248,
+          "max": 0.298,
+          "sum": 6.042
+        },
+        "Cancel": {
+          "median": 0.149,
+          "max": 0.19,
+          "sum": 3.6199999999999997
+        },
+        "SessionResume": {
+          "median": 9.694,
+          "max": 10.088,
+          "sum": 239.17899999999997
+        }
+      },
+      "slowest_cases": [
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.088
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.045
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.001
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.001
+        }
+      ]
+    },
+    {
+      "pair": 4,
+      "variant": "current",
+      "wall_ms": 620.687048882246,
+      "case_ms": {
+        "Edit": {
+          "median": 3.883,
+          "max": 115.398,
+          "sum": 207.202
+        },
+        "Search": {
+          "median": 0.48,
+          "max": 0.597,
+          "sum": 11.964
+        },
+        "ToolFailure": {
+          "median": 0.246,
+          "max": 0.368,
+          "sum": 5.827
+        },
+        "Cancel": {
+          "median": 0.146,
+          "max": 0.236,
+          "sum": 3.5029999999999997
+        },
+        "SessionResume": {
+          "median": 9.593,
+          "max": 129.609,
+          "sum": 363.487
+        }
+      },
+      "slowest_cases": [
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 129.609
+        },
+        {
+          "case": "Edit",
+          "elapsed_ms": 115.398
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 12.417
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 11.421
+        }
+      ]
+    },
+    {
+      "pair": 4,
+      "variant": "parent",
+      "wall_ms": 391.5401306003332,
+      "case_ms": {
+        "Edit": {
+          "median": 3.772,
+          "max": 6.628,
+          "sum": 99.83599999999998
+        },
+        "Search": {
+          "median": 0.504,
+          "max": 0.639,
+          "sum": 12.042999999999997
+        },
+        "ToolFailure": {
+          "median": 0.243,
+          "max": 0.277,
+          "sum": 5.73
+        },
+        "Cancel": {
+          "median": 0.147,
+          "max": 0.176,
+          "sum": 3.409
+        },
+        "SessionResume": {
+          "median": 9.581,
+          "max": 12.389,
+          "sum": 242.31799999999998
+        }
+      },
+      "slowest_cases": [
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 12.389
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 11.329
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 10.061
+        },
+        {
+          "case": "SessionResume",
+          "elapsed_ms": 9.868
+        }
+      ]
+    }
+  ],
+  "median_wall_ms": {
+    "parent": 395.24358650669456,
+    "current": 390.5468853190541
+  },
+  "limitations": [
+    "One host and toolchain, no cache clearing or allocator instrumentation.",
+    "Parent was separately built in an isolated temporary target; build cost is not compared.",
+    "Both variants show IO-sensitive outliers. Exact kernel scheduling/disk cause is unassigned.",
+    "No real-provider latency or coding success measurement."
+  ]
+}

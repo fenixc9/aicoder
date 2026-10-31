@@ -74,9 +74,19 @@ pub trait ExecutableTool: Send + Sync {
     ) -> Result<ToolSuccess, ToolFailure>;
 }
 
+/// Host-declared effects of an owned operation, not an authorization or OS sandbox proof.
+/// Mutation guards should fail closed for Unknown and retain the same plan after checking.
+#[derive(Debug, Clone, Copy)]
+pub enum PreparedToolEffects<'a> {
+    Unknown,
+    FileMutation { paths: &'a [std::path::PathBuf] },
+}
 /// An immutable operation prepared before approval and consumed once after approval.
 #[async_trait]
 pub trait PreparedTool: Send + Sync {
+    fn effects(&self) -> PreparedToolEffects<'_> {
+        PreparedToolEffects::Unknown
+    }
     fn preview(&self) -> super::ToolPreview;
     async fn execute(self: Box<Self>, context: &ToolContext) -> Result<ToolSuccess, ToolFailure>;
 }

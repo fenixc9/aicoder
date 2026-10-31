@@ -168,3 +168,13 @@ cargo run --locked -p aicoder-runtime --example offline_shell -- --capture-bytes
 The first example exercises real shell calls in a scripted three-round model loop;
 the second measures bounded capture without printing the large log. See
 [verification and measurements](s3-shell-acceptance.md) and [migration](migrations.md).
+
+
+Trusted SDK hosts can independently set ConfiguredBash::with_archive_timeout between 1 ms
+and 5 s for each artifact begin/write/finish operation (default 250 ms). FileArtifactStore's
+with_lock_timeout separately bounds admission/publication contention (default 100 ms).
+These are explicit host storage budgets, never model arguments or credential settings.
+They do not change process signalling/reaping or the 250 ms pipe-drain limit. A timed-out
+archive remains incomplete/absent with its existing error code; completed commands are not
+repeated. Positive filesystem tests declare storage budgets rather than assume every disk
+flush fits the fast default, and still require immutable references and exact bytes.

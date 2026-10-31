@@ -14,7 +14,9 @@ pub use approval::{
     ApprovalSource, DenyAllApproval, MAX_TOOL_PREVIEW_BYTES, ToolInvocation, ToolPreview,
 };
 pub use context::ToolContext;
-pub use core::{ExecutableTool, PreparedTool, ToolCapability, ToolFailure, ToolSuccess};
+pub use core::{
+    ExecutableTool, PreparedTool, PreparedToolEffects, ToolCapability, ToolFailure, ToolSuccess,
+};
 pub use dispatcher::{DispatcherConfig, ToolDispatcher};
 pub use registry::ToolRegistry;
 

@@ -5,6 +5,12 @@ use aicoder_runtime::{
 };
 use serde_json::json;
 use std::{sync::Arc, time::Duration};
+fn archived_shell() -> aicoder_runtime::tools::ConfiguredBash {
+    BashTool::with_limits(ShellLimits::default())
+        .unwrap()
+        .with_archive_timeout(Duration::from_secs(2))
+        .unwrap()
+}
 fn store(root: &std::path::Path, workspace: &std::path::Path) -> Arc<FileArtifactStore> {
     Arc::new(
         FileArtifactStore::new(
@@ -16,6 +22,8 @@ fn store(root: &std::path::Path, workspace: &std::path::Path) -> Arc<FileArtifac
                 max_artifacts: 16,
             },
         )
+        .unwrap()
+        .with_lock_timeout(Duration::from_secs(1))
         .unwrap(),
     )
 }
@@ -128,12 +136,15 @@ async fn shell_archive_keeps_hidden_middle_bytes_and_small_outputs_create_no_fil
         .unwrap();
     assert!(small.artifacts.is_empty());
     assert!(!storage.path().join(".lock").exists());
-    let output=BashTool.execute(&context,json!({"command":"printf 'head\\n'; printf '%050000d' 0; printf '\\000\\377MIDDLE'; printf '%050000d' 0; printf 'tail\\n'"})).await.unwrap();
+    let output=archived_shell().execute(&context,json!({"command":"printf 'head\\n'; printf '%050000d' 0; printf '\\000\\377MIDDLE'; printf '%050000d' 0; printf 'tail\\n'"})).await.unwrap();
     let details: ShellOutput = serde_json::from_value(output.output.clone()).unwrap();
     assert!(details.truncated && details.output_complete);
     assert!(output.output.to_string().len() <= 4096);
     assert!(!details.stdout.contains("MIDDLE"));
-    let reference = details.stdout_artifact.unwrap();
+    let reference = details
+        .stdout_artifact
+        .clone()
+        .unwrap_or_else(|| panic!("Missing stdout archive: {details:?}"));
     assert!(reference.complete);
     assert_eq!(
         output.artifacts.as_slice(),
@@ -163,7 +174,7 @@ async fn archive_cap_is_partial_without_stopping_a_successful_command() {
     let context = ToolContext::new(workspace.path(), Duration::from_secs(5), 1024)
         .unwrap()
         .with_artifact_store(store.clone());
-    let success = BashTool
+    let success = archived_shell()
         .execute(
             &context,
             json!({"command":"printf '%010000d' 0; printf FINAL"}),
@@ -173,7 +184,10 @@ async fn archive_cap_is_partial_without_stopping_a_successful_command() {
     let output: ShellOutput = serde_json::from_value(success.output).unwrap();
     assert_eq!(output.exit_code, Some(0));
     assert!(output.output_complete);
-    let reference = output.stdout_artifact.unwrap();
+    let reference = output
+        .stdout_artifact
+        .clone()
+        .unwrap_or_else(|| panic!("Missing stdout archive: {output:?}"));
     assert!(!reference.complete);
     assert_eq!(reference.bytes, 2048);
     assert_eq!(
@@ -189,7 +203,7 @@ async fn shell_failures_keep_captured_artifacts_and_quota_errors_do_not_rerun_co
     let context = ToolContext::new(workspace.path(), Duration::from_secs(5), 2048)
         .unwrap()
         .with_artifact_store(store.clone());
-    let error = BashTool
+    let error = archived_shell()
         .execute(
             &context,
             json!({"command":"printf '%050000d' 0 >&2; exit 7"}),
@@ -198,7 +212,10 @@ async fn shell_failures_keep_captured_artifacts_and_quota_errors_do_not_rerun_co
         .unwrap_err();
     assert_eq!(error.code, "command_failed");
     let output: ShellOutput = serde_json::from_value(error.details.unwrap()).unwrap();
-    let reference = output.stderr_artifact.unwrap();
+    let reference = output
+        .stderr_artifact
+        .clone()
+        .unwrap_or_else(|| panic!("Missing stderr archive: {output:?}"));
     assert!(reference.complete);
     assert_eq!(error.artifacts.as_slice(), std::slice::from_ref(&reference));
     assert_eq!(collect(store.as_ref(), &reference.id).await.len(), 50000);
@@ -243,6 +260,8 @@ async fn scan_limit_archive_is_never_advertised_as_complete() {
         max_output_bytes: 6000,
         ..Default::default()
     })
+    .unwrap()
+    .with_archive_timeout(Duration::from_secs(2))
     .unwrap();
     let error = shell
         .execute(&context, json!({"command":"printf '%030000d' 0"}))
@@ -250,7 +269,10 @@ async fn scan_limit_archive_is_never_advertised_as_complete() {
         .unwrap_err();
     assert_eq!(error.code, "output_limit");
     let output: ShellOutput = serde_json::from_value(error.details.unwrap()).unwrap();
-    let reference = output.stdout_artifact.unwrap();
+    let reference = output
+        .stdout_artifact
+        .clone()
+        .unwrap_or_else(|| panic!("Missing stdout archive: {output:?}"));
     assert!(!reference.complete);
     assert_eq!(collect(store.as_ref(), &reference.id).await.len(), 6001);
 }
@@ -349,4 +371,101 @@ async fn concurrent_writers_publish_independent_immutable_artifacts() {
         assert!(ids.insert(task.await.unwrap().id));
     }
     assert_eq!(ids.len(), 8);
+}
+
+#[test]
+fn host_archive_and_lock_deadlines_are_bounded_and_cannot_be_disabled() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    for invalid in [Duration::ZERO, Duration::from_secs(6)] {
+        assert!(
+            BashTool::with_limits(ShellLimits::default())
+                .unwrap()
+                .with_archive_timeout(invalid)
+                .is_err()
+        );
+        assert!(
+            FileArtifactStore::new(root.path(), workspace.path(), ArtifactLimits::default())
+                .unwrap()
+                .with_lock_timeout(invalid)
+                .is_err()
+        );
+    }
+    assert!(!root.path().join(".lock").exists());
+}
+struct DelayedFinishStore(Arc<FileArtifactStore>);
+struct DelayedFinishWriter(Box<dyn ArtifactWriter>);
+#[async_trait::async_trait]
+impl ArtifactStore for DelayedFinishStore {
+    fn limits(&self) -> ArtifactLimits {
+        self.0.limits()
+    }
+    async fn begin(&self, kind: &str) -> Result<Box<dyn ArtifactWriter>, ArtifactError> {
+        Ok(Box::new(DelayedFinishWriter(self.0.begin(kind).await?)))
+    }
+    async fn read(
+        &self,
+        id: &str,
+        offset: u64,
+        limit: usize,
+    ) -> Result<ArtifactPage, ArtifactError> {
+        self.0.read(id, offset, limit).await
+    }
+    async fn remove(&self, id: &str) -> Result<(), ArtifactError> {
+        self.0.remove(id).await
+    }
+}
+#[async_trait::async_trait]
+impl ArtifactWriter for DelayedFinishWriter {
+    async fn write(&mut self, bytes: &[u8]) -> Result<(), ArtifactError> {
+        self.0.write(bytes).await
+    }
+    async fn finish(self: Box<Self>, complete: bool) -> Result<ArtifactRef, ArtifactError> {
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        self.0.finish(complete).await
+    }
+}
+#[tokio::test]
+async fn configured_archive_deadline_handles_slow_finalization_without_repeating_commands() {
+    let storage = tempfile::tempdir().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let disk = store(storage.path(), workspace.path());
+    let context = ToolContext::new(workspace.path(), Duration::from_secs(5), 2048)
+        .unwrap()
+        .with_artifact_store(Arc::new(DelayedFinishStore(disk.clone())));
+    let command = "printf hit >> count; printf '%010000d' 0";
+    let short = BashTool
+        .execute(&context, json!({"command":command}))
+        .await
+        .unwrap();
+    let output: ShellOutput = serde_json::from_value(short.output).unwrap();
+    assert_eq!(
+        output.stdout_artifact_error.as_deref(),
+        Some("storage_timeout")
+    );
+    assert!(output.stdout_artifact.is_none());
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("count")).unwrap(),
+        "hit"
+    );
+    let long = archived_shell()
+        .execute(&context, json!({"command":command}))
+        .await
+        .unwrap();
+    let output: ShellOutput = serde_json::from_value(long.output).unwrap();
+    let reference = output.stdout_artifact.unwrap();
+    assert!(reference.complete);
+    assert_eq!(reference.bytes, 10000);
+    assert_eq!(collect(disk.as_ref(), &reference.id).await.len(), 10000);
+    assert_eq!(
+        std::fs::read_to_string(workspace.path().join("count")).unwrap(),
+        "hithit"
+    );
+    assert!(!std::fs::read_dir(storage.path()).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .path()
+            .extension()
+            .is_some_and(|extension| extension == "part")
+    }));
 }

@@ -93,6 +93,10 @@
   payloads, statuses and operation counts; expire questions on cancellation, timeout, owner
   replacement and dropped futures. Keep approval choices separate, preserve paste as data,
   and serialize command cancellation/submission before launching a normal AgentInput turn.
+- Prepared-effect declarations come from the owned host plan, never model annotations or
+  preview parsing. Guards retain the approved plan and fail closed for opaque mutation effects.
+  Worker examples use fixed host profiles and separate sessions/controls/budgets; correlate
+  provenance without importing parent authority, and report unknown usage/trace gaps honestly.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

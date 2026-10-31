@@ -13,6 +13,7 @@ pub(super) struct Capture {
     head: Vec<u8>,
     tail: VecDeque<u8>,
     limit: usize,
+    archive_timeout: Duration,
     pub seen: u64,
     pub eof: bool,
     store: Option<Arc<dyn ArtifactStore>>,
@@ -32,6 +33,7 @@ impl Capture {
             head: Vec::new(),
             tail: VecDeque::new(),
             limit,
+            archive_timeout: Duration::from_millis(250),
             seen: 0,
             eof: false,
             store: None,
@@ -77,7 +79,7 @@ impl Capture {
             return;
         };
         match tokio::time::timeout(
-            Duration::from_millis(250),
+            self.archive_timeout,
             store.begin("application/octet-stream"),
         )
         .await
@@ -111,8 +113,7 @@ impl Capture {
         if count == 0 {
             return;
         }
-        match tokio::time::timeout(Duration::from_millis(250), writer.write(&bytes[..count])).await
-        {
+        match tokio::time::timeout(self.archive_timeout, writer.write(&bytes[..count])).await {
             Ok(Ok(())) => self.archived += count as u64,
             result => {
                 self.artifact_error = Some(
@@ -133,7 +134,7 @@ impl Capture {
         self.start_archive().await;
         if let Some(writer) = self.writer.take() {
             match tokio::time::timeout(
-                Duration::from_millis(250),
+                self.archive_timeout,
                 writer.finish(self.eof && !self.limited),
             )
             .await
@@ -208,6 +209,11 @@ impl Captures {
             spawned: false,
             limit_hit: false,
         }
+    }
+    pub fn with_archive_timeout(mut self, timeout: Duration) -> Self {
+        self.stdout.archive_timeout = timeout;
+        self.stderr.archive_timeout = timeout;
+        self
     }
     pub fn with_store(mut self, store: Option<Arc<dyn ArtifactStore>>) -> Self {
         self.stdout.store = store.clone();
