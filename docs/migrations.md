@@ -640,3 +640,21 @@ adapter validation before journal application; unsupported images remain pending
 terminal result instead of appearing as applied user history. Image-aware heuristic counts
 use explicit estimated allowances instead of counting base64 as text; visual/billed counts
 remain provider-dependent. See [image input](image-input.md) for limits and migration examples.
+
+## S6: explicit native extension snapshots
+
+The additive `extensions` module registers native Rust tools, provider routes, context
+policies, context/tool hooks, event observers and commands. Builders remain extension-free
+by default. Install an Arc<ExtensionSet> with TurnExecutorBuilder::extensions, or use
+Runtime::executor_builder_with_extensions. Provider/policy registration does not select
+an implementation; the host explicitly looks it up. Contributed tool metadata is pinned,
+and installing a snapshot forks the base registry with fresh grant authority.
+
+InputContextProvider adds `prepare_with_prefix` with a default delegation to `prepare`.
+Override it in prefix-composing providers to use the declared boundary. Core now calls it
+for turns, model selection and manual compaction; runtime resources implement the boundary
+explicitly. Native extension provenance wraps the prior provider metadata under `base`
+and records extension manifests/context-hook IDs; this is opt-in and uses the existing
+session input-context format. No session/event schema version changes or restored native
+callbacks/grants are introduced. See [the contract](native-extensions.md) for execution,
+callback delivery, timeout, error and cooperative native-code limits.

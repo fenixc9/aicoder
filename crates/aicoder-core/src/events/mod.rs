@@ -2,6 +2,7 @@
 
 mod emitter;
 mod handler;
+pub(crate) use handler::dispatch_event;
 mod model;
 mod subscription;
 mod validation;

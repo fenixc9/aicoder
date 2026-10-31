@@ -59,6 +59,7 @@ impl Default for DispatcherConfig {
 }
 
 pub struct ToolDispatcher {
+    hooks: Vec<crate::extensions::Registered<dyn crate::extensions::ToolHook>>,
     registry: Arc<ToolRegistry>,
     context: ToolContext,
     approval: Arc<dyn ApprovalHandler>,
@@ -75,11 +76,20 @@ impl ToolDispatcher {
         let context =
             ToolContext::new(workspace_root, config.tool_timeout, config.max_output_bytes)?;
         Ok(Self {
+            hooks: Vec::new(),
             registry,
             context,
             approval,
             config,
         })
+    }
+
+    pub(crate) fn with_tool_hooks(
+        mut self,
+        hooks: Vec<crate::extensions::Registered<dyn crate::extensions::ToolHook>>,
+    ) -> Self {
+        self.hooks = hooks;
+        self
     }
 
     pub fn with_artifact_store(
@@ -333,6 +343,44 @@ impl ToolDispatcher {
                 )
                 .await);
         };
+
+        if !self.hooks.is_empty() {
+            let checking = timeout(
+                self.config.tool_timeout,
+                crate::extensions::tool_hooks(
+                    &self.hooks,
+                    self.context.workspace_root(),
+                    call,
+                    tool.capability(),
+                ),
+            );
+            let checked = match context {
+                Some(context) => tokio::select! {biased;
+                    cancelled=context.cancelled()=>{
+                        emit_event(events,AgentRawEvent::ToolExecutionEnded {artifacts:Vec::new(),call_id:call.id.clone().into(),name:call.name.clone().into(),outcome:ToolExecutionOutcome::Cancelled.into()});
+                        return Err(cancelled.into());
+                    },
+                    _=async {match &context.control {Some(control)=>control.steering_requested().await,None=>std::future::pending().await}}=>{
+                        return Ok(self.failed_tool_message(events,call,limits,ToolFailure::new("steered_before_execution","Tool hook was superseded by steering")).await);
+                    },
+                    result=checking=>result,
+                },
+                None => checking.await,
+            };
+            let failure = match checked {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(error),
+                Err(_) => Some(ToolFailure::new(
+                    "timeout",
+                    "Tool hooks exceeded their phase time limit",
+                )),
+            };
+            if let Some(failure) = failure {
+                return Ok(self
+                    .failed_tool_message(events, call, limits, failure)
+                    .await);
+            }
+        }
 
         // Prepare once, before approval, without changing external state. The same
         // owned operation is consumed after approval; no re-reading/re-planning then.

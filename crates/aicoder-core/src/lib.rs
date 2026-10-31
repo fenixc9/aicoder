@@ -13,6 +13,7 @@ pub mod context_policy;
 pub mod control;
 pub mod events;
 pub mod execution_input;
+pub mod extensions;
 pub mod tokens;
 pub use execution_input::{ExecutionInput, ModelContextInfo};
 pub mod input_context;

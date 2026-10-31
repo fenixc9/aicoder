@@ -30,6 +30,8 @@ jobs:
         run: cargo run --locked -p aicoder-runtime --example offline_smoke
       - name: In-memory model provider example
         run: cargo run --locked -p aicoder-core --example model_provider
+      - name: Native extension registration and plan guard
+        run: cargo run --locked -p aicoder-core --example native_extensions
       - name: Embedded agent example
         run: cargo run --locked -p aicoder-core --example embedded_agent
       - name: Controlled offline agent example

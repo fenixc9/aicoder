@@ -281,17 +281,35 @@ impl aicoder_core::InputContextProvider for ResourceSnapshot {
         workspace: &Path,
         messages: &[aicoder_core::model::Message],
     ) -> Result<aicoder_core::PreparedInput> {
+        self.prepare_with_prefix(
+            workspace,
+            messages,
+            messages
+                .iter()
+                .take_while(|message| message.role == aicoder_core::model::MessageRole::System)
+                .count(),
+        )
+        .await
+    }
+    async fn prepare_with_prefix(
+        &self,
+        workspace: &Path,
+        messages: &[aicoder_core::model::Message],
+        system_prefix_len: usize,
+    ) -> Result<aicoder_core::PreparedInput> {
         ensure!(
             workspace == self.manifest.workspace,
             "resources are bound to another workspace; use executor_builder_for"
         );
-        Ok(aicoder_core::PreparedInput {
-            system_prefix: self.compose_system_messages(
-                &messages[..messages
+        ensure!(
+            system_prefix_len <= messages.len()
+                && messages[..system_prefix_len]
                     .iter()
-                    .take_while(|message| message.role == aicoder_core::model::MessageRole::System)
-                    .count()],
-            ),
+                    .all(|message| message.role == aicoder_core::model::MessageRole::System),
+            "invalid runtime prefix boundary"
+        );
+        Ok(aicoder_core::PreparedInput {
+            system_prefix: self.compose_system_messages(&messages[..system_prefix_len]),
             provenance: serde_json::to_value(&self.manifest)?,
         })
     }

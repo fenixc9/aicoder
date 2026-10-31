@@ -46,6 +46,7 @@ pub(crate) struct RunScope {
     state: AgentRunStateMachine,
 }
 pub struct TurnExecutor {
+    extensions: Option<Arc<crate::extensions::ExtensionSet>>,
     pub(crate) provider: Arc<dyn ModelProvider>,
     pub(crate) dispatcher: Arc<ToolDispatcher>,
     completion_verifier: Arc<dyn CompletionVerifier>,
@@ -92,6 +93,7 @@ impl TurnExecutor {
         config: TurnExecutionConfig,
     ) -> Self {
         Self {
+            extensions: None,
             provider,
             dispatcher,
             completion_verifier,
@@ -101,6 +103,11 @@ impl TurnExecutor {
             counting: crate::tokens::TokenCounting::default(),
             context_policy: Arc::new(crate::context_policy::WindowContextPolicy),
         }
+    }
+
+    /// The installed tool snapshot, including explicit native contributions.
+    pub fn tool_registry(&self) -> &ToolRegistry {
+        self.dispatcher.registry().as_ref()
     }
 
     pub fn workspace_root(&self) -> &std::path::Path {
@@ -285,6 +292,10 @@ impl TurnExecutor {
         let source = context.control.as_ref().map_or_else(
             || crate::events::EventSource::new(crate::RunId::new()),
             |control| control.event_source(),
+        );
+        let handler = self.extensions.as_ref().map_or_else(
+            || handler.clone(),
+            |extensions| extensions.handler(handler.clone()),
         );
         let events = AgentEventEmitter::with_source(handler, source, self.config.events.clone());
         events.emit(AgentRawEvent::AgentStarted {
@@ -530,7 +541,7 @@ impl TurnExecutor {
             let prepared = tokio::select! {
                 biased;
                 cancelled=context.cancelled()=>return Err(cancelled.into()),
-                prepared=provider.prepare(self.workspace_root(),&progress.messages)=>prepared?,
+                prepared=provider.prepare_with_prefix(self.workspace_root(),&progress.messages,system_prefix_len)=>prepared?,
             };
             crate::input_context::validate_prefix(&prepared.system_prefix)?;
             let history = progress.messages.split_off(system_prefix_len);
@@ -1376,6 +1387,7 @@ fn ensure_valid_compaction(compaction: &ContextCompaction, target_tokens: usize)
 
 /// Host assembly for the reusable loop. An omitted registry is empty.
 pub struct TurnExecutorBuilder {
+    extensions: Option<Arc<crate::extensions::ExtensionSet>>,
     provider: Arc<dyn ModelProvider>,
     registry: Option<Arc<ToolRegistry>>,
     workspace: PathBuf,
@@ -1400,6 +1412,7 @@ impl TurnExecutorBuilder {
 
     pub fn from_shared(provider: Arc<dyn ModelProvider>) -> Self {
         Self {
+            extensions: None,
             provider,
             registry: None,
             workspace: PathBuf::from("."),
@@ -1489,6 +1502,12 @@ impl TurnExecutorBuilder {
         self
     }
 
+    /// Install an explicit immutable native snapshot; default builders have no extensions.
+    pub fn extensions(mut self, extensions: Arc<crate::extensions::ExtensionSet>) -> Self {
+        self.extensions = Some(extensions);
+        self
+    }
+
     pub fn dispatcher_config(mut self, config: DispatcherConfig) -> Self {
         self.dispatcher_config = config;
         self
@@ -1505,6 +1524,13 @@ impl TurnExecutorBuilder {
             Some(registry) => registry,
             None => Arc::new(ToolRegistry::default()),
         };
+        let mut input_context = self.input_context;
+        let registry = if let Some(extensions) = &self.extensions {
+            input_context = Some(extensions.input_context(input_context));
+            Arc::new(extensions.registry(&registry)?)
+        } else {
+            registry
+        };
         let mut dispatcher = ToolDispatcher::new(
             registry,
             self.workspace,
@@ -1514,14 +1540,18 @@ impl TurnExecutorBuilder {
         if let Some(store) = self.artifact_store {
             dispatcher = dispatcher.with_artifact_store(store)?;
         }
+        if let Some(extensions) = &self.extensions {
+            dispatcher = dispatcher.with_tool_hooks(extensions.tool_hooks());
+        }
         let mut executor = TurnExecutor::new_with_verifier(
             self.provider,
             Arc::new(dispatcher),
             self.completion_verifier,
             self.context_compactor,
-            self.input_context,
+            input_context,
             self.execution_config,
         );
+        executor.extensions = self.extensions;
         executor.counting = self.counting;
         executor.context_policy = self.context_policy;
         Ok(executor)

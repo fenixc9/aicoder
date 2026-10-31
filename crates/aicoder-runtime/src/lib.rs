@@ -229,6 +229,14 @@ impl Runtime {
         };
         self.builder_for(provider, &self.config.workspace, resources)
     }
+    /// Explicit Rust host opt-in; settings/resource files cannot install native code.
+    pub fn executor_builder_with_extensions(
+        &self,
+        provider: Arc<dyn ModelProvider>,
+        extensions: Arc<aicoder_core::extensions::ExtensionSet>,
+    ) -> Result<TurnExecutorBuilder> {
+        Ok(self.executor_builder(provider)?.extensions(extensions))
+    }
     /// Case/tool workspace differs from invocation settings: isolate parents and reuse frozen globals.
     pub fn executor_builder_for(
         &self,
