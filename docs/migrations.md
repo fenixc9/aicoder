@@ -675,3 +675,23 @@ connection. Explicit shutdown reports reaping/incomplete cleanup; last-handle/fu
 signals owned groups and cleanup continues independently of Tokio. The shared owner also
 backs Bash without changing its public API. See [the protocol/limits](process-extensions.md)
 and [acceptance](s6-process-acceptance.md) before embedding a trusted external server.
+
+## S6: optional MCP stdio profiles
+
+Runtime's additive `mcp-stdio` feature reuses the bounded process transport and native
+registration API. McpConfig owns MCP aliases/capability overrides/expected identity;
+ProcessConfig supplies launch settings and its native-protocol override fields stay empty.
+Auto probes modern server/discover before falling back to legacy initialize; an explicit
+host protocol profile is also available. This does not make aicoder.tools.v1 an MCP dialect.
+
+Catalog freshness and notifications trigger revalidation. Changed metadata invalidates an
+old snapshot; install extension.refresh(...) through a new native registry/agent at the
+host's chosen idle boundary. Media needs explicit scoped artifact storage; captured refs,
+not base64 text or private result _meta, enter history. Missing capture is marked separately
+from a completed operation, which is not retried. Legacy unsupported client requests are
+bounded negative replies; no sampling/roots/elicitation/task capability is offered.
+
+The shared transport now acknowledges notification writes separately from RPC responses,
+and the MCP profile closes stdin before bounded termination/reaping. Native process tools
+keep their strict profile and opaque-plan behavior. No new dependency/version or session/
+event format is introduced. See [MCP contracts](mcp.md) for supported eras and host limits.

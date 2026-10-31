@@ -37,6 +37,8 @@ tempfile.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
+mcp-stdio = ["process-extensions", "dep:base64"]
+mcp-fixtures = ["mcp-stdio", "process-extension-fixtures"]
 process-extensions = []
 process-extension-fixtures = ["process-extensions"]
 images = ["dep:image", "dep:base64"]
@@ -54,3 +56,12 @@ required-features = ["process-extension-fixtures"]
 [[example]]
 name = "offline_process_extensions"
 required-features = ["process-extensions"]
+
+[[bin]]
+name = "aicoder-mcp-fixture"
+path = "tests/fixtures/mcp_server.rs"
+required-features = ["mcp-fixtures"]
+
+[[example]]
+name = "offline_mcp"
+required-features = ["mcp-stdio"]

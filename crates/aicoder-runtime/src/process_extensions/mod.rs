@@ -1,6 +1,8 @@
 //! Explicit bounded stdio tool processes. Programs are trusted host code, not sandboxes.
+#[cfg(feature = "mcp-stdio")]
+pub(crate) mod mcp_peer;
 mod tools;
-mod transport;
+pub(crate) mod transport;
 use aicoder_core::{extensions::process_protocol::ServerInfo, tools::ToolCapability};
 use serde::Serialize;
 use std::{collections::BTreeMap, fmt, path::PathBuf, time::Duration};
@@ -35,7 +37,7 @@ impl Default for ProcessLimits {
     }
 }
 impl ProcessLimits {
-    fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         (1024..=1024 * 1024).contains(&self.max_request_bytes)
             && (1024..=16 * 1024 * 1024).contains(&self.max_frame_bytes)
             && (1..=64).contains(&self.max_queued)
@@ -65,7 +67,7 @@ pub struct ProcessConfig {
     pub limits: ProcessLimits,
 }
 impl ProcessConfig {
-    fn valid(&self) -> bool {
+    pub(crate) fn valid(&self) -> bool {
         self.limits.valid()
             && self.program.is_absolute()
             && self.program.as_os_str().as_encoded_bytes().len() <= 4096

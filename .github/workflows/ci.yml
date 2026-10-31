@@ -36,6 +36,10 @@ jobs:
         run: |
           cargo build --locked -p aicoder-runtime --features process-extension-fixtures --bin aicoder-process-fixture
           cargo run --locked -p aicoder-runtime --features process-extensions --example offline_process_extensions
+      - name: MCP modern/legacy stdio and shared-core example
+        run: |
+          cargo build --locked -p aicoder-runtime --features mcp-fixtures --bin aicoder-mcp-fixture
+          cargo run --locked -p aicoder-runtime --features mcp-stdio --example offline_mcp
       - name: Embedded agent example
         run: cargo run --locked -p aicoder-core --example embedded_agent
       - name: Controlled offline agent example

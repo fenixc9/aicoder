@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "source_sha256": "76b06ddd6228c85dd05e42bcc73ecf89d867f180e5db04da427aab3a23d6af28",
+  "node_version": "24.22.2",
+  "node_distribution": "npm node-linux-x64; temporary development-only runtime",
+  "package_lock_sha256": "8c1eafd741dbe6410d49c59bcf03799784b2244da2ba7edf8365e79ba9a90590",
+  "method": "Run offline_mcp with separately installed official filesystem servers, a temporary allowed directory and a scripted core provider. Verify actual file contents through approved MCP reads, then EOF/reaping. No real model credentials or model network requests. Packages are outside the workspace/default dependency tree.",
+  "samples": [
+    {
+      "profile": "modern",
+      "package": "@modelcontextprotocol/server-filesystem",
+      "package_version": "2.1.0",
+      "sdk_version": "2.4.0",
+      "result": {
+        "diagnostics": {
+          "cleanup_pending": false,
+          "closed": true,
+          "completed_requests": 5,
+          "exit_code": 0,
+          "reaped": true,
+          "requests_sent": 5,
+          "signal": null,
+          "stderr_bytes": 46,
+          "stdout_bytes": 38863,
+          "stop": "shutdown",
+          "worker_done": true
+        },
+        "model_network_requests": 0,
+        "protocol": "2026-07-28",
+        "rounds": 2,
+        "selected_tool": "mcp__read_text_file",
+        "server": {
+          "name": "secure-filesystem-server",
+          "version": "2.1.0"
+        },
+        "tools": 14,
+        "wire": {
+          "cancellation_written": 0,
+          "catalog_epoch": 0,
+          "control_replies_written": 0,
+          "legacy_pings": 0,
+          "notifications_received": 0,
+          "notifications_written": 0,
+          "rejected_server_requests": 0
+        }
+      }
+    },
+    {
+      "profile": "legacy",
+      "package": "@modelcontextprotocol/server-filesystem",
+      "package_version": "2025.12.18",
+      "sdk_version": "1.32.2",
+      "result": {
+        "diagnostics": {
+          "cleanup_pending": false,
+          "closed": true,
+          "completed_requests": 4,
+          "exit_code": 0,
+          "reaped": true,
+          "requests_sent": 4,
+          "signal": null,
+          "stderr_bytes": 151,
+          "stdout_bytes": 12677,
+          "stop": "shutdown",
+          "worker_done": true
+        },
+        "model_network_requests": 0,
+        "protocol": "2025-11-25",
+        "rounds": 2,
+        "selected_tool": "mcp__read_text_file",
+        "server": {
+          "name": "secure-filesystem-server",
+          "version": "0.2.0"
+        },
+        "tools": 14,
+        "wire": {
+          "cancellation_written": 0,
+          "catalog_epoch": 0,
+          "control_replies_written": 0,
+          "legacy_pings": 0,
+          "notifications_received": 0,
+          "notifications_written": 1,
+          "rejected_server_requests": 0
+        }
+      }
+    }
+  ]
+}

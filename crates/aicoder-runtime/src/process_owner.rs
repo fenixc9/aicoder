@@ -46,6 +46,14 @@ impl ManagedChild {
             return Err(error);
         }
     }
+    #[cfg(feature = "mcp-stdio")]
+    pub fn signal_term(&mut self) -> bool {
+        let Some(group) = self.group else {
+            return true;
+        };
+        let result = unsafe { libc::kill(-group, libc::SIGTERM) };
+        result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    }
     pub fn signal_group(&mut self) -> bool {
         let Some(group) = self.group.take() else {
             return true;

@@ -31,7 +31,8 @@ context/guard hooks, observers and commands explicitly in Rust hosts; the same c
 retains approval, cancellation, budgets and canonical sessions.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime
-is part of the default build.
+is part of the default build. [MCP stdio](docs/mcp.md) supports modern per-request metadata
+and legacy initialization, with bounded discovery, host approvals and scoped media artifacts.
 Canonical sessions support [bounded JSON/HTML exports](docs/session-exports.md), with
 explicit publication adapters and no automatic third-party sharing.
 The [provider-neutral model API](docs/model-api.md) is shared by the agent

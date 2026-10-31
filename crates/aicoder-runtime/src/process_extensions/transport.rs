@@ -26,14 +26,20 @@ const ACTIVE: u8 = 1;
 const COMPLETED: u8 = 2;
 const ABANDONED: u8 = 3;
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Class {
+pub(crate) enum Class {
     Initialize,
     Prepare,
     Execute,
     Dispose,
+    #[cfg(feature = "mcp-stdio")]
+    Probe,
+    #[cfg(feature = "mcp-stdio")]
+    Notification,
 }
-pub(super) struct Shared {
+pub(crate) struct Shared {
     process: Mutex<Option<ManagedChild>>,
+    #[cfg(feature = "mcp-stdio")]
+    pub peer: Option<Arc<super::mcp_peer::McpPeer>>,
     report: Mutex<ProcessDiagnostics>,
     closing: AtomicBool,
     done: Notify,
@@ -77,6 +83,15 @@ impl Shared {
             }
             report.stop.get_or_insert(reason);
         }
+        #[cfg(feature = "mcp-stdio")]
+        if self.peer.is_some() {
+            self.wake();
+            return;
+        }
+        self.kill();
+        self.wake();
+    }
+    fn kill(&self) {
         if let Some(process) = self.process.lock().expect("process owner").as_mut() {
             let _ = process.exited(); // Disown a leader already reaped by a foreign host handler.
             process.signal_group();
@@ -106,8 +121,12 @@ struct Work {
     deadline: Instant,
     state: Arc<AtomicU8>,
     reply: Option<oneshot::Sender<Result<Value, ProcessError>>>,
+    #[cfg(feature = "mcp-stdio")]
+    cancelable: bool,
+    #[cfg(feature = "mcp-stdio")]
+    expected_epoch: Option<u64>,
 }
-pub(super) struct Client {
+pub(crate) struct Client {
     tx: mpsc::SyncSender<Work>,
     pub shared: Arc<Shared>,
     next: AtomicU64,
@@ -122,6 +141,10 @@ struct RequestGuard {
     state: Arc<AtomicU8>,
     class: Class,
     armed: bool,
+    #[cfg(feature = "mcp-stdio")]
+    id: u64,
+    #[cfg(feature = "mcp-stdio")]
+    cancelable: bool,
 }
 impl RequestGuard {
     fn abort(&mut self, reason: ProcessErrorKind) {
@@ -135,6 +158,19 @@ impl RequestGuard {
             .is_ok()
         {
             return;
+        }
+        #[cfg(feature = "mcp-stdio")]
+        if self.class == Class::Probe && self.shared.peer.is_some() {
+            self.state.store(ABANDONED, Ordering::SeqCst);
+            self.shared.wake();
+            return;
+        }
+        #[cfg(feature = "mcp-stdio")]
+        if self.cancelable
+            && self.state.load(Ordering::SeqCst) == ACTIVE
+            && let Some(peer) = &self.shared.peer
+        {
+            peer.cancel(self.id);
         }
         if self
             .state
@@ -167,7 +203,7 @@ impl Write for Limited {
         Ok(())
     }
 }
-pub(super) fn fits(value: &impl Serialize, limit: usize) -> bool {
+pub(crate) fn fits(value: &impl Serialize, limit: usize) -> bool {
     struct Count {
         bytes: usize,
         limit: usize,
@@ -187,7 +223,24 @@ pub(super) fn fits(value: &impl Serialize, limit: usize) -> bool {
     serde_json::to_writer(&mut Count { bytes: 0, limit }, value).is_ok()
 }
 impl Client {
-    pub fn start(mut config: ProcessConfig) -> Result<Arc<Self>, ProcessError> {
+    pub fn start(config: ProcessConfig) -> Result<Arc<Self>, ProcessError> {
+        Self::start_profile(
+            config,
+            #[cfg(feature = "mcp-stdio")]
+            None,
+        )
+    }
+    #[cfg(feature = "mcp-stdio")]
+    pub fn start_mcp(
+        config: ProcessConfig,
+        peer: Arc<super::mcp_peer::McpPeer>,
+    ) -> Result<Arc<Self>, ProcessError> {
+        Self::start_profile(config, Some(peer))
+    }
+    fn start_profile(
+        mut config: ProcessConfig,
+        #[cfg(feature = "mcp-stdio")] peer: Option<Arc<super::mcp_peer::McpPeer>>,
+    ) -> Result<Arc<Self>, ProcessError> {
         let invalid = || ProcessError {
             kind: ProcessErrorKind::InvalidConfiguration,
             may_have_executed: false,
@@ -207,6 +260,8 @@ impl Client {
         nonblocking(&wake_reader).map_err(|_| invalid())?;
         let shared = Arc::new(Shared {
             process: Mutex::new(None),
+            #[cfg(feature = "mcp-stdio")]
+            peer,
             report: Mutex::new(Default::default()),
             closing: AtomicBool::new(false),
             done: Notify::new(),
@@ -246,7 +301,8 @@ impl Client {
         #[derive(Serialize)]
         struct Request<'a, T> {
             jsonrpc: &'static str,
-            id: u64,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            id: Option<u64>,
             method: &'a str,
             params: T,
         }
@@ -258,7 +314,16 @@ impl Client {
             &mut writer,
             &Request {
                 jsonrpc: "2.0",
-                id,
+                id: {
+                    #[cfg(feature = "mcp-stdio")]
+                    if class == Class::Notification {
+                        None
+                    } else {
+                        Some(id)
+                    }
+                    #[cfg(not(feature = "mcp-stdio"))]
+                    Some(id)
+                },
                 method,
                 params,
             },
@@ -276,6 +341,10 @@ impl Client {
             deadline,
             state: Arc::new(AtomicU8::new(QUEUED)),
             reply,
+            #[cfg(feature = "mcp-stdio")]
+            cancelable: method != "initialize" && class != Class::Notification,
+            #[cfg(feature = "mcp-stdio")]
+            expected_epoch: None,
         })
     }
     pub async fn call(
@@ -285,9 +354,46 @@ impl Client {
         class: Class,
         duration: Duration,
     ) -> Result<Value, ProcessError> {
-        let (tx, rx) = oneshot::channel();
-        let work = self.work(method, params, class, duration, Some(tx))?;
+        self.call_scoped(
+            method,
+            params,
+            class,
+            duration,
+            #[cfg(feature = "mcp-stdio")]
+            None,
+        )
+        .await
+    }
+    #[cfg(feature = "mcp-stdio")]
+    pub async fn call_at_epoch(
+        &self,
+        method: &str,
+        params: impl Serialize,
+        class: Class,
+        duration: Duration,
+        epoch: u64,
+    ) -> Result<Value, ProcessError> {
+        self.call_scoped(method, params, class, duration, Some(epoch))
+            .await
+    }
+    async fn call_scoped(
+        &self,
+        method: &str,
+        params: impl Serialize,
+        class: Class,
+        duration: Duration,
+        #[cfg(feature = "mcp-stdio")] epoch: Option<u64>,
+    ) -> Result<Value, ProcessError> {
+        let (tx, mut rx) = oneshot::channel();
+        #[allow(unused_mut)]
+        let mut work = self.work(method, params, class, duration, Some(tx))?;
+        #[cfg(feature = "mcp-stdio")]
+        {
+            work.expected_epoch = epoch;
+        }
         let state = work.state.clone();
+        #[cfg(feature = "mcp-stdio")]
+        let (id, cancelable) = (work.id, work.cancelable);
         self.tx.try_send(work).map_err(|error| {
             self.shared.error(
                 if matches!(error, mpsc::TrySendError::Full(_)) {
@@ -304,13 +410,29 @@ impl Client {
             state: state.clone(),
             class,
             armed: true,
+            #[cfg(feature = "mcp-stdio")]
+            id,
+            #[cfg(feature = "mcp-stdio")]
+            cancelable,
         };
-        match tokio::time::timeout(duration, rx).await {
+        #[cfg(feature = "mcp-stdio")]
+        if class == Class::Probe {
+            let result = rx
+                .await
+                .map_err(|_| self.shared.error(ProcessErrorKind::Closed, false));
+            guard.armed = false;
+            return result?;
+        }
+        match tokio::time::timeout(duration, &mut rx).await {
             Ok(Ok(result)) => {
                 guard.armed = false;
                 result
             }
             result => {
+                if let Ok(result) = rx.try_recv() {
+                    guard.armed = false;
+                    return result;
+                }
                 let kind = if result.is_err() {
                     ProcessErrorKind::Timeout
                 } else {
@@ -362,7 +484,7 @@ fn nonblocking(fd: &impl AsRawFd) -> std::io::Result<()> {
     Ok(())
 }
 struct Pipes {
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     stdout: ChildStdout,
     stderr: ChildStderr,
 }
@@ -379,13 +501,13 @@ fn launch(config: &ProcessConfig, shared: &Shared) -> std::io::Result<Pipes> {
         .process_group(0);
     let mut owned = ManagedChild::new(command.spawn()?);
     let pipes = Pipes {
-        stdin: owned.child_mut().stdin.take().expect("piped stdin"),
+        stdin: owned.child_mut().stdin.take(),
         stdout: owned.child_mut().stdout.take().expect("piped stdout"),
         stderr: owned.child_mut().stderr.take().expect("piped stderr"),
     };
     shared.report.lock().expect("process diagnostics").pid = Some(owned.child_mut().id());
     *shared.process.lock().expect("process owner") = Some(owned);
-    nonblocking(&pipes.stdin)?;
+    nonblocking(pipes.stdin.as_ref().expect("piped stdin"))?;
     nonblocking(&pipes.stdout)?;
     nonblocking(&pipes.stderr)?;
     Ok(pipes)
@@ -412,11 +534,17 @@ fn worker(
                 libc::sigaddset(&mut mask, libc::SIGPIPE);
                 libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut());
             }
-            drive(&mut pipes, &rx, &shared, &mut active, &mut wake)
+            let reason = drive(&mut pipes, &rx, &shared, &mut active, &mut wake);
+            #[cfg(feature = "mcp-stdio")]
+            if let Some(peer) = &shared.peer {
+                terminate_mcp(&mut pipes, &shared, peer, active.as_ref());
+            }
+            reason
         }
         Err(reason) => reason,
     };
     shared.close(reason);
+    shared.kill();
     cleanup(&shared);
     if let Some((work, sent)) = active {
         finish_error(work, &shared, reason, sent > 0);
@@ -483,31 +611,17 @@ fn drive(
                 }
             }
         }
-        if let Some((work, sent)) = active.as_mut() {
-            if Instant::now() >= work.deadline {
-                return ProcessErrorKind::Timeout;
+        #[cfg(feature = "mcp-stdio")]
+        if active.as_ref().is_some_and(|(w, sent)| {
+            w.class == Class::Probe
+                && *sent == w.frame.len()
+                && (Instant::now() >= w.deadline || w.state.load(Ordering::SeqCst) == ABANDONED)
+        }) {
+            let (work, _) = active.take().expect("expired probe");
+            if let Some(peer) = &shared.peer {
+                peer.retire(work.id);
             }
-            if *sent < work.frame.len() && exiting.is_none() {
-                match pipes.stdin.write(&work.frame[*sent..]) {
-                    Ok(0) => return ProcessErrorKind::Io,
-                    Ok(n) => {
-                        *sent += n;
-                        if *sent == work.frame.len() {
-                            shared
-                                .report
-                                .lock()
-                                .expect("process diagnostics")
-                                .requests_sent += 1;
-                        }
-                    }
-                    Err(e)
-                        if matches!(
-                            e.kind(),
-                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                        ) => {}
-                    Err(_) => return ProcessErrorKind::Io,
-                }
-            }
+            finish_error(work, shared, ProcessErrorKind::Timeout, false);
         }
         let mut eof = false;
         for _ in 0..8 {
@@ -523,6 +637,11 @@ fn drive(
                     }
                     for b in &chunk[..n] {
                         if active.is_none() {
+                            #[cfg(feature = "mcp-stdio")]
+                            if shared.peer.is_none() {
+                                return ProcessErrorKind::Protocol;
+                            }
+                            #[cfg(not(feature = "mcp-stdio"))]
                             return ProcessErrorKind::Protocol;
                         }
                         if *b == b'\n' {
@@ -556,6 +675,105 @@ fn drive(
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
                 Err(_) => return ProcessErrorKind::Io,
+            }
+        }
+        if eof {
+            return ProcessErrorKind::Exited;
+        }
+        if shared.closing.load(Ordering::SeqCst) {
+            return shared
+                .diagnostics()
+                .stop
+                .unwrap_or(ProcessErrorKind::Closed);
+        }
+        #[cfg(feature = "mcp-stdio")]
+        if active.as_ref().is_some_and(|(work, sent)| {
+            *sent == 0
+                && work.expected_epoch.is_some_and(|epoch| {
+                    shared
+                        .peer
+                        .as_ref()
+                        .is_none_or(|peer| peer.epoch.load(Ordering::SeqCst) != epoch)
+                })
+        }) {
+            let (work, _) = active.take().expect("stale unsent call");
+            finish_error(work, shared, ProcessErrorKind::InvalidCatalog, false);
+        }
+        #[cfg(feature = "mcp-stdio")]
+        if let Some(peer) = &shared.peer
+            && active
+                .as_ref()
+                .is_none_or(|(work, sent)| *sent == 0 || *sent == work.frame.len())
+            && peer
+                .flush(pipes.stdin.as_mut().expect("open stdin"))
+                .is_err()
+        {
+            return ProcessErrorKind::Io;
+        }
+        if let Some((work, sent)) = active.as_mut() {
+            if Instant::now() >= work.deadline {
+                return ProcessErrorKind::Timeout;
+            }
+            #[cfg(not(feature = "mcp-stdio"))]
+            let controls_clear = true;
+            #[cfg(feature = "mcp-stdio")]
+            let controls_clear = shared
+                .peer
+                .as_ref()
+                .is_none_or(|peer| peer.controls_empty() || *sent > 0);
+            if *sent < work.frame.len() && exiting.is_none() && controls_clear {
+                match pipes
+                    .stdin
+                    .as_mut()
+                    .expect("open stdin")
+                    .write(&work.frame[*sent..])
+                {
+                    Ok(0) => return ProcessErrorKind::Io,
+                    Ok(n) => {
+                        *sent += n;
+                        if *sent == work.frame.len() {
+                            #[cfg(feature = "mcp-stdio")]
+                            if work.class == Class::Notification {
+                                if let Some(peer) = &shared.peer {
+                                    peer.notification_written();
+                                }
+                            } else {
+                                shared
+                                    .report
+                                    .lock()
+                                    .expect("process diagnostics")
+                                    .requests_sent += 1;
+                            }
+                            #[cfg(not(feature = "mcp-stdio"))]
+                            {
+                                shared
+                                    .report
+                                    .lock()
+                                    .expect("process diagnostics")
+                                    .requests_sent += 1;
+                            }
+                        }
+                    }
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        ) => {}
+                    Err(_) => return ProcessErrorKind::Io,
+                }
+            }
+        }
+        #[cfg(feature = "mcp-stdio")]
+        {
+            if active
+                .as_ref()
+                .is_some_and(|(w, sent)| w.class == Class::Notification && *sent == w.frame.len())
+            {
+                let (mut work, _) = active.take().expect("written notification");
+                work.state.store(COMPLETED, Ordering::SeqCst);
+                if let Some(reply) = work.reply.take() {
+                    let _ = reply.send(Ok(Value::Null));
+                }
             }
         }
         let exited = shared
@@ -595,6 +813,12 @@ fn drive(
             .as_ref()
             .is_some_and(|(work, sent)| *sent < work.frame.len())
             && exiting.is_none();
+        #[cfg(feature = "mcp-stdio")]
+        let writing = writing
+            || shared
+                .peer
+                .as_ref()
+                .is_some_and(|peer| !peer.controls_empty());
         let mut fds = [
             libc::pollfd {
                 fd: pipes.stdout.as_raw_fd(),
@@ -612,7 +836,7 @@ fn drive(
                 revents: 0,
             },
             libc::pollfd {
-                fd: pipes.stdin.as_raw_fd(),
+                fd: pipes.stdin.as_ref().map_or(-1, AsRawFd::as_raw_fd),
                 events: if writing { libc::POLLOUT } else { 0 },
                 revents: 0,
             },
@@ -648,6 +872,14 @@ fn response(
     }
     let value: Value = serde_json::from_slice(bytes).map_err(|_| ProcessErrorKind::Protocol)?;
     let object = value.as_object().ok_or(ProcessErrorKind::Protocol)?;
+    #[cfg(feature = "mcp-stdio")]
+    if let Some(peer) = &shared.peer
+        && peer
+            .auxiliary(&value, bytes.len())
+            .map_err(|_| ProcessErrorKind::Protocol)?
+    {
+        return Ok(());
+    }
     let Some((work, sent)) = active.as_ref() else {
         return Err(ProcessErrorKind::Protocol);
     };
@@ -667,6 +899,10 @@ fn response(
         if error.get("message").and_then(Value::as_str).is_none() {
             return Err(ProcessErrorKind::Protocol);
         }
+        #[cfg(feature = "mcp-stdio")]
+        if let Some(peer) = &shared.peer {
+            peer.remote_error(error);
+        }
         let mut e = shared.error(ProcessErrorKind::Remote, work.class == Class::Execute);
         e.remote_code = Some(code);
         Err(e)
@@ -679,6 +915,12 @@ fn response(
             .is_ok_and(|value| value.get("disposed") == Some(&Value::Bool(true)))
     {
         return Err(ProcessErrorKind::DisposeFailed);
+    }
+    #[cfg(feature = "mcp-stdio")]
+    if work.class == Class::Probe && work.state.load(Ordering::SeqCst) == ABANDONED {
+        let (work, _) = active.take().expect("abandoned probe");
+        finish_error(work, shared, ProcessErrorKind::Timeout, false);
+        return Ok(());
     }
     let (mut work, _) = active.take().expect("matched response");
     if work
@@ -726,4 +968,74 @@ fn cleanup(shared: &Shared) {
     r.exit_code = status.and_then(|s| s.code());
     r.signal = status.and_then(|s| s.signal());
     drop(r);
+}
+
+#[cfg(feature = "mcp-stdio")]
+fn terminate_mcp(
+    pipes: &mut Pipes,
+    shared: &Shared,
+    peer: &super::mcp_peer::McpPeer,
+    active: Option<&(Work, usize)>,
+) {
+    // Finish already-queued control replies only at an intact message boundary.
+    if active.is_none_or(|(work, sent)| *sent == 0 || *sent == work.frame.len()) {
+        let flush_deadline = Instant::now() + Duration::from_millis(50);
+        while !peer.controls_empty() && Instant::now() < flush_deadline {
+            if let Some(input) = &mut pipes.stdin
+                && peer.flush(input).is_err()
+            {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+    if let Some(id) = peer.cancellation()
+        && active.is_some_and(|(work, sent)| {
+            work.id == id && work.cancelable && *sent == work.frame.len() && peer.controls_empty()
+        })
+    {
+        let mut frame=serde_json::to_vec(&serde_json::json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":id,"reason":"Host cancelled request"}})).expect("fixed cancellation");
+        frame.push(b'\n');
+        let deadline = Instant::now() + Duration::from_millis(50);
+        let mut sent = 0;
+        if let Some(input) = &mut pipes.stdin {
+            while sent < frame.len() && Instant::now() < deadline {
+                match input.write(&frame[sent..]) {
+                    Ok(0) => break,
+                    Ok(n) => sent += n,
+                    Err(e)
+                        if matches!(
+                            e.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                        ) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(1))
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+        if sent == frame.len() {
+            peer.cancellation_written();
+        }
+    }
+    drop(pipes.stdin.take());
+    for terminate in [false, true] {
+        if terminate && let Some(process) = shared.process.lock().expect("process owner").as_mut() {
+            process.signal_term();
+        }
+        let deadline = Instant::now() + Duration::from_millis(100);
+        while Instant::now() < deadline {
+            let exited = shared
+                .process
+                .lock()
+                .expect("process owner")
+                .as_mut()
+                .is_none_or(|p| p.exited().unwrap_or(true));
+            if exited {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
 }

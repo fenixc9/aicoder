@@ -1,0 +1,618 @@
+#![cfg(all(feature = "mcp-fixtures", target_os = "linux"))]
+use aicoder_core::{
+    artifacts::{ArtifactStore, MemoryArtifactStore},
+    extensions::ExtensionRegistry,
+    model::*,
+    session::*,
+    tools::*,
+    *,
+};
+use aicoder_runtime::{mcp::*, process_extensions::ProcessConfig, session::JsonlSessionRepository};
+use async_trait::async_trait;
+use serde_json::json;
+use std::{
+    fs,
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+fn config(root: &Path, mode: &str) -> McpConfig {
+    let mut process =
+        ProcessConfig::new(env!("CARGO_BIN_EXE_aicoder-mcp-fixture"), root, "fixture");
+    process.arguments = vec![mode.into()];
+    let mut config = McpConfig::new(process);
+    config.limits.probe_timeout = Duration::from_millis(100);
+    config
+}
+fn context(root: &Path) -> ToolContext {
+    ToolContext::new(root, Duration::from_secs(3), 65536).unwrap()
+}
+fn read(extension: &McpExtension) -> Arc<dyn ExecutableTool> {
+    extension
+        .tools()
+        .into_iter()
+        .find(|t| t.definition().name == "fixture__read")
+        .unwrap()
+}
+async fn until(mut test: impl FnMut() -> bool) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !test() {
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+#[tokio::test]
+async fn modern_and_legacy_discovery_respect_wire_era_pagination_and_explicit_shutdown() {
+    for mode in [
+        "modern",
+        "legacy",
+        "legacy_params",
+        "legacy_silent",
+        "legacy_late",
+        "legacy_old",
+        "legacy_ping",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.txt"), "before").unwrap();
+        let extension =
+            McpExtension::connect(config(root.path(), mode), TurnExecutionContext::new())
+                .await
+                .unwrap();
+        assert_eq!(extension.catalog().len(), 2);
+        assert_eq!(read(&extension).capability(), ToolCapability::Mutating);
+        assert_eq!(extension.server().name, "fixture/mcp");
+        if mode == "modern" {
+            assert_eq!(extension.protocol_version(), MODERN_VERSION);
+        } else {
+            assert!(LEGACY_VERSIONS.contains(&extension.protocol_version()));
+        }
+        read(&extension)
+            .execute(&context(root.path()), json!({"path":"note.txt"}))
+            .await
+            .unwrap();
+        if mode == "legacy_ping" {
+            assert_eq!(extension.wire_diagnostics().legacy_pings, 1);
+        }
+        let diagnostics = extension.shutdown().await;
+        assert!(diagnostics.reaped, "{mode}: {diagnostics:?}");
+        assert!(root.path().join("server_eof").exists());
+    }
+}
+struct Provider(Mutex<Vec<ModelRequest>>);
+#[async_trait]
+impl ModelProvider for Provider {
+    fn model_spec(&self, model: &str) -> Result<ModelSpec, ProviderError> {
+        let mut spec = ModelSpec::new("fixture", model);
+        spec.capabilities.tools = true;
+        Ok(spec)
+    }
+    async fn generate(
+        &self,
+        request: ModelRequest,
+        sink: Arc<dyn ModelEventSink>,
+        _: TurnExecutionContext,
+    ) -> Result<ModelResponse, ProviderError> {
+        self.0.lock().unwrap().push(request.clone());
+        let mut result = ModelResponse {
+            id: None,
+            model: request.model,
+            message: Message::text(MessageRole::Assistant, "done"),
+            stop_reason: StopReason::Complete,
+            usage: ModelUsage::zero(),
+        };
+        if request.messages.last().unwrap().role == MessageRole::User {
+            result.stop_reason = StopReason::ToolCalls;
+            result.message.content = vec![ContentBlock::ToolCall {
+                call: ModelToolCall {
+                    id: "mcp-write".into(),
+                    name: "fixture__write".into(),
+                    arguments: json!({"path":"note.txt","content":"after"}),
+                },
+            }];
+        }
+        emit_response(&result, sink.as_ref());
+        Ok(result)
+    }
+}
+#[tokio::test]
+async fn core_approval_and_canonical_history_apply_without_server_instructions_or_private_meta() {
+    for allow in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.txt"), "before").unwrap();
+        let extension =
+            McpExtension::connect(config(root.path(), "modern"), TurnExecutionContext::new())
+                .await
+                .unwrap();
+        let mut registry = ExtensionRegistry::new();
+        registry.install(extension.extension().unwrap()).unwrap();
+        let provider = Arc::new(Provider(Mutex::new(vec![])));
+        let builder = TurnExecutor::builder_from_shared(provider.clone())
+            .workspace(root.path())
+            .extensions(Arc::new(registry.finish()));
+        let executor = if allow {
+            builder.approval(AllowAllApproval).build().unwrap()
+        } else {
+            builder.build().unwrap()
+        };
+        let agent = Agent::new(executor, AgentConfig::new("m"));
+        let repo = JsonlSessionRepository::new(state.path()).unwrap();
+        let session = repo.create(root.path()).unwrap();
+        agent
+            .run_with_session_outcome(
+                &repo,
+                SessionSelection::Existing(session.metadata().id.clone()),
+                "write",
+                Arc::new(()),
+                TurnExecutionContext::new(),
+            )
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(root.path().join("note.txt")).unwrap(),
+            if allow { "after" } else { "before" }
+        );
+        let data =
+            fs::read_to_string(repo.open(&session.metadata().id).unwrap().path().unwrap()).unwrap();
+        assert!(!data.contains("DO_NOT_PERSIST_PRIVATE"));
+        assert!(!data.contains("DO_NOT_MAKE_THIS"));
+        {
+            let requests = provider.0.lock().unwrap();
+            assert!(requests.iter().all(|r| {
+                !serde_json::to_string(&r.messages)
+                    .unwrap()
+                    .contains("DO_NOT_MAKE_THIS")
+            }));
+        }
+        assert_eq!(
+            extension.diagnostics().requests_sent,
+            if allow { 4 } else { 3 }
+        );
+        assert!(extension.shutdown().await.reaped);
+    }
+}
+#[tokio::test]
+async fn text_structured_errors_and_all_media_preserve_completed_calls_without_base64_text() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("note.txt"), "before").unwrap();
+    let extension =
+        McpExtension::connect(config(root.path(), "media"), TurnExecutionContext::new())
+            .await
+            .unwrap();
+    let store = Arc::new(MemoryArtifactStore::default());
+    let ctx = context(root.path()).with_artifact_store(store.clone());
+    let result = read(&extension)
+        .execute(&ctx, json!({"path":"note.txt"}))
+        .await
+        .unwrap();
+    assert_eq!(result.artifacts.len(), 3);
+    assert_eq!(result.output["delivery_complete"], true);
+    assert!(result.output["structuredContent"].is_object());
+    assert!(!result.output.to_string().contains("AQID"));
+    assert!(!result.output.to_string().contains("DO_NOT_PERSIST"));
+    for reference in &result.artifacts {
+        assert!(reference.complete);
+        assert_eq!(
+            store.read(&reference.id, 0, 3).await.unwrap().bytes.len(),
+            3
+        );
+    }
+    let result = read(&extension)
+        .execute(&context(root.path()), json!({"path":"note.txt"}))
+        .await
+        .unwrap();
+    assert!(result.truncated);
+    assert_eq!(result.output["operation_completed"], true);
+    assert_eq!(result.output["delivery_complete"], false);
+    assert_eq!(extension.diagnostics().requests_sent, 5);
+    assert!(extension.shutdown().await.reaped);
+    let errors = McpExtension::connect(
+        config(root.path(), "tool_error"),
+        TurnExecutionContext::new(),
+    )
+    .await
+    .unwrap();
+    let error = read(&errors)
+        .execute(&context(root.path()), json!({"path":"note.txt"}))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "mcp_tool_error");
+    assert_eq!(error.details.unwrap()["operation_completed"], true);
+    errors.shutdown().await;
+}
+#[tokio::test]
+async fn catalog_notifications_ttl_and_refresh_cannot_rewrite_a_live_registration() {
+    for mode in ["ttl_zero", "legacy_list_changed"] {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.txt"), "before").unwrap();
+        let extension =
+            McpExtension::connect(config(root.path(), mode), TurnExecutionContext::new())
+                .await
+                .unwrap();
+        let tool = read(&extension);
+        let ctx = context(root.path());
+        tool.execute(&ctx, json!({"path":"note.txt"}))
+            .await
+            .unwrap();
+        fs::write(root.path().join("catalog_changed"), "changed").unwrap();
+        if mode == "legacy_list_changed" {
+            until(|| extension.wire_diagnostics().catalog_epoch > 0).await;
+        }
+        let error = tool
+            .execute(&ctx, json!({"path":"note.txt"}))
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "mcp_catalog_stale");
+        let fresh = extension
+            .refresh(TurnExecutionContext::new())
+            .await
+            .unwrap();
+        assert_ne!(fresh.catalog(), extension.catalog());
+        read(&fresh)
+            .execute(&ctx, json!({"path":"note.txt"}))
+            .await
+            .unwrap();
+        fs::remove_file(root.path().join("catalog_changed")).unwrap();
+        assert!(
+            tool.execute(&ctx, json!({"path":"note.txt"}))
+                .await
+                .is_err()
+        );
+        fresh.shutdown().await;
+    }
+}
+#[tokio::test]
+async fn unsupported_modern_versions_pagination_cycles_and_unoffered_interactions_are_explicit() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("note.txt"), "before").unwrap();
+    let error = McpExtension::connect(
+        config(root.path(), "unsupported_modern"),
+        TurnExecutionContext::new(),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(error.kind, McpErrorKind::UnsupportedVersion);
+    assert_eq!(error.supported_versions, vec!["2099-01-01"]);
+    let error = McpExtension::connect(
+        config(root.path(), "cursor_loop"),
+        TurnExecutionContext::new(),
+    )
+    .await
+    .err()
+    .unwrap();
+    assert_eq!(error.kind, McpErrorKind::InvalidCatalog);
+    let extension = McpExtension::connect(
+        config(root.path(), "input_required"),
+        TurnExecutionContext::new(),
+    )
+    .await
+    .unwrap();
+    let error = read(&extension)
+        .execute(&context(root.path()), json!({"path":"note.txt"}))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.code, "mcp_interaction_unavailable");
+    assert!(!format!("{error:?}").contains("PRIVATE_CONTINUATION"));
+    extension.shutdown().await;
+    let extension = McpExtension::connect(
+        config(root.path(), "legacy_request"),
+        TurnExecutionContext::new(),
+    )
+    .await
+    .unwrap();
+    read(&extension)
+        .execute(&context(root.path()), json!({"path":"note.txt"}))
+        .await
+        .unwrap();
+    until(|| extension.wire_diagnostics().rejected_server_requests == 1).await;
+    extension.shutdown().await;
+    assert_eq!(extension.wire_diagnostics().control_replies_written, 1);
+}
+#[tokio::test]
+async fn cancellation_sends_scoped_notification_then_reaps_and_does_not_replay() {
+    for mode in ["slow", "legacy_slow"] {
+        let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.txt"), "before").unwrap();
+        let extension =
+            McpExtension::connect(config(root.path(), mode), TurnExecutionContext::new())
+                .await
+                .unwrap();
+        let tool = read(&extension);
+        let ctx = context(root.path());
+        let owner =
+            tokio::spawn(async move { tool.execute(&ctx, json!({"path":"note.txt"})).await });
+        until(|| root.path().join("active").exists()).await;
+        owner.abort();
+        let _ = owner.await;
+        let diagnostics = extension.shutdown().await;
+        assert!(diagnostics.reaped);
+        assert_eq!(extension.wire_diagnostics().cancellation_written, 1);
+        assert!(root.path().join("cancelled").exists());
+        assert_eq!(
+            fs::read_to_string(root.path().join("note.txt")).unwrap(),
+            "before"
+        );
+    }
+}
+#[tokio::test]
+async fn long_remote_names_get_stable_bounded_aliases_and_host_overrides_are_explicit() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("note.txt"), "before").unwrap();
+    let mut cfg = config(root.path(), "long_names");
+    let remote = "x".repeat(100);
+    cfg.capabilities
+        .insert(remote.clone(), ToolCapability::ReadOnly);
+    let extension = McpExtension::connect(cfg, TurnExecutionContext::new())
+        .await
+        .unwrap();
+    let tool = extension.tools().remove(0);
+    assert!(tool.definition().name.len() <= 64);
+    assert_eq!(tool.capability(), ToolCapability::ReadOnly);
+    let result = tool
+        .execute(&context(root.path()), json!({"path":"note.txt"}))
+        .await
+        .unwrap();
+    assert_eq!(result.output["structuredContent"]["remote_name"], remote);
+    extension.shutdown().await;
+}
+
+#[tokio::test]
+async fn catalog_and_notification_budgets_bound_untrusted_control_traffic() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("note.txt"), "before").unwrap();
+    let mut cfg = config(root.path(), "modern");
+    cfg.limits.max_pages = 1;
+    assert_eq!(
+        McpExtension::connect(cfg, TurnExecutionContext::new())
+            .await
+            .err()
+            .unwrap()
+            .kind,
+        McpErrorKind::CatalogLimit
+    );
+    let mut cfg = config(root.path(), "flood");
+    cfg.limits.max_aux_messages_per_second = 8;
+    let extension = McpExtension::connect(cfg, TurnExecutionContext::new())
+        .await
+        .unwrap();
+    assert!(
+        read(&extension)
+            .execute(&context(root.path()), json!({"path":"note.txt"}))
+            .await
+            .is_err()
+    );
+    assert!(extension.wire_diagnostics().notifications_received <= 8);
+    assert!(extension.shutdown().await.reaped);
+}
+
+#[tokio::test]
+async fn explicit_protocol_profiles_identity_and_launch_authority_are_not_peer_controlled() {
+    let root = tempfile::tempdir().unwrap();
+    let mut cfg = config(root.path(), "legacy_silent");
+    cfg.protocol = McpProtocol::Legacy {
+        version: "2025-11-25".into(),
+    };
+    let extension = McpExtension::connect(cfg, TurnExecutionContext::new())
+        .await
+        .unwrap();
+    assert_eq!(extension.diagnostics().requests_sent, 3);
+    extension.shutdown().await;
+    let mut cfg = config(root.path(), "legacy");
+    cfg.protocol = McpProtocol::Modern;
+    assert_eq!(
+        McpExtension::connect(cfg, TurnExecutionContext::new())
+            .await
+            .err()
+            .unwrap()
+            .kind,
+        McpErrorKind::UnsupportedVersion
+    );
+    let mut cfg = config(root.path(), "modern");
+    cfg.expected_server = Some(McpServerInfo {
+        name: "another server".into(),
+        version: "1".into(),
+    });
+    assert_eq!(
+        McpExtension::connect(cfg, TurnExecutionContext::new())
+            .await
+            .err()
+            .unwrap()
+            .kind,
+        McpErrorKind::IdentityMismatch
+    );
+    let mut cfg = config(root.path(), "modern");
+    cfg.process
+        .capabilities
+        .insert("read".into(), ToolCapability::ReadOnly);
+    let error = McpExtension::connect(cfg, TurnExecutionContext::new())
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.process.unwrap().diagnostics.pid, None);
+}
+
+#[tokio::test]
+async fn core_cancellation_closes_history_and_initialization_never_sends_cancelled_for_initialize()
+{
+    let root = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("note.txt"), "before").unwrap();
+    let extension = McpExtension::connect(config(root.path(), "slow"), TurnExecutionContext::new())
+        .await
+        .unwrap();
+    let mut registry = ExtensionRegistry::new();
+    registry.install(extension.extension().unwrap()).unwrap();
+    let agent = Agent::new(
+        TurnExecutor::builder(Provider(Mutex::new(vec![])))
+            .workspace(root.path())
+            .extensions(Arc::new(registry.finish()))
+            .approval(AllowAllApproval)
+            .build()
+            .unwrap(),
+        AgentConfig::new("m"),
+    );
+    let repo = Arc::new(JsonlSessionRepository::new(state.path()).unwrap());
+    let saved = repo.clone();
+    let context = TurnExecutionContext::new();
+    let worker = context.clone();
+    let owner = tokio::spawn(async move {
+        agent
+            .run_with_session_outcome(
+                saved.as_ref(),
+                SessionSelection::New,
+                "work",
+                Arc::new(()),
+                worker,
+            )
+            .await
+    });
+    until(|| root.path().join("active").exists()).await;
+    context.cancel("stop");
+    let result = owner.await.unwrap();
+    assert!(matches!(result, AgentTurnOutcome::Aborted(_)));
+    assert!(
+        repo.open(&result.session().unwrap().id)
+            .unwrap()
+            .unfinished_turn()
+            .is_none()
+    );
+    assert!(extension.shutdown().await.reaped);
+    fs::remove_file(root.path().join("cancelled")).unwrap();
+    let mut cfg = config(root.path(), "legacy_init_slow");
+    cfg.protocol = McpProtocol::Legacy {
+        version: "2025-11-25".into(),
+    };
+    let pidfile = root.path().join("pid");
+    cfg.process
+        .arguments
+        .push(pidfile.to_string_lossy().into_owned());
+    let context = TurnExecutionContext::new();
+    let worker = context.clone();
+    let owner = tokio::spawn(async move { McpExtension::connect(cfg, worker).await });
+    until(|| root.path().join("initializing").exists()).await;
+    context.cancel("stop");
+    assert_eq!(
+        owner.await.unwrap().err().unwrap().kind,
+        McpErrorKind::Cancelled
+    );
+    assert!(!root.path().join("cancelled").exists());
+    let pid = fs::read_to_string(pidfile).unwrap();
+    until(|| !Path::new(&format!("/proc/{pid}")).exists()).await;
+}
+
+#[tokio::test]
+async fn media_admission_and_invalid_content_do_not_repeat_completed_tool_operations() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("note.txt"), "before").unwrap();
+    let mut cfg = config(root.path(), "media");
+    cfg.limits.max_media_bytes = 3;
+    let extension = McpExtension::connect(cfg, TurnExecutionContext::new())
+        .await
+        .unwrap();
+    let store = Arc::new(MemoryArtifactStore::default());
+    let ctx = context(root.path()).with_artifact_store(store);
+    let result = read(&extension)
+        .execute(&ctx, json!({"path":"note.txt"}))
+        .await
+        .unwrap();
+    assert_eq!(result.artifacts.len(), 1);
+    assert_eq!(result.output["delivery_complete"], false);
+    assert_eq!(extension.diagnostics().requests_sent, 4);
+    extension.shutdown().await;
+    let mut cfg = config(root.path(), "media");
+    cfg.limits.max_content_blocks = 1;
+    let extension = McpExtension::connect(cfg, TurnExecutionContext::new())
+        .await
+        .unwrap();
+    let error = read(&extension)
+        .execute(&context(root.path()), json!({"path":"note.txt"}))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.details.unwrap()["operation_completed"], true);
+    assert_eq!(extension.diagnostics().requests_sent, 4);
+    extension.shutdown().await;
+}
+
+#[tokio::test]
+async fn tool_budget_and_versioned_core_trace_cover_mcp_without_dispatching_a_forbidden_call() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("note.txt"), "before").unwrap();
+    let extension =
+        McpExtension::connect(config(root.path(), "modern"), TurnExecutionContext::new())
+            .await
+            .unwrap();
+    let mut registry = ExtensionRegistry::new();
+    registry.install(extension.extension().unwrap()).unwrap();
+    let agent = Agent::new(
+        TurnExecutor::builder(Provider(Mutex::new(vec![])))
+            .workspace(root.path())
+            .extensions(Arc::new(registry.finish()))
+            .approval(AllowAllApproval)
+            .config(TurnExecutionConfig {
+                budget: RunBudget {
+                    max_tool_calls: Some(0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .build()
+            .unwrap(),
+        AgentConfig::new("m"),
+    );
+    let frames = Arc::new(Mutex::new(vec![]));
+    let target = frames.clone();
+    let observer =
+        Arc::new(move |event: &AgentRawEventEnvelope| target.lock().unwrap().push(event.clone()));
+    let result = agent
+        .run_outcome("work", observer, TurnExecutionContext::new())
+        .await;
+    assert!(matches!(result, AgentTurnOutcome::Limited(_)));
+    assert_eq!(extension.diagnostics().requests_sent, 3);
+    assert_eq!(
+        fs::read_to_string(root.path().join("note.txt")).unwrap(),
+        "before"
+    );
+    let mut validator = events::EventTraceValidator::new();
+    for frame in frames.lock().unwrap().iter() {
+        validator.observe(frame).unwrap();
+    }
+    validator.finish().unwrap();
+    assert!(extension.shutdown().await.reaped);
+}
+
+#[tokio::test]
+async fn a_catalog_change_rejects_an_already_queued_unsent_call_without_discarding_the_active_reply()
+ {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("note.txt"), "before").unwrap();
+    let extension = McpExtension::connect(
+        config(root.path(), "legacy_queued_change"),
+        TurnExecutionContext::new(),
+    )
+    .await
+    .unwrap();
+    let first = read(&extension);
+    let ctx = context(root.path());
+    let first = tokio::spawn(async move { first.execute(&ctx, json!({"path":"note.txt"})).await });
+    until(|| root.path().join("active").exists()).await;
+    let second = read(&extension);
+    let ctx = context(root.path());
+    let second =
+        tokio::spawn(async move { second.execute(&ctx, json!({"path":"note.txt"})).await });
+    tokio::task::yield_now().await;
+    fs::write(root.path().join("catalog_changed"), "changed").unwrap();
+    fs::write(root.path().join("release"), "release").unwrap();
+    first.await.unwrap().unwrap();
+    let error = second.await.unwrap().err().unwrap();
+    assert_eq!(error.code, "mcp_catalog_stale");
+    assert_eq!(extension.diagnostics().requests_sent, 5);
+    assert!(extension.shutdown().await.reaped);
+}

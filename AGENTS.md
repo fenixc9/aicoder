@@ -81,6 +81,10 @@
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership
   through group signalling and report incomplete cleanup without restoring authority.
+- MCP metadata/annotations never grant authority. Freeze catalogs, revalidate freshness/epochs
+  before dispatch, keep private result metadata out of history, and archive typed binary
+  media without counting base64 as text. Completed-call capture failures cannot retry tools.
+  Honor the selected protocol era and keep server interactions outside unoffered capabilities.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

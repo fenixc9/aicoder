@@ -4,7 +4,7 @@ The optional runtime process-extensions feature hosts explicitly selected progra
 dynamic tools. Core owns serializable tool-contract types; runtime owns concrete stdio,
 process lifetime and tool adapters. Default core/runtime/frontends do not start a server,
 load a project-selected executable or inherit credentials. Package discovery/installation
-and MCP negotiation remain separate roadmap items.
+remains a separate roadmap item; [MCP stdio](mcp.md) uses a distinct optional protocol profile.
 
 ## Wire contract
 
