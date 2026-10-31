@@ -37,3 +37,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 [[example]]
 name = "provider_turn"
 required-features = ["server"]
+
+[[example]]
+name = "offline_web_extension_ui"
+required-features = ["server"]

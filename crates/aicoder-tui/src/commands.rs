@@ -2,6 +2,7 @@ use std::{error::Error, fmt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashCommand {
+    Extension,
     Exit,
     Resources,
     Reload,
@@ -205,6 +206,13 @@ const COMMANDS: &[CommandSpec] = &[
         description: "Remove pending images",
         arguments: ArgumentPolicy::Optional,
     },
+    CommandSpec {
+        command: SlashCommand::Extension,
+        name: "ext",
+        usage: "/ext [NAME JSON]",
+        description: "List or run extension commands",
+        arguments: ArgumentPolicy::Optional,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -235,7 +243,11 @@ pub fn suggestions(input: &str) -> Vec<&'static CommandSpec> {
 }
 
 pub fn completion(spec: &CommandSpec) -> String {
-    spec.usage.to_owned()
+    if spec.command == SlashCommand::Extension {
+        "/ext".into()
+    } else {
+        spec.usage.to_owned()
+    }
 }
 
 pub fn parse(input: &str) -> Option<Result<SlashCommand, SlashCommandError>> {
@@ -291,7 +303,7 @@ mod tests {
 
     #[test]
     fn registry_exposes_metadata_for_every_command() {
-        assert_eq!(all().len(), 23);
+        assert_eq!(all().len(), 24);
         assert_eq!(all()[0].usage, "/exit");
         assert!(!all()[0].description.is_empty());
     }
@@ -326,7 +338,8 @@ mod tests {
                 "theme",
                 "usage",
                 "image",
-                "unimage"
+                "unimage",
+                "ext"
             ]
         );
         assert_eq!(
@@ -334,7 +347,7 @@ mod tests {
                 .iter()
                 .map(|spec| spec.name)
                 .collect::<Vec<_>>(),
-            vec!["exit"]
+            vec!["exit", "ext"]
         );
         assert!(suggestions("/missing").is_empty());
         assert!(suggestions("/exit now").is_empty());

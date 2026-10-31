@@ -26,6 +26,7 @@ pub struct WebOptions {
     pub(crate) token: String,
     pub(crate) address: SocketAddr,
     memory: bool,
+    pub(crate) extensions: Option<Arc<aicoder_core::extensions::ExtensionSet>>,
 }
 impl WebOptions {
     /// The address must be the actual bound loopback address (not port zero).
@@ -42,7 +43,13 @@ impl WebOptions {
             token,
             address,
             memory: false,
+            extensions: None,
         })
+    }
+    /// Immutable trusted native registrations; browser payloads cannot install code.
+    pub fn extensions(mut self, extensions: Arc<aicoder_core::extensions::ExtensionSet>) -> Self {
+        self.extensions = Some(extensions);
+        self
     }
     /// Retain history in memory. Runtime session storage must also be disabled.
     pub fn memory_sessions(mut self) -> Self {
@@ -54,9 +61,9 @@ impl WebOptions {
 pub struct WebHost(pub(crate) Arc<Inner>);
 pub(crate) struct Inner {
     pub options: WebOptions,
-    runtime: Runtime,
+    pub(crate) runtime: Runtime,
     agent: Arc<Agent>,
-    repository: Arc<dyn SessionRepository>,
+    pub(crate) repository: Arc<dyn SessionRepository>,
     pub state: Mutex<State>,
     pub streams: Arc<Semaphore>,
     approvals: ApprovalSessions,
@@ -65,10 +72,13 @@ pub(crate) struct State {
     pub closing: bool,
     pub last_id: u64,
     pub current: Option<Arc<Run>>,
-    selection: SessionSelection,
+    pub(crate) selection: SessionSelection,
+    pub command: Option<Arc<crate::commands::CommandJob>>,
 }
 pub(crate) struct Run {
     pub handle: RunHandle,
+    pub request_id: u64,
+    pub ui: aicoder_core::ui::UiHost,
     pub events: Mutex<Option<EventSubscription>>,
     pub completion: Mutex<Option<Value>>,
     changed: Notify,
@@ -86,13 +96,17 @@ impl Run {
     }
     pub fn snapshot(&self) -> Value {
         let s = self.handle.snapshot();
-        json!({"version":1,"run_id":s.run_id,"session_id":s.session_id,"status":s.status,"approvals":s.approvals,"result":*self.completion.lock().expect("Web completion")})
+        json!({"version":1,"request_id":self.request_id,"run_id":s.run_id,"session_id":s.session_id,"status":s.status,"approvals":s.approvals,"result":*self.completion.lock().expect("Web completion"),"ui":self.ui.snapshot()})
     }
 }
 impl Drop for Inner {
     fn drop(&mut self) {
         if let Some(run) = &self.state.lock().expect("Web state").current {
+            run.ui.close();
             let _ = run.handle.cancel("Web host dropped");
+        }
+        if let Some(command) = &self.state.lock().expect("Web state").command {
+            command.cancel("Web host dropped");
         }
         self.approvals.clear();
     }
@@ -124,7 +138,11 @@ impl WebHost {
                 .min(8 * 1024 * 1024),
         );
         config.budget.max_tool_calls = Some(config.budget.max_tool_calls.unwrap_or(32).min(32));
-        let executor = runtime.executor_builder(provider)?.config(config).build()?;
+        let mut builder = runtime.executor_builder(provider)?.config(config);
+        if let Some(extensions) = &options.extensions {
+            builder = builder.extensions(extensions.clone());
+        }
+        let executor = builder.build()?;
         let agent = Agent::new(executor, runtime.agent_config()).following_session_models();
         let agent = if !runtime.follows_session_reasoning()
             && runtime.config().options.reasoning_effort.is_none()
@@ -153,6 +171,7 @@ impl WebHost {
                 last_id: 0,
                 current: None,
                 selection: SessionSelection::New,
+                command: None,
             }),
             approvals: ApprovalSessions::default(),
             streams: Arc::new(Semaphore::new(2)),
@@ -182,12 +201,16 @@ impl WebHost {
     }
     /// Close admission, cancel the owned run and await authoritative execution/persistence.
     pub async fn shutdown(&self) {
-        let run = {
+        let (run, command) = {
             let mut state = self.0.state.lock().expect("Web state");
             state.closing = true;
-            state.current.clone()
+            (state.current.clone(), state.command.clone())
         };
+        if let Some(command) = &command {
+            command.cancel("Web host shutdown");
+        }
         if let Some(run) = run {
+            run.ui.close();
             let _ = run.handle.cancel("Web host shutdown");
             let owner = run.owner.lock().expect("Web owner").take();
             if let Some(owner) = owner {
@@ -195,6 +218,9 @@ impl WebHost {
             } else {
                 run.done().await;
             }
+        }
+        if let Some(command) = command {
+            command.join().await;
         }
         self.0.approvals.clear();
     }
@@ -225,9 +251,13 @@ impl WebHost {
         }
         state.last_id = id;
         if state
-            .current
+            .command
             .as_ref()
-            .is_some_and(|run| run.completion.lock().expect("Web completion").is_none())
+            .is_some_and(|command| command.active())
+            || state
+                .current
+                .as_ref()
+                .is_some_and(|run| run.completion.lock().expect("Web completion").is_none())
         {
             return Err(("busy", "Wait for the current run to finish"));
         }
@@ -245,8 +275,14 @@ impl WebHost {
                 )
             })?
             .text;
+        Ok(self.launch(&mut state, prompt.into()))
+    }
+    pub(crate) fn launch(&self, state: &mut State, prompt: aicoder_core::AgentInput) -> Arc<Run> {
+        let ui = aicoder_core::ui::UiHost::interactive();
         let (handle, control) = RunHandle::channel(
-            TurnExecutionContext::new().with_approval_sessions(self.0.approvals.clone()),
+            TurnExecutionContext::new()
+                .with_approval_sessions(self.0.approvals.clone())
+                .with_ui(ui.client("extension").expect("fixed UI owner")),
             RunControlConfig {
                 handle_approvals: true,
                 ..Default::default()
@@ -258,6 +294,8 @@ impl WebHost {
             .expect("new Web subscription");
         let run = Arc::new(Run {
             handle,
+            request_id: state.last_id,
+            ui,
             events: Mutex::new(Some(events)),
             completion: Mutex::new(None),
             changed: Notify::new(),
@@ -279,6 +317,7 @@ impl WebHost {
             ))
             .catch_unwind()
             .await;
+            record.ui.close();
             let session = outcome
                 .as_ref()
                 .ok()
@@ -309,7 +348,7 @@ impl WebHost {
             record.changed.notify_waiters();
         });
         *run.owner.lock().expect("Web owner") = Some(owner);
-        Ok(run)
+        run
     }
 }
 fn completion(run: &Run, outcome: &AgentTurnOutcome) -> Value {

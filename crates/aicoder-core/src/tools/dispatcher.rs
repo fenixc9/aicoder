@@ -331,6 +331,22 @@ impl ToolDispatcher {
                 arguments: call.arguments.to_string().into(),
             },
         );
+        let ui_context = context
+            .filter(|context| context.has_ui())
+            .map(TurnExecutionContext::child);
+        struct CloseUi(Option<TurnExecutionContext>);
+        impl Drop for CloseUi {
+            fn drop(&mut self) {
+                if let Some(context) = &self.0 {
+                    context.cancel("tool UI scope ended");
+                }
+            }
+        }
+        let _ui_owner = CloseUi(ui_context.clone());
+        let scoped_context = ui_context
+            .as_ref()
+            .map(|context| self.context.clone().with_ui(context.ui().named(&call.name)));
+        let tool_context = scoped_context.as_ref().unwrap_or(&self.context);
         let arguments = call.arguments.clone();
 
         let Some(tool) = self.registry.get(&call.name) else {
@@ -352,6 +368,7 @@ impl ToolDispatcher {
                     self.context.workspace_root(),
                     call,
                     tool.capability(),
+                    tool_context.ui(),
                 ),
             );
             let checked = match context {
@@ -386,7 +403,7 @@ impl ToolDispatcher {
         // owned operation is consumed after approval; no re-reading/re-planning then.
         let preparation = timeout(
             self.config.tool_timeout,
-            tool.prepare(&self.context, arguments.clone()),
+            tool.prepare(tool_context, arguments.clone()),
         );
         let prepared = match context {
             Some(context) => tokio::select! {
@@ -640,8 +657,8 @@ impl ToolDispatcher {
         );
         let execution = timeout(self.config.tool_timeout, async {
             match prepared {
-                Some(plan) => plan.execute(&self.context).await,
-                None => tool.execute(&self.context, arguments).await,
+                Some(plan) => plan.execute(tool_context).await,
+                None => tool.execute(tool_context, arguments).await,
             }
         });
         let execution = match context {

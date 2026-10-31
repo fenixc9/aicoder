@@ -15,6 +15,7 @@ pub struct TurnExecutionContext {
     pub(crate) control: Option<Arc<crate::control::ControlState>>,
     pub(crate) approval_sessions: Option<crate::tools::ApprovalSessions>,
     pub(crate) approval_session: Option<crate::tools::ApprovalSession>,
+    ui: crate::ui::UiClient,
     token: CancellationToken,
     reason: Arc<Mutex<Option<Arc<str>>>>,
     parent: Option<Arc<TurnExecutionContext>>,
@@ -22,16 +23,34 @@ pub struct TurnExecutionContext {
 
 impl TurnExecutionContext {
     pub fn new() -> Self {
+        Self::fresh(CancellationToken::new(), crate::ui::UiClient::default())
+    }
+    fn fresh(token: CancellationToken, ui: crate::ui::UiClient) -> Self {
         Self {
             control: None,
             approval_sessions: None,
             approval_session: None,
-            token: CancellationToken::new(),
+            ui,
+            token,
             reason: Arc::new(Mutex::new(None)),
             parent: None,
         }
     }
 
+    /// Host-selected ephemeral UI; never serialized or restored from session records.
+    pub fn with_ui(mut self, ui: crate::ui::UiClient) -> Self {
+        self.ui = ui;
+        self
+    }
+    pub(crate) fn has_ui(&self) -> bool {
+        self.ui.attached()
+    }
+    pub fn ui(&self) -> crate::ui::UiClient {
+        self.ui.scoped(self.token.clone())
+    }
+    pub(crate) fn extension_ui(ui: crate::ui::UiClient) -> Self {
+        Self::fresh(ui.callback_cancellation(), ui)
+    }
     pub fn with_approval_sessions(mut self, sessions: crate::tools::ApprovalSessions) -> Self {
         self.approval_sessions = Some(sessions);
         self.approval_session = None;
@@ -88,6 +107,7 @@ impl TurnExecutionContext {
             control: self.control.clone(),
             approval_sessions: self.approval_sessions.clone(),
             approval_session: self.approval_session.clone(),
+            ui: self.ui.clone(),
             token: self.token.child_token(),
             reason: Arc::new(Mutex::new(None)),
             parent: Some(Arc::new(self.clone())),

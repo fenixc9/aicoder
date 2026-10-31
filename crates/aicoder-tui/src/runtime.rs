@@ -20,6 +20,7 @@ pub struct ActiveRun {
     completion: RunCompletion,
 }
 enum RunCompletion {
+    Command(oneshot::Receiver<Result<aicoder_core::extensions::CommandOutput, String>>),
     Turn(oneshot::Receiver<AgentTurnOutcome>),
     Compaction(oneshot::Receiver<aicoder_core::summary::ManualCompactionReport>),
 
@@ -38,6 +39,10 @@ impl ActiveRun {
             }
         }
         match &mut self.completion {
+            RunCompletion::Command(receiver) => match receiver.await {
+                Ok(report) => AppEvent::CommandFinished(Box::new(report)),
+                Err(_) => AppEvent::RunDropped,
+            },
             RunCompletion::Model(receiver) => match receiver.await {
                 Ok(report) => AppEvent::ModelSelected(Box::new(report)),
                 Err(_) => AppEvent::RunDropped,
@@ -83,13 +88,25 @@ pub struct AgentRuntime {
     runtime: Arc<aicoder_runtime::Runtime>,
     provider: Arc<dyn aicoder_core::ModelProvider>,
     approvals: ApprovalSessions,
+    extensions: Option<Arc<aicoder_core::extensions::ExtensionSet>>,
 }
 
 impl AgentRuntime {
     pub fn new(runtime: aicoder_runtime::Runtime) -> Result<Self> {
-        let repository = Arc::new(runtime.sessions()?);
         let provider: Arc<dyn aicoder_core::ModelProvider> = Arc::new(runtime.session_client()?);
-        let executor = runtime.executor_builder(provider.clone())?.build()?;
+        Self::with_provider(runtime, provider, None)
+    }
+    pub fn with_provider(
+        runtime: aicoder_runtime::Runtime,
+        provider: Arc<dyn aicoder_core::ModelProvider>,
+        extensions: Option<Arc<aicoder_core::extensions::ExtensionSet>>,
+    ) -> Result<Self> {
+        let repository = Arc::new(runtime.sessions()?);
+        let mut builder = runtime.executor_builder(provider.clone())?;
+        if let Some(extensions) = &extensions {
+            builder = builder.extensions(extensions.clone());
+        }
+        let executor = builder.build()?;
         let agent = Agent::new(executor, runtime.agent_config())
             .following_session_models()
             .following_session_reasoning();
@@ -109,9 +126,74 @@ impl AgentRuntime {
             runtime: Arc::new(runtime),
             provider,
             approvals: ApprovalSessions::default(),
+            extensions,
         })
     }
 
+    pub fn commands(&self) -> Vec<aicoder_core::extensions::CommandSpec> {
+        self.extensions
+            .as_ref()
+            .map(|e| e.commands())
+            .unwrap_or_default()
+    }
+    pub fn start_command(
+        &self,
+        selection: SessionSelection,
+        name: String,
+        arguments: serde_json::Value,
+        context: TurnExecutionContext,
+    ) -> Result<ActiveRun> {
+        let extensions = self
+            .extensions
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Host has no registered extension commands"))?;
+        let repository = self.repository.clone();
+        let workspace = self.workspace.clone();
+        let (sender, completion) = oneshot::channel();
+        tokio::spawn(async move {
+            let result = async {
+                if context.is_cancelled() {
+                    return Err(context.error().into());
+                }
+                let mut session = match selection {
+                    SessionSelection::Existing(id) => Some(repository.open_run(&id)?),
+                    _ => None,
+                };
+                anyhow::ensure!(
+                    session
+                        .as_ref()
+                        .is_none_or(|s| s.metadata().cwd == workspace),
+                    "foreign command session"
+                );
+                let _lease = session
+                    .as_mut()
+                    .map(|s| s.acquire(repository.as_ref()))
+                    .transpose()?;
+                extensions
+                    .execute_command(
+                        &name,
+                        aicoder_core::extensions::CommandRequest {
+                            context: aicoder_core::extensions::CommandContext {
+                                workspace: &workspace,
+                                session: session.as_ref().map(|s| s.metadata()),
+                            },
+                            arguments: &arguments,
+                        },
+                        &context,
+                    )
+                    .await
+            }
+            .await
+            .map_err(|error: anyhow::Error| {
+                aicoder_core::redaction::sanitize_text(&error.to_string(), 2048)
+            });
+            let _ = sender.send(result);
+        });
+        Ok(ActiveRun {
+            events: None,
+            completion: RunCompletion::Command(completion),
+        })
+    }
     pub fn prepare_prompt(
         &self,
         prompt: &str,
@@ -184,7 +266,11 @@ impl AgentRuntime {
     }
     pub fn reload_resources(&mut self) -> Result<()> {
         let runtime = self.runtime.reload_resources()?;
-        let executor = runtime.executor_builder(self.provider.clone())?.build()?;
+        let mut builder = runtime.executor_builder(self.provider.clone())?;
+        if let Some(extensions) = &self.extensions {
+            builder = builder.extensions(extensions.clone());
+        }
+        let executor = builder.build()?;
         let agent = Agent::new(executor, runtime.agent_config())
             .following_session_models()
             .following_session_reasoning();
@@ -480,7 +566,12 @@ impl AgentRuntime {
         false
     }
     pub fn start_compaction(&self, id: String, context: TurnExecutionContext) -> Result<ActiveRun> {
-        let agent = self.runtime.summary_agent(self.provider.clone())?;
+        let agent = match &self.extensions {
+            Some(extensions) => self
+                .runtime
+                .summary_agent_with_extensions(self.provider.clone(), extensions.clone())?,
+            None => self.runtime.summary_agent(self.provider.clone())?,
+        };
         let repository = self.repository.clone();
         let (sent, received) = oneshot::channel();
         tokio::spawn(async move {

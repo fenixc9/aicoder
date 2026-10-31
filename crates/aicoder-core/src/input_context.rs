@@ -11,6 +11,17 @@ pub struct PreparedInput {
 #[async_trait]
 pub trait InputContextProvider: Send + Sync {
     async fn prepare(&self, workspace: &Path, messages: &[Message]) -> Result<PreparedInput>;
+    /// Execution-scoped host services. Existing context providers need no changes.
+    async fn prepare_for_execution(
+        &self,
+        workspace: &Path,
+        messages: &[Message],
+        system_prefix_len: usize,
+        _context: &crate::TurnExecutionContext,
+    ) -> Result<PreparedInput> {
+        self.prepare_with_prefix(workspace, messages, system_prefix_len)
+            .await
+    }
     /// The declared host prefix boundary; leading historical system records are not host input.
     /// Existing providers keep their legacy behavior until they override this method.
     async fn prepare_with_prefix(

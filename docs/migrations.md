@@ -713,3 +713,25 @@ subcommands, `--package-lock` and `--no-packages`. Rust hosts may opt into proce
 activation with existing runtime features; stock frontends load text resources only. No
 mandatory language runtime is introduced. Runtime activates the already locked ring 0.17.14
 SHA-256 implementation for content integrity; core does not depend on it. See [contracts](packages.md).
+
+
+## S6: scoped native UI and frontend command adapters
+
+Core adds UI broker/data APIs without new dependencies or changes to persisted session/event
+formats. TurnExecutionContext::with_ui is explicit; default contexts remain headless. Tools
+access ToolContext::ui, and hooks/commands access ExtensionCancellation::ui. UI state is weak,
+scoped, bounded and ephemeral; it cannot be restored through history or used as tool approval.
+InputContextProvider::prepare_for_execution has a default legacy delegation, so existing
+providers need no changes. UI-aware providers may override it. Model preflight, manual summary
+and ordinary execution all use that path while preserving protected prefix boundaries.
+Runtime::summary_agent_with_extensions also retains installed registrations for `/compact`.
+
+The TUI adds a reusable library run_with_provider entry and `/ext [NAME JSON]`; templates
+using `/ext` in that frontend now share a reserved built-in name and should be renamed.
+WebOptions gains explicit native extension installation; authenticated command/UI routes
+and additive request_id/ui/command snapshot fields use the existing Web protocol version.
+Older clients may ignore those fields; the embedded assets adapt them. CLI/RPC do not implicitly
+open stdin for UI; extensions use an explicit Unsupported fallback. See [UI contracts](extension-ui.md).
+
+Interactive commands may declare up to 600 seconds; context/tool hooks retain the existing
+30-second bound. No callback can bypass owner cancellation or UI admission limits.

@@ -1,0 +1,462 @@
+#![cfg(feature = "server")]
+use aicoder_core::{extensions::*, model::*, ui::*, *};
+use aicoder_runtime::{
+    ConfigDiscovery, Runtime, RuntimeOverrides, Setting, Settings, resources::ResourceSettings,
+};
+use aicoder_web::{WebHost, WebOptions};
+use async_trait::async_trait;
+use serde_json::{Value, json};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+const TOKEN: &str = "fixture-ui-token-0123456789abcdef";
+struct Model {
+    write: bool,
+    calls: AtomicUsize,
+    requests: Mutex<Vec<ModelRequest>>,
+}
+#[async_trait]
+impl ModelProvider for Model {
+    fn model_spec(&self, model: &str) -> Result<ModelSpec, ProviderError> {
+        let mut spec = ModelSpec::new("offline", model);
+        spec.capabilities.tools = true;
+        Ok(spec)
+    }
+    async fn generate(
+        &self,
+        request: ModelRequest,
+        sink: Arc<dyn ModelEventSink>,
+        _: TurnExecutionContext,
+    ) -> Result<ModelResponse, ProviderError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.requests.lock().unwrap().push(request.clone());
+        let call = self.write
+            && request
+                .messages
+                .last()
+                .is_some_and(|m| m.role == MessageRole::User);
+        let message = if call {
+            Message {
+                role: MessageRole::Assistant,
+                content: vec![ContentBlock::ToolCall {
+                    call: ModelToolCall {
+                        id: "one".into(),
+                        name: "write_file".into(),
+                        arguments: json!({"path":"result.txt","content":"after"}),
+                    },
+                }],
+            }
+        } else {
+            Message::text(MessageRole::Assistant, "done")
+        };
+        let response = ModelResponse {
+            id: None,
+            model: request.model,
+            message,
+            stop_reason: if call {
+                StopReason::ToolCalls
+            } else {
+                StopReason::Complete
+            },
+            usage: ModelUsage::zero(),
+        };
+        emit_response(&response, sink.as_ref());
+        Ok(response)
+    }
+}
+struct Review(Arc<AtomicUsize>);
+#[async_trait]
+impl ExtensionCommand for Review {
+    fn specification(&self) -> CommandSpec {
+        CommandSpec {
+            name: "review".into(),
+            description: "Review input".into(),
+            parameters: json!({"type":"object"}),
+        }
+    }
+    async fn execute(
+        &self,
+        request: CommandRequest<'_>,
+        cancellation: ExtensionCancellation,
+    ) -> anyhow::Result<CommandOutput> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        let ui = cancellation.ui();
+        ui.notify(UiLevel::Info, "Ready to review".into())?;
+        ui.status("review", Some("Waiting for data".into()))?;
+        ui.ask(UiPrompt::Select {
+            title: "Review action".into(),
+            options: vec![UiOption {
+                id: "continue".into(),
+                label: "Continue".into(),
+            }],
+        })
+        .await?;
+        let UiAnswer::Text { text } = ui
+            .ask(UiPrompt::Input {
+                title: "Review note".into(),
+                initial: String::new(),
+                multiline: true,
+                max_bytes: 128,
+            })
+            .await?
+        else {
+            return Ok(CommandOutput::Notice("Dismissed".into()));
+        };
+        if request.arguments["submit"] == true {
+            Ok(CommandOutput::Submit(
+                format!("Review request: {text}").into(),
+            ))
+        } else {
+            Ok(CommandOutput::Notice(format!("Review noted: {text}")))
+        }
+    }
+}
+struct Guard;
+#[async_trait]
+impl ToolHook for Guard {
+    async fn before_tool(
+        &self,
+        _: ToolHookInput<'_>,
+        cancellation: ExtensionCancellation,
+    ) -> anyhow::Result<ToolHookDecision> {
+        cancellation
+            .ui()
+            .ask(UiPrompt::Select {
+                title: "Tool input choice".into(),
+                options: vec![UiOption {
+                    id: "continue".into(),
+                    label: "Continue with this data".into(),
+                }],
+            })
+            .await?;
+        Ok(ToolHookDecision::Continue)
+    }
+}
+struct Server {
+    host: WebHost,
+    url: String,
+    client: reqwest::Client,
+    server: tokio::task::JoinHandle<std::io::Result<()>>,
+    root: tempfile::TempDir,
+    model: Arc<Model>,
+    commands: Arc<AtomicUsize>,
+}
+impl Server {
+    async fn new(write: bool) -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let runtime = Runtime::load_with_environment(
+            root.path(),
+            RuntimeOverrides {
+                settings: Settings {
+                    resources: ResourceSettings {
+                        enabled: Setting::Value(false),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                session_dir: Setting::Clear,
+                ..Default::default()
+            },
+            ConfigDiscovery {
+                enabled: false,
+                ..Default::default()
+            },
+            Arc::new(BTreeMap::<String, String>::new()),
+        )
+        .unwrap();
+        let commands = Arc::new(AtomicUsize::new(0));
+        let mut extension = Extension::new("ui-test", "1").unwrap();
+        extension
+            .command(Arc::new(Review(commands.clone())), Duration::from_secs(30))
+            .unwrap();
+        let mut spec = HookSpec::new("ask-before-tool");
+        spec.timeout = Duration::from_secs(10);
+        extension.tool_hook(spec, Arc::new(Guard)).unwrap();
+        let mut registry = ExtensionRegistry::new();
+        registry.install(extension).unwrap();
+        let model = Arc::new(Model {
+            write,
+            calls: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+        });
+        let host = WebHost::with_provider(
+            runtime,
+            WebOptions::new(TOKEN.into(), address)
+                .unwrap()
+                .memory_sessions()
+                .extensions(Arc::new(registry.finish())),
+            model.clone(),
+        )
+        .unwrap();
+        let router = host.router();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await });
+        Self {
+            host,
+            url: format!("http://{address}"),
+            client: reqwest::Client::builder().no_proxy().build().unwrap(),
+            server,
+            root,
+            model,
+            commands,
+        }
+    }
+    async fn get(&self, path: &str) -> Value {
+        self.client
+            .get(format!("{}{path}", self.url))
+            .bearer_auth(TOKEN)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap()
+    }
+    async fn post(&self, path: &str, body: Value) -> reqwest::Response {
+        self.client
+            .post(format!("{}{path}", self.url))
+            .bearer_auth(TOKEN)
+            .json(&body)
+            .send()
+            .await
+            .unwrap()
+    }
+    async fn wait(&self, path: &str, predicate: impl Fn(&Value) -> bool) -> Value {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let value = self.get(path).await;
+                if predicate(&value) {
+                    return value;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+    async fn command(&self, id: u64, submit: bool) -> String {
+        let response = self
+            .post(
+                "/api/commands",
+                json!({"id":id,"name":"review","arguments":{"submit":submit}}),
+            )
+            .await;
+        assert_eq!(response.status(), 202);
+        response.json::<Value>().await.unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .into()
+    }
+    async fn answer(&self, path: &str, text: &str) {
+        let value = self
+            .wait(path, |v| {
+                v["ui"]["questions"]
+                    .as_array()
+                    .is_some_and(|q| !q.is_empty())
+            })
+            .await;
+        let q = &value["ui"]["questions"][0];
+        let answer = if q["prompt"]["kind"] == "select" {
+            json!({"kind":"choice","id":"continue"})
+        } else {
+            json!({"kind":"text","text":text})
+        };
+        assert_eq!(
+            self.post(
+                &format!("{path}/ui"),
+                json!({"question_id":q["id"],"answer":answer})
+            )
+            .await
+            .status(),
+            200
+        );
+    }
+    async fn close(self) {
+        self.host.shutdown().await;
+        self.server.abort();
+        let _ = self.server.await;
+    }
+}
+#[tokio::test]
+async fn authenticated_commands_ask_typed_questions_and_submit_only_explicit_agent_input() {
+    let server = Server::new(false).await;
+    assert_eq!(
+        server
+            .client
+            .get(format!("{}/api/commands", server.url))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(
+        server.get("/api/commands").await["commands"][0]["name"],
+        "review"
+    );
+    let id = server.command(1, false).await;
+    let path = format!("/api/commands/{id}");
+    let waiting = server
+        .wait(&path, |v| {
+            v["ui"]["questions"]
+                .as_array()
+                .is_some_and(|q| !q.is_empty())
+        })
+        .await;
+    assert_eq!(waiting["ui"]["notices"][0]["text"], "Ready to review");
+    assert_eq!(waiting["ui"]["statuses"][0]["text"], "Waiting for data");
+    assert_eq!(server.post(&format!("{path}/ui"),json!({"question_id":waiting["ui"]["questions"][0]["id"],"answer":{"kind":"choice","id":"continue","decision":"allow_session"}})).await.status(),422);
+    server.answer(&path, "unused").await;
+    server.answer(&path, "operator note").await;
+    let done = server.wait(&path, |v| !v["result"].is_null()).await;
+    assert_eq!(done["result"]["notice"], "Review noted: operator note");
+    assert_eq!(done["ui"]["closed"], true);
+    assert!(server.get("/api/state").await["run"].is_null());
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        server
+            .post(
+                "/api/commands",
+                json!({"id":1,"name":"review","arguments":{}})
+            )
+            .await
+            .status(),
+        409
+    );
+    assert_eq!(server.commands.load(Ordering::SeqCst), 1);
+    let id = server.command(2, true).await;
+    let path = format!("/api/commands/{id}");
+    server.answer(&path, "").await;
+    server.answer(&path, "to the agent").await;
+    let done = server.wait(&path, |v| !v["result"].is_null()).await;
+    assert_eq!(done["result"]["status"], "submitted");
+    let run = done["result"]["run_id"].as_str().unwrap();
+    server
+        .wait(&format!("/api/runs/{run}"), |v| !v["result"].is_null())
+        .await;
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 1);
+    assert!(
+        server.model.requests.lock().unwrap()[0]
+            .messages
+            .last()
+            .unwrap()
+            .text_content()
+            .contains("Review request: to the agent")
+    );
+    server.close().await;
+}
+#[tokio::test]
+async fn cancelled_and_foreign_command_questions_cannot_reopen_or_submit_runs() {
+    let server = Server::new(false).await;
+    let id = server.command(1, true).await;
+    let path = format!("/api/commands/{id}");
+    let value = server
+        .wait(&path, |v| {
+            v["ui"]["questions"]
+                .as_array()
+                .is_some_and(|q| !q.is_empty())
+        })
+        .await;
+    let old = value["ui"]["questions"][0]["id"].clone();
+    assert_eq!(
+        server
+            .post(&format!("{path}/cancel"), json!({}))
+            .await
+            .status(),
+        200
+    );
+    server.wait(&path, |v| !v["result"].is_null()).await;
+    assert_eq!(
+        server
+            .post(
+                &format!("{path}/ui"),
+                json!({"question_id":old,"answer":{"kind":"choice","id":"continue"}})
+            )
+            .await
+            .status(),
+        409
+    );
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 0);
+    let id = server.command(2, false).await;
+    let path = format!("/api/commands/{id}");
+    server
+        .wait(&path, |v| {
+            v["ui"]["questions"]
+                .as_array()
+                .is_some_and(|q| !q.is_empty())
+        })
+        .await;
+    assert_eq!(
+        server
+            .post(
+                &format!("{path}/ui"),
+                json!({"question_id":old,"answer":{"kind":"choice","id":"continue"}})
+            )
+            .await
+            .status(),
+        409
+    );
+    assert_eq!(
+        server.get(&path).await["ui"]["questions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.host.shutdown().await;
+    let done = server.get(&path).await;
+    assert_eq!(done["ui"]["closed"], true);
+    assert!(done["ui"]["questions"].as_array().unwrap().is_empty());
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 0);
+    server.close().await;
+}
+#[tokio::test]
+async fn ui_choices_never_resolve_tool_approvals_or_restore_session_grants() {
+    let server = Server::new(true).await;
+    let response = server
+        .post("/api/runs", json!({"id":1,"text":"write"}))
+        .await;
+    assert_eq!(response.status(), 202);
+    let id = response.json::<Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let path = format!("/api/runs/{id}");
+    let pending = server
+        .wait(&path, |v| {
+            v["ui"]["questions"]
+                .as_array()
+                .is_some_and(|q| !q.is_empty())
+        })
+        .await;
+    assert!(pending["approvals"].as_array().unwrap().is_empty());
+    server.answer(&path, "").await;
+    let pending = server
+        .wait(&path, |v| {
+            v["approvals"].as_array().is_some_and(|q| !q.is_empty())
+        })
+        .await;
+    assert!(!server.root.path().join("result.txt").exists());
+    assert_eq!(server.post(&format!("{path}/ui"),json!({"question_id":pending["approvals"][0]["id"],"answer":{"kind":"choice","id":"allow_session"}})).await.status(),422);
+    assert_eq!(
+        server
+            .post(
+                &format!("{path}/approval"),
+                json!({"approval_id":pending["approvals"][0]["id"],"decision":"deny"})
+            )
+            .await
+            .status(),
+        200
+    );
+    server.wait(&path, |v| !v["result"].is_null()).await;
+    assert!(!server.root.path().join("result.txt").exists());
+    server.close().await;
+}

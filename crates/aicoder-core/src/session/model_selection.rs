@@ -58,7 +58,7 @@ impl TurnExecutor {
             if input.prepared_context.is_none()
                 && let Some(provider) = &self.input_context
             {
-                let prepared = tokio::select! {biased;cancelled=context.cancelled()=>return Err(cancelled.into()),prepared=provider.prepare_with_prefix(self.workspace_root(),&input.history,input.system_prefix_len)=>prepared?};
+                let prepared = tokio::select! {biased;cancelled=context.cancelled()=>return Err(cancelled.into()),prepared=provider.prepare_for_execution(self.workspace_root(),&input.history,input.system_prefix_len,context)=>prepared?};
                 crate::input_context::validate_prefix(&prepared.system_prefix)?;
                 let history = input.history.split_off(input.system_prefix_len);
                 let messages = input.request.messages.split_off(input.system_prefix_len);

@@ -28,6 +28,7 @@ pub mod state;
 pub mod summary;
 pub mod tools;
 pub mod turn_executor;
+pub mod ui;
 
 pub use agent::{
     Agent, AgentConfig, AgentTurnOutcome, AgentTurnResult, InterruptedAgentTurn, SessionSelection,

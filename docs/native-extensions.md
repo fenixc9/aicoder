@@ -10,7 +10,8 @@ The manifest records a bounded ID, opaque version and api_version = 1. This is a
 registration contract, not a Rust shared-library ABI. Source compatibility follows the crate
 version. [Process tools](process-extensions.md) use an optional runtime adapter over this
 registration API; [MCP stdio](mcp.md) adds modern/legacy tool profiles. Package
-manifests/install/reload remain separate S6 work.
+[Local resource packages](packages.md) provide pinned manifests/install/reload; executable
+activation remains a separate explicit host operation.
 Native code has the host process's permissions and can access std/IO directly. These contracts
 bound cooperative callbacks and admitted data; they cannot sandbox arbitrary Rust code,
 preempt a blocking callback or recover from process exit/abort/allocation failure.
@@ -71,7 +72,7 @@ timeouts become paired extension_hook_failed results. The whole tool-hook phase 
 limited by the dispatcher's tool_timeout. Denials still apply to calls with session grants.
 New snapshots receive new registry identity, so old grants do not silently carry across them.
 
-ExtensionCancellation exposes observation only, without approval/run-control authority or
+ExtensionCancellation exposes cancellation observation and scoped [host UI data](extension-ui.md), without approval/run-control authority or
 the ability to cancel the owner. Timeout, cancellation, steering or dropping a callback
 cancels its private token and drops its future; late child work cannot publish a hook result.
 Implementations that spawn tasks must honor that token. A callback can otherwise retain its
@@ -91,15 +92,17 @@ the report does not claim that its thread was killed or its external side effect
 
 ExtensionCommand receives explicit arguments, workspace and optional session metadata.
 It returns Notice text (64 KiB JSON) or a validated user AgentInput (2 MiB minus 16 KiB),
-with 64 KiB JSON input arguments. It uses the same bounded cooperative callback/error rules
+with 64 KiB JSON input arguments. Commands declare a 1 ms–600 s deadline for human interaction;
+context/tool hooks retain HookSpec's 30 s ceiling. Commands use the same bounded cooperative callback/error rules
 and owner cancellation. The host displays the notice or explicitly sends the returned input
 through its ordinary Agent/session/approval path. Execution never starts implicitly.
 Arguments are untrusted; commands validate their own schema-specific semantics. The API
 does not give commands an approval rule, hidden session mutation handle or automatic tools.
 
-The SDK exposes command specifications and execution; stock CLI/TUI/Web command discovery
-and UI adapters follow the S6 UI-capability/package work. `/plan` in the offline Rust example
-is an embedded-host command, not a new built-in slash command in those binaries.
+The SDK exposes command specifications and execution. Explicit native TUI/Web hosts now
+adapt commands through `/ext NAME JSON` and authenticated Web command routes; see [UI contracts](extension-ui.md).
+Headless CLI/RPC do not implicitly open stdin. `/plan` in the offline Rust example remains
+an embedded-host command, not a new built-in slash command in stock binaries.
 
 ```sh
 cargo run --locked -p aicoder-core --example native_extensions

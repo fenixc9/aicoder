@@ -115,7 +115,7 @@ pub(crate) async fn compact(
     };
     let work = async {
         if let Some(provider) = host.input_context {
-            let prepared = tokio::select! {biased;cancelled=context.cancelled()=>return Err(anyhow::Error::from(cancelled)),prepared=provider.prepare_with_prefix(host.workspace,&input.history,input.system_prefix_len)=>prepared?};
+            let prepared = tokio::select! {biased;cancelled=context.cancelled()=>return Err(anyhow::Error::from(cancelled)),prepared=provider.prepare_for_execution(host.workspace,&input.history,input.system_prefix_len,&context)=>prepared?};
             crate::input_context::validate_prefix(&prepared.system_prefix)?;
             let history = input.history.split_off(input.system_prefix_len);
             let messages = input.request.messages.split_off(input.system_prefix_len);

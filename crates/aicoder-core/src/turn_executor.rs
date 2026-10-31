@@ -541,7 +541,7 @@ impl TurnExecutor {
             let prepared = tokio::select! {
                 biased;
                 cancelled=context.cancelled()=>return Err(cancelled.into()),
-                prepared=provider.prepare_with_prefix(self.workspace_root(),&progress.messages,system_prefix_len)=>prepared?,
+                prepared=provider.prepare_for_execution(self.workspace_root(),&progress.messages,system_prefix_len,context)=>prepared?,
             };
             crate::input_context::validate_prefix(&prepared.system_prefix)?;
             let history = progress.messages.split_off(system_prefix_len);

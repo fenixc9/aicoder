@@ -89,6 +89,10 @@
   host storage. Installation never launches code. Resolve executable profiles only in the host;
   reload/restoration must revalidate trust and preserve old generations on failure. Public
   package state cannot restore tool grants, backend handles or credential-routing authority.
+- Extension UI is ephemeral data, never authorization or canonical history. Bound queues,
+  payloads, statuses and operation counts; expire questions on cancellation, timeout, owner
+  replacement and dropped futures. Keep approval choices separate, preserve paste as data,
+  and serialize command cancellation/submission before launching a normal AgentInput turn.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

@@ -20,6 +20,7 @@ pub enum AppEvent {
     TurnFinished(Box<AgentTurnOutcome>),
     CompactionFinished(Box<aicoder_core::summary::ManualCompactionReport>),
     ObservationFailed(String),
+    CommandFinished(Box<Result<aicoder_core::extensions::CommandOutput, String>>),
     RunDropped,
 }
 
@@ -60,6 +61,7 @@ pub struct PendingApproval {
 
 pub use crate::editor::InputBuffer;
 pub struct App {
+    pub extension_ui: Option<crate::extension_ui::ExtensionUi>,
     pub run: Option<crate::runtime::ActiveRun>,
     observation_incomplete: bool,
     pub sessions: Vec<SessionInfo>,
@@ -99,9 +101,21 @@ pub struct App {
     tool_indexes: HashMap<String, usize>,
 }
 
+impl Drop for App {
+    fn drop(&mut self) {
+        if let Some(context) = &self.active_context {
+            context.cancel("TUI owner dropped");
+        }
+        if let Some(handle) = &self.active_handle {
+            let _ = handle.cancel("TUI owner dropped");
+        }
+        self.close_ui();
+    }
+}
 impl App {
     pub fn new(sessions: Vec<SessionInfo>) -> Self {
         Self {
+            extension_ui: None,
             run: None,
             observation_incomplete: false,
             sessions,
@@ -142,6 +156,25 @@ impl App {
         }
     }
 
+    pub fn ui_context(&mut self, context: TurnExecutionContext) -> TurnExecutionContext {
+        self.refresh_ui();
+        self.close_ui();
+        let ui = crate::extension_ui::ExtensionUi::new();
+        let context = ui.context(context);
+        self.extension_ui = Some(ui);
+        context
+    }
+    pub fn refresh_ui(&mut self) {
+        if let Some(ui) = &mut self.extension_ui {
+            self.timeline
+                .extend(ui.refresh().into_iter().map(TimelineItem::Notice));
+        }
+    }
+    pub fn close_ui(&mut self) {
+        if let Some(ui) = &self.extension_ui {
+            ui.host.close();
+        }
+    }
     pub fn compose(&self, text: &str) -> String {
         let mut result = text.to_string();
         for reference in &self.references {
@@ -304,6 +337,12 @@ impl App {
         self.begin_model_selection(context);
         self.reasoning_operation = true;
     }
+    pub fn begin_command(&mut self, context: TurnExecutionContext) {
+        self.active_context = Some(context);
+        self.active_handle = None;
+        self.started_at = Some(Instant::now());
+        self.state = AgentRunState::Preparing;
+    }
     pub fn begin_compaction(&mut self, context: TurnExecutionContext) {
         self.cost_usage_complete = false;
         self.active_context = Some(context);
@@ -329,6 +368,7 @@ impl App {
     }
 
     pub fn cancel(&mut self, reason: &str) {
+        self.close_ui();
         if let Some(reference) = &self.reference {
             reference.context.cancel(reason);
         }
@@ -386,6 +426,16 @@ impl App {
     }
 
     pub fn apply(&mut self, event: AppEvent) {
+        if matches!(
+            event,
+            AppEvent::TurnFinished(_)
+                | AppEvent::CompactionFinished(_)
+                | AppEvent::ModelSelected(_)
+                | AppEvent::CommandFinished(_)
+                | AppEvent::RunDropped
+        ) {
+            self.close_ui();
+        }
         match event {
             AppEvent::ReferenceReady(result) => {
                 let cancelled = self
@@ -532,6 +582,20 @@ impl App {
             AppEvent::ObservationFailed(error) => {
                 self.observation_incomplete = true;
                 self.timeline.push(TimelineItem::Notice(format!("Live observation ended: {error}. The run continues; its result will restore the transcript.")));
+            }
+            AppEvent::CommandFinished(report) => {
+                self.run = None;
+                self.active_context = None;
+                self.active_handle = None;
+                self.started_at = None;
+                self.state = AgentRunState::Idle;
+                match *report {
+                    Ok(aicoder_core::extensions::CommandOutput::Notice(text)) => {
+                        self.timeline.push(TimelineItem::Notice(text))
+                    }
+                    Ok(aicoder_core::extensions::CommandOutput::Submit(_)) => {}
+                    Err(error) => self.timeline.push(TimelineItem::Error(error)),
+                }
             }
             AppEvent::RunDropped => {
                 if let Some(handle) = &self.active_handle
@@ -1292,7 +1356,7 @@ mod tests {
     fn slash_menu_tracks_filtering_selection_and_dismissal() {
         let mut app = App::new(Vec::new());
         app.input.insert('/');
-        assert_eq!(app.slash_suggestions().len(), 23);
+        assert_eq!(app.slash_suggestions().len(), 24);
         assert_eq!(app.selected_slash_command().unwrap().name, "exit");
 
         app.dismiss_slash_menu();

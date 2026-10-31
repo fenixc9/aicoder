@@ -213,7 +213,12 @@ impl Extension {
         let spec = command.specification();
         let mut execution = HookSpec::new(&spec.name);
         execution.timeout = timeout;
-        execution.validate()?;
+        name(&spec.name)?;
+        ensure!(
+            (std::time::Duration::from_millis(1)..=std::time::Duration::from_secs(600))
+                .contains(&timeout),
+            "extension command timeout must be 1 ms to 600 s"
+        );
         ensure!(
             spec.parameters.is_object(),
             "extension command requires a JSON schema object"
@@ -363,7 +368,7 @@ impl ExtensionSet {
         size(request.arguments, 64 * 1024)?;
         let output = tokio::select! {biased;
             cancelled=context.cancelled()=>return Err(cancelled.into()),
-            output=invoke(&command.owner,&command.execution,|cancellation|command.callback.execute(request,cancellation))=>output?,
+            output=invoke(&command.owner,&command.execution,context.ui(),|cancellation|command.callback.execute(request,cancellation))=>output?,
         };
         if context.is_cancelled() {
             return Err(context.error().into());

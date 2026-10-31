@@ -34,6 +34,9 @@ impl HookSpec {
 #[derive(Clone)]
 pub struct ExtensionCancellation(TurnExecutionContext);
 impl ExtensionCancellation {
+    pub fn ui(&self) -> crate::ui::UiClient {
+        self.0.ui()
+    }
     pub fn is_cancelled(&self) -> bool {
         self.0.is_cancelled()
     }
@@ -50,9 +53,10 @@ impl Drop for Cancel {
 pub(crate) async fn invoke<T, F: Future<Output = Result<T>>>(
     owner: &str,
     spec: &HookSpec,
+    ui: crate::ui::UiClient,
     action: impl FnOnce(ExtensionCancellation) -> F,
 ) -> Result<T> {
-    let context = TurnExecutionContext::new();
+    let context = TurnExecutionContext::extension_ui(ui.named(owner));
     let _guard = Cancel(context.clone());
     let work =
         AssertUnwindSafe(async { action(ExtensionCancellation(context)).await }).catch_unwind();
@@ -125,6 +129,21 @@ impl InputContextProvider for ContextChain {
         messages: &[Message],
         system_prefix_len: usize,
     ) -> Result<PreparedInput> {
+        self.prepare_for_execution(
+            workspace,
+            messages,
+            system_prefix_len,
+            &TurnExecutionContext::new(),
+        )
+        .await
+    }
+    async fn prepare_for_execution(
+        &self,
+        workspace: &Path,
+        messages: &[Message],
+        system_prefix_len: usize,
+        context: &TurnExecutionContext,
+    ) -> Result<PreparedInput> {
         ensure!(
             system_prefix_len <= messages.len(),
             "invalid runtime prefix boundary"
@@ -133,7 +152,7 @@ impl InputContextProvider for ContextChain {
         let work = async {
             let mut prepared = match &self.base {
                 Some(base) => {
-                    base.prepare_with_prefix(workspace, messages, system_prefix_len)
+                    base.prepare_for_execution(workspace, messages, system_prefix_len, context)
                         .await?
                 }
                 None => PreparedInput {
@@ -149,7 +168,7 @@ impl InputContextProvider for ContextChain {
             let mut bytes = 0usize;
             let mut applied = Vec::new();
             for hook in &self.hooks {
-                let text = invoke(&hook.owner, &hook.spec, |cancellation| {
+                let text = invoke(&hook.owner, &hook.spec, context.ui(), |cancellation| {
                     hook.callback.context(
                         ContextHookInput {
                             workspace,
@@ -188,9 +207,10 @@ pub(crate) async fn tool_hooks(
     workspace: &Path,
     call: &ModelToolCall,
     capability: ToolCapability,
+    ui: &crate::ui::UiClient,
 ) -> Result<(), ToolFailure> {
     for hook in hooks {
-        let decision = invoke(&hook.owner, &hook.spec, |cancellation| {
+        let decision = invoke(&hook.owner, &hook.spec, ui.clone(), |cancellation| {
             hook.callback.before_tool(
                 ToolHookInput {
                     workspace,

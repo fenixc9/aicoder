@@ -11,6 +11,7 @@ pub struct ToolContext {
     workspace_root: PathBuf,
     tool_timeout: Duration,
     max_output_bytes: usize,
+    ui: crate::ui::UiClient,
     artifact_store: Option<Arc<dyn crate::artifacts::ArtifactStore>>,
 }
 
@@ -30,10 +31,18 @@ impl ToolContext {
             workspace_root,
             tool_timeout,
             max_output_bytes,
+            ui: crate::ui::UiClient::default(),
             artifact_store: None,
         })
     }
 
+    pub fn ui(&self) -> &crate::ui::UiClient {
+        &self.ui
+    }
+    pub fn with_ui(mut self, ui: crate::ui::UiClient) -> Self {
+        self.ui = ui;
+        self
+    }
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
     }

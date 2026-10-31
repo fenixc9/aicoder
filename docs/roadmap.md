@@ -245,8 +245,9 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 - [x] 提供资源包 manifest、发现/安装/卸载、版本固定、运行时重载与会话状态恢复。
   本地包、CLI 内容锁与 SDK 显式公共状态恢复已验收，声明精确依赖及执行权限；默认不引入脚本运行时。
   见 [资源包契约](packages.md) 与 [验收记录](s6-packages-acceptance.md)；远端获取与 stock UI 的代码激活继续按需推进。
-- [ ] 宿主暴露 UI capability 接口：通知、选择、输入、状态、命令；
-  TUI/Web 各自适配，不把 ratatui 类型暴露给 core；定义无 UI 时的行为。
+- [x] 宿主暴露 UI capability 接口：通知、选择、输入、状态、命令；
+  原生宿主的 TUI/Web 适配与无 UI 回退已验收；通道有界、取消后失效，UI 答案不能赋予工具权限。
+  见 [UI 契约](extension-ui.md) 与 [验收记录](s6-ui-acceptance.md)；core 不依赖终端或 Web 类型。
 - [ ] 提供 plan、子 Agent、保护路径等扩展示例，验证扩展无需 fork 执行循环。
 - [ ] 可选 Code Mode 通过受限组合执行器调用已注册工具；
   若需要 JS 引擎，放到独立可选组件，工具调用仍经过相同审批、取消、预算和记录。

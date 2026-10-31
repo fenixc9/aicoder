@@ -61,6 +61,10 @@ pub fn draw(frame: &mut Frame<'_>, app: &App, model: &str) {
     draw_slash_menu(frame, app, vertical[1]);
     if app.approval.is_some() {
         draw_approval(frame, app, area);
+    } else if let Some(ui) = &app.extension_ui
+        && ui.asking()
+    {
+        ui.draw(frame, area, app.theme);
     } else if app.confirm_delete {
         draw_delete_confirmation(frame, app, area);
     }
@@ -377,7 +381,15 @@ fn detail(app: &App) -> String {
         .map_or("cost unavailable".into(), |(currency, value)| {
             format!("base est {currency} {value:.3e}")
         });
-    format!(" {context} | {cost}")
+    format!(
+        " {context} | {cost}{}",
+        app.extension_ui
+            .as_ref()
+            .map(|ui| ui.status_line())
+            .filter(|line| !line.is_empty())
+            .map(|line| format!(" | {line}"))
+            .unwrap_or_default()
+    )
 }
 
 fn draw_approval(frame: &mut Frame<'_>, app: &App, area: Rect) {

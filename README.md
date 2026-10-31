@@ -35,7 +35,9 @@ is part of the default build. [MCP stdio](docs/mcp.md) supports modern per-reque
 and legacy initialization, with bounded discovery, host approvals and scoped media artifacts.
 [Resource packages](docs/packages.md) add local manifest installation, exact content locks,
 frozen reload generations and public session state; executable activation remains explicit
-in SDK hosts. Canonical sessions support [bounded JSON/HTML exports](docs/session-exports.md), with
+in SDK hosts. [Extension UI](docs/extension-ui.md) provides scoped native notifications, questions, input,
+status and commands with real TUI/Web adapters and explicit headless behavior.
+Canonical sessions support [bounded JSON/HTML exports](docs/session-exports.md), with
 explicit publication adapters and no automatic third-party sharing.
 The [provider-neutral model API](docs/model-api.md) is shared by the agent
 loop, tools, sessions and frontends. Structured [run outcomes and budgets](docs/run-outcomes.md) retain progress on

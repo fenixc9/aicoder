@@ -47,11 +47,16 @@ pub(crate) fn router(host: WebHost) -> Router {
         )
         .route("/api/state", get(state))
         .route("/api/runs", post(start))
+        .route("/api/commands", get(commands).post(start_command))
+        .route("/api/commands/{id}", get(command_status))
+        .route("/api/commands/{id}/ui", post(command_ui))
+        .route("/api/commands/{id}/cancel", post(cancel_command))
         .route("/api/permissions/revoke", post(revoke))
         .route("/api/runs/{id}", get(status))
         .route("/api/runs/{id}/events", get(events))
         .route("/api/runs/{id}/cancel", post(cancel))
         .route("/api/runs/{id}/approval", post(approve))
+        .route("/api/runs/{id}/ui", post(answer_ui))
         .fallback(|| async { error(StatusCode::NOT_FOUND, "not_found", "Unknown route") })
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .layer(ConcurrencyLimitLayer::new(32))
@@ -122,7 +127,7 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
 async fn state(State(host): State<WebHost>) -> Response {
     let s = host.0.state.lock().expect("Web state");
     bounded_json(
-        &json!({"version":1,"closing":s.closing,"next_prompt_id":s.last_id.checked_add(1).filter(|id|*id<=MAX_ID),"run":s.current.as_ref().map(|r|r.snapshot())}),
+        &json!({"version":1,"closing":s.closing,"next_prompt_id":s.last_id.checked_add(1).filter(|id|*id<=MAX_ID),"run":s.current.as_ref().map(|r|r.snapshot()),"command":s.command.as_ref().map(|job|job.snapshot())}),
     )
 }
 #[derive(Deserialize)]
@@ -153,6 +158,103 @@ async fn start(
         Err((code,message))=>error(if code=="invalid_input"{StatusCode::BAD_REQUEST}else{StatusCode::CONFLICT},code,message),
     }
 }
+async fn commands(State(host): State<WebHost>) -> Response {
+    bounded_json(&json!({"version":1,"commands":host.commands()}))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CommandInput {
+    id: u64,
+    name: String,
+    arguments: Value,
+}
+async fn start_command(
+    State(host): State<WebHost>,
+    payload: Result<Json<CommandInput>, JsonRejection>,
+) -> Response {
+    let payload = match body(payload) {
+        Ok(v) => v,
+        Err(response) => return *response,
+    };
+    match host.start_command(payload.id, payload.name, payload.arguments) {
+        Ok(job) => (StatusCode::ACCEPTED, Json(job.snapshot())).into_response(),
+        Err((code, message)) => error(
+            if matches!(code, "unknown_command" | "invalid_input") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::CONFLICT
+            },
+            code,
+            message,
+        ),
+    }
+}
+async fn command_status(State(host): State<WebHost>, Path(id): Path<String>) -> Response {
+    match host.command(&id) {
+        Some(job) => bounded_json(&job.snapshot()),
+        None => error(
+            StatusCode::NOT_FOUND,
+            "unknown_command_job",
+            "Command is not owned by this host",
+        ),
+    }
+}
+async fn command_ui(
+    State(host): State<WebHost>,
+    Path(id): Path<String>,
+    payload: Result<Json<UiReply>, JsonRejection>,
+) -> Response {
+    let payload = match body(payload) {
+        Ok(v) => v,
+        Err(response) => return *response,
+    };
+    let Some(job) = host.command(&id) else {
+        return error(
+            StatusCode::NOT_FOUND,
+            "unknown_command_job",
+            "Command is not owned by this host",
+        );
+    };
+    match job.ui.answer(payload.question_id, payload.answer) {
+        Ok(()) => Json(json!({"version":1,"answered":true})).into_response(),
+        Err(aicoder_core::ui::UiError::Invalid) => error(
+            StatusCode::BAD_REQUEST,
+            "invalid_ui_answer",
+            "Answer does not match the pending question",
+        ),
+        Err(_) => error(
+            StatusCode::CONFLICT,
+            "stale_ui_question",
+            "Question is closed, expired, foreign or already answered",
+        ),
+    }
+}
+async fn cancel_command(
+    State(host): State<WebHost>,
+    Path(id): Path<String>,
+    payload: Result<Json<Empty>, JsonRejection>,
+) -> Response {
+    if let Err(response) = body(payload) {
+        return *response;
+    }
+    let Some(job) = host.command(&id) else {
+        return error(
+            StatusCode::NOT_FOUND,
+            "unknown_command_job",
+            "Command is not owned by this host",
+        );
+    };
+    if host.cancel_command(&job.id) {
+        Json(json!({"version":1,"cancellation_requested":true})).into_response()
+    } else {
+        error(
+            StatusCode::CONFLICT,
+            "command_closed",
+            "Command no longer accepts cancellation",
+        )
+    }
+}
+
 async fn status(State(host): State<WebHost>, Path(id): Path<String>) -> Response {
     match host.run(&id) {
         Some(run) => bounded_json(&run.snapshot()),
@@ -190,6 +292,7 @@ async fn cancel(
             "Run is not owned by this host",
         );
     };
+    run.ui.close();
     match run.handle.cancel("Web cancel") {
         Ok(()) => Json(json!({"version":1,"cancellation_requested":true})).into_response(),
         Err(_) => error(
@@ -199,6 +302,43 @@ async fn cancel(
         ),
     }
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiReply {
+    question_id: aicoder_core::ui::UiRequestId,
+    answer: aicoder_core::ui::UiAnswer,
+}
+async fn answer_ui(
+    State(host): State<WebHost>,
+    Path(id): Path<String>,
+    payload: Result<Json<UiReply>, JsonRejection>,
+) -> Response {
+    let payload = match body(payload) {
+        Ok(v) => v,
+        Err(response) => return *response,
+    };
+    let Some(run) = host.run(&id) else {
+        return error(
+            StatusCode::NOT_FOUND,
+            "unknown_run",
+            "Run is not owned by this host",
+        );
+    };
+    match run.ui.answer(payload.question_id, payload.answer) {
+        Ok(()) => Json(json!({"version":1,"answered":true})).into_response(),
+        Err(aicoder_core::ui::UiError::Invalid) => error(
+            StatusCode::BAD_REQUEST,
+            "invalid_ui_answer",
+            "Answer does not match the pending question",
+        ),
+        Err(_) => error(
+            StatusCode::CONFLICT,
+            "stale_ui_question",
+            "Question is closed, expired, foreign or already answered",
+        ),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Approval {

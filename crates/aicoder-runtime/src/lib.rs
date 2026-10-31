@@ -403,11 +403,30 @@ impl Runtime {
         )
     }
     pub fn summary_agent(&self, provider: Arc<dyn ModelProvider>) -> Result<aicoder_core::Agent> {
+        self.summary_agent_with_snapshot(provider, None)
+    }
+    /// Manual summaries retain the same explicitly installed native host snapshot.
+    pub fn summary_agent_with_extensions(
+        &self,
+        provider: Arc<dyn ModelProvider>,
+        extensions: Arc<aicoder_core::extensions::ExtensionSet>,
+    ) -> Result<aicoder_core::Agent> {
+        self.summary_agent_with_snapshot(provider, Some(extensions))
+    }
+    fn summary_agent_with_snapshot(
+        &self,
+        provider: Arc<dyn ModelProvider>,
+        extensions: Option<Arc<aicoder_core::extensions::ExtensionSet>>,
+    ) -> Result<aicoder_core::Agent> {
         let compactor = self.semantic_compactor(provider.clone())?;
+        let mut builder = self
+            .executor_builder(provider)?
+            .context_compactor(compactor);
+        if let Some(extensions) = extensions {
+            builder = builder.extensions(extensions);
+        }
         Ok(aicoder_core::Agent::new(
-            self.executor_builder(provider)?
-                .context_compactor(compactor)
-                .build()?,
+            builder.build()?,
             self.agent_config(),
         ))
     }
