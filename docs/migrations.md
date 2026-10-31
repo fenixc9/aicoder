@@ -695,3 +695,21 @@ The shared transport now acknowledges notification writes separately from RPC re
 and the MCP profile closes stdin before bounded termination/reaping. Native process tools
 keep their strict profile and opaque-plan behavior. No new dependency/version or session/
 event format is introduced. See [MCP contracts](mcp.md) for supported eras and host limits.
+
+
+## S6: pinned local resource packages
+
+Settings/RuntimeConfig gain `packages` (enabled + logical selections); project files cannot
+set storage paths or executable profiles. Runtime resource manifests add optional nonempty
+`packages` provenance and `ResourceScope::Package`; exhaustive downstream enum matches need
+that variant. Existing manifests/generation calculation remain unchanged when no packages
+are selected. Core adds a default `SessionRepository::extension_state` query; custom stores
+need no change, while window stores may override to fetch real bounded branch records.
+The JSONL implementation does so without materializing unrelated cold payloads.
+
+No session/event/RPC schema version changes. `aicoder.packages.v1` is a bounded public
+extension record whose content cannot install code or restore grants. CLI adds `packages`
+subcommands, `--package-lock` and `--no-packages`. Rust hosts may opt into process/MCP package
+activation with existing runtime features; stock frontends load text resources only. No
+mandatory language runtime is introduced. Runtime activates the already locked ring 0.17.14
+SHA-256 implementation for content integrity; core does not depend on it. See [contracts](packages.md).

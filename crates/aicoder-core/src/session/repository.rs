@@ -22,6 +22,13 @@ impl fmt::Display for SessionConflict {
     }
 }
 impl Error for SessionConflict {}
+/// A real, bounded extension record from the selected branch, never an index descriptor.
+#[derive(Debug, Clone)]
+pub struct SessionExtensionState {
+    pub metadata: super::SessionMetadata,
+    pub entry_id: String,
+    pub data: serde_json::Value,
+}
 /// Object-safe storage and transaction boundary, shared by all hosts.
 pub trait SessionRepository: Send + Sync {
     fn create(&self, cwd: &Path) -> Result<Session>;
@@ -30,6 +37,32 @@ pub trait SessionRepository: Send + Sync {
     fn open_run(&self, id: &str) -> Result<super::RunSession> {
         self.open(id)
             .map(|session| super::RunSession::Full(Box::new(session)))
+    }
+    fn extension_state(
+        &self,
+        id: &str,
+        namespace: &str,
+        max_bytes: usize,
+    ) -> Result<Option<SessionExtensionState>> {
+        anyhow::ensure!(
+            !namespace.is_empty() && namespace.len() <= 256 && (1..=64 * 1024).contains(&max_bytes),
+            "invalid extension-state query bounds"
+        );
+        let session = self.open(id)?;
+        let entry=session.active_entries().into_iter().rev().find(|entry|matches!(&entry.data,SessionEntryData::Extension {namespace:stored,..} if stored==namespace));
+        if let Some(entry) = entry {
+            let SessionEntryData::Extension { data, .. } = &entry.data else {
+                unreachable!()
+            };
+            crate::session::repository::extension_state_size(data, max_bytes)?;
+            Ok(Some(SessionExtensionState {
+                metadata: session.metadata().clone(),
+                entry_id: entry.id.clone(),
+                data: data.clone(),
+            }))
+        } else {
+            Ok(None)
+        }
     }
     fn append_window(
         &self,
@@ -140,4 +173,27 @@ pub trait SessionRepository: Send + Sync {
     fn most_recent(&self, cwd: &Path) -> Result<Option<SessionInfo>> {
         Ok(self.list(cwd)?.into_iter().next())
     }
+}
+
+pub(crate) fn extension_state_size(data: &serde_json::Value, limit: usize) -> Result<()> {
+    struct Size {
+        used: usize,
+        limit: usize,
+    }
+    impl std::io::Write for Size {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.limit.saturating_sub(self.used) {
+                return Err(std::io::Error::other(
+                    "extension state byte budget exceeded",
+                ));
+            }
+            self.used += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer(&mut Size { used: 0, limit }, data)?;
+    Ok(())
 }

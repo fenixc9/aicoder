@@ -1,3 +1,4 @@
+mod packages;
 use aicoder_runtime::session::JsonlSessionRepository;
 use std::{
     io::{self, Write},
@@ -105,6 +106,12 @@ struct Cli {
     /// Disable all instruction, skill and template discovery.
     #[arg(long)]
     no_resources: bool,
+    /// Disable installed package selection for this invocation.
+    #[arg(long, conflicts_with = "package_lock")]
+    no_packages: bool,
+    /// Select exact installed/trusted pins from an explicit public lock document.
+    #[arg(long)]
+    package_lock: Option<PathBuf>,
     #[arg(long)]
     no_parent_context: bool,
     #[arg(long)]
@@ -130,6 +137,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Manage trusted local resource bundles without making model requests.
+    Packages {
+        #[command(subcommand)]
+        command: packages::PackageCommand,
+    },
     /// Print effective settings and their sources without resolving credentials or making requests.
     Config,
     /// List resource sources and fingerprints without exposing document bodies.
@@ -586,6 +598,7 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
         }
         Some(
             Command::Config
+            | Command::Packages { .. }
             | Command::Resources
             | Command::ExpandPrompt { .. }
             | Command::CompactSession { .. }
@@ -657,6 +670,14 @@ async fn application() -> Result<()> {
                     max_output_bytes: Setting::from_option(cli.output_budget_bytes),
                     ..Default::default()
                 },
+                packages: aicoder_runtime::packages::PackageSettings {
+                    enabled: if cli.no_packages {
+                        Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    ..Default::default()
+                },
                 resources: ResourceSettings {
                     enabled: if cli.no_resources {
                         Setting::Value(false)
@@ -700,6 +721,14 @@ async fn application() -> Result<()> {
         },
         environment_file(cli.env_file.as_deref())?,
     )?;
+    if let Some(Command::Packages { command }) = &cli.command {
+        return packages::execute(&runtime, command);
+    }
+    let runtime = if let Some(path) = &cli.package_lock {
+        runtime.with_package_state(&aicoder_runtime::packages::PackageSessionState::read(path)?)?
+    } else {
+        runtime
+    };
     if matches!(cli.command, Some(Command::Config)) {
         println!("{}", serde_json::to_string_pretty(runtime.config())?);
         return Ok(());

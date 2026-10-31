@@ -39,6 +39,7 @@ pub struct RuntimeConfig {
     pub execution: ResolvedExecution,
     pub context: ResolvedContext,
     pub resources: crate::resources::ResourcePolicy,
+    pub packages: crate::packages::PackagePolicy,
     pub sources: BTreeMap<String, ConfigSource>,
 }
 #[derive(Debug, Clone, Serialize)]
@@ -173,6 +174,25 @@ fn env_setting<T: std::str::FromStr>(
                 )
             };
             Ok((value, name.into()))
+        })
+        .transpose()
+}
+fn env_packages(env: &dyn Environment) -> Result<Option<(Setting<Vec<String>>, String)>> {
+    let name = "AICODER_PACKAGES";
+    env_value(env, name)?
+        .map(|value| {
+            ensure!(
+                value.len() <= 8192,
+                "package environment selection byte limit exceeded"
+            );
+            let setting = if value == "null" {
+                Setting::Clear
+            } else {
+                Setting::Value(serde_json::from_str(&value).map_err(|_| {
+                    anyhow::anyhow!("Invalid environment setting {name}; expected a JSON array")
+                })?)
+            };
+            Ok((setting, name.into()))
         })
         .transpose()
 }
@@ -855,6 +875,24 @@ pub(crate) fn resolve(
         )?,
     };
     resources.validate()?;
+    let packages = crate::packages::PackagePolicy {
+        enabled: required(
+            "packages.enabled",
+            pick!(
+                "packages.enabled",
+                packages.enabled,
+                || env_setting::<bool>(env.as_ref(), "AICODER_PACKAGES_ENABLED")
+            ),
+            true,
+        )?,
+        selected: optional(
+            pick!("packages.selected", packages.selected, || env_packages(
+                env.as_ref()
+            )),
+            None,
+        ),
+    };
+    packages.validate()?;
     let mut credential_references = profiles
         .values()
         .map(|profile| profile.api_key_env.clone())
@@ -912,6 +950,7 @@ pub(crate) fn resolve(
         execution,
         context,
         resources,
+        packages,
         sources: selector.sources,
     })
 }

@@ -1,9 +1,9 @@
 //! Frozen, bounded project resources with metadata-only skill discovery.
 mod discovery;
-mod frontmatter;
+pub(crate) mod frontmatter;
 use discovery::Loader;
 mod policy;
-mod reader;
+pub(crate) mod reader;
 mod templates;
 mod tools;
 use crate::RuntimeConfig;
@@ -30,6 +30,7 @@ pub enum ResourceKind {
 #[serde(rename_all = "snake_case")]
 pub enum ResourceScope {
     Global,
+    Package,
     Parent,
     Workspace,
     Nested,
@@ -55,6 +56,8 @@ pub struct ResourceManifest {
     pub workspace: PathBuf,
     pub policy: ResourcePolicy,
     pub files: Vec<ResourceInfo>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub packages: Vec<crate::packages::PackagePin>,
     pub scanned_entries: usize,
     pub scanned_bytes: usize,
     pub retained_bytes: usize,
@@ -208,7 +211,10 @@ impl ResourceSnapshot {
                     "Additional system"
                 },
                 doc.info.path.display(),
-                if doc.info.scope == ResourceScope::Global {
+                if matches!(
+                    doc.info.scope,
+                    ResourceScope::Global | ResourceScope::Package
+                ) {
                     self.manifest.workspace.display()
                 } else {
                     doc.info.directory.display()
@@ -252,14 +258,19 @@ impl ResourceSnapshot {
         }
         Ok(())
     }
-    pub(crate) fn load_global(config: &RuntimeConfig) -> Result<Self> {
+    pub(crate) fn load_global(
+        config: &RuntimeConfig,
+        packages: Arc<crate::packages::PackageSnapshot>,
+    ) -> Result<Self> {
         let mut loader = Loader::new(config);
         loader.workspace_enabled = false;
+        loader.packages = packages;
         loader.load()
     }
     pub(crate) fn load_with_global(config: &RuntimeConfig, global: &Self) -> Result<Self> {
         let mut loader = Loader::new(config);
         loader.include_global = false;
+        loader.package_pins = global.manifest.packages.clone();
         loader.documents = global.documents.clone();
         loader.skills = global.skills.clone();
         loader.prompts = global.prompts.clone();

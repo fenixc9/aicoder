@@ -85,6 +85,10 @@
   before dispatch, keep private result metadata out of history, and archive typed binary
   media without counting base64 as text. Completed-call capture failures cannot retry tools.
   Honor the selected protocol era and keep server interactions outside unoffered capabilities.
+- Resource packages use explicit payload allowlists, exact content/dependency pins and private
+  host storage. Installation never launches code. Resolve executable profiles only in the host;
+  reload/restoration must revalidate trust and preserve old generations on failure. Public
+  package state cannot restore tool grants, backend handles or credential-routing authority.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

@@ -1152,6 +1152,71 @@ pub(crate) fn visit_export<T>(
     Ok(result)
 }
 
+pub(super) fn extension_state(
+    repository: &JsonlSessionRepository,
+    id: &str,
+    namespace: &str,
+    max_bytes: usize,
+) -> Result<Option<aicoder_core::session::SessionExtensionState>> {
+    ensure!(
+        !namespace.is_empty() && namespace.len() <= 256 && (1..=64 * 1024).contains(&max_bytes),
+        "invalid extension-state query bounds"
+    );
+    let _lock = repository.metadata_lock(id, false)?;
+    let path = repository.find(id)?;
+    let (_, version, _, _) = read_header(&path)?;
+    if version != SESSION_VERSION {
+        // Small legacy stores retain the default full-load behavior; oversized ones need migration.
+        let mut file = open_data(&path, true, false)?;
+        let session = load_bytes(&path, &read_full(&mut file, &repository.limits)?)?;
+        let entry = session.active_entries().into_iter().rev().find(|entry| matches!(&entry.data, SessionEntryData::Extension {namespace:stored,..} if stored == namespace));
+        return entry
+            .map(|entry| {
+                let SessionEntryData::Extension { data, .. } = &entry.data else {
+                    unreachable!()
+                };
+                crate::packages::bounded_json(data, max_bytes)?;
+                Ok(aicoder_core::session::SessionExtensionState {
+                    metadata: session.metadata().clone(),
+                    entry_id: entry.id.clone(),
+                    data: data.clone(),
+                })
+            })
+            .transpose();
+    }
+    let mut cache = repository
+        .archive_cache
+        .lock()
+        .map_err(|_| anyhow::anyhow!("archive cache poisoned"))?;
+    let index = cached(repository, id, &mut cache)?;
+    let branch = index.session.selected_branch();
+    let selected = branch.entries();
+    let entry=selected.iter().rev().find(|entry|matches!(&entry.data,SessionEntryData::Extension {namespace:stored,..} if stored==namespace));
+    let Some(entry) = entry else {
+        return Ok(None);
+    };
+    let ordinal = index
+        .session
+        .entry_position(&entry.id)
+        .context("extension state location missing")?;
+    let mut reader = Reader::new(&index.path, repository.limits.max_record_bytes)?;
+    let actual = reader.entry(index.locations[ordinal])?;
+    let SessionEntryData::Extension {
+        namespace: stored,
+        data,
+    } = actual.data
+    else {
+        anyhow::bail!("extension state archive location changed");
+    };
+    ensure!(stored == namespace, "extension state namespace changed");
+    crate::packages::bounded_json(&data, max_bytes)?;
+    Ok(Some(aicoder_core::session::SessionExtensionState {
+        metadata: metadata(index),
+        entry_id: actual.id,
+        data,
+    }))
+}
+
 #[cfg(test)]
 mod export_tests {
     use super::*;

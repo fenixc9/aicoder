@@ -20,7 +20,7 @@ pub use projection::{
 pub use window::*;
 
 pub use memory::MemorySessionRepository;
-pub use repository::{SessionConflict, SessionRepository, SessionRunLease};
+pub use repository::{SessionConflict, SessionExtensionState, SessionRepository, SessionRunLease};
 pub use types::{
     Session, SessionEntry, SessionEntryData, SessionInfo, SessionMessage, SessionMetadata,
     SessionTransaction, TurnRecord, TurnStatistics,

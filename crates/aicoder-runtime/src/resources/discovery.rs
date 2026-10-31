@@ -3,6 +3,8 @@ use crate::ConfigSource;
 use std::collections::HashSet;
 
 pub(super) struct Loader<'a> {
+    pub(super) packages: Arc<crate::packages::PackageSnapshot>,
+    pub(super) package_pins: Vec<crate::packages::PackagePin>,
     pub(super) workspace_enabled: bool,
     pub(super) include_global: bool,
     config: &'a RuntimeConfig,
@@ -20,6 +22,8 @@ pub(super) struct Loader<'a> {
 impl<'a> Loader<'a> {
     pub(super) fn new(config: &'a RuntimeConfig) -> Self {
         Self {
+            packages: Arc::default(),
+            package_pins: Vec::new(),
             workspace_enabled: true,
             include_global: true,
             config,
@@ -75,7 +79,12 @@ impl<'a> Loader<'a> {
                     self.scopes.push((Root::open(&directory)?, scope));
                 }
             }
+            let mut packages_loaded = false;
             for (root, scope) in self.scopes.clone() {
+                if scope != ResourceScope::Global && !packages_loaded {
+                    self.load_packages()?;
+                    packages_loaded = true;
+                }
                 if self.policy.instructions {
                     self.document(
                         &root,
@@ -115,6 +124,9 @@ impl<'a> Loader<'a> {
                 if self.policy.prompts {
                     self.collections(&root, &prefix.join("prompts"), scope, false, 0)?;
                 }
+            }
+            if !packages_loaded {
+                self.load_packages()?;
             }
             if self.workspace_enabled && self.policy.nested && self.policy.instructions {
                 let root = Root::open(&self.config.workspace)?;
@@ -160,7 +172,11 @@ impl<'a> Loader<'a> {
             .iter()
             .map(|doc| doc.info.clone())
             .collect::<Vec<_>>();
-        let generation = fingerprint(&serde_json::to_vec(&files)?);
+        let generation = if self.package_pins.is_empty() {
+            fingerprint(&serde_json::to_vec(&files)?)
+        } else {
+            fingerprint(&serde_json::to_vec(&(&files, &self.package_pins))?)
+        };
         let manifest = ResourceManifest {
             mode: if self.workspace_enabled {
                 "workspace".into()
@@ -172,6 +188,7 @@ impl<'a> Loader<'a> {
             workspace: self.config.workspace.clone(),
             policy: self.policy,
             files,
+            packages: self.package_pins,
             scanned_entries: self.entries,
             scanned_bytes: self.scanned,
             retained_bytes: self.retained,
@@ -189,6 +206,49 @@ impl<'a> Loader<'a> {
             configured_prompt: self.config.system_prompt.clone(),
             system_replaced,
         })
+    }
+    fn load_packages(&mut self) -> Result<()> {
+        let packages = self.packages.clone();
+        for package in packages.packages() {
+            self.package_pins.push(package.pin.clone());
+            let resources = &package.manifest.resources;
+            for (enabled, paths, kind) in [
+                (
+                    self.policy.instructions,
+                    &resources.instructions,
+                    ResourceKind::AppendSystem,
+                ),
+                (self.policy.skills, &resources.skills, ResourceKind::Skill),
+                (
+                    self.policy.prompts,
+                    &resources.prompts,
+                    ResourceKind::Prompt,
+                ),
+            ] {
+                if enabled {
+                    for path in paths {
+                        self.entries += 1;
+                        ensure!(
+                            self.entries <= self.policy.max_entries,
+                            "package resource entry limit exceeded"
+                        );
+                        let workspace = self.config.workspace.clone();
+                        ensure!(
+                            self.document(
+                                &package.root,
+                                Path::new(path),
+                                kind,
+                                ResourceScope::Package,
+                                &workspace
+                            )?
+                            .is_some(),
+                            "declared package resource is missing or duplicated"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
     }
     fn document(
         &mut self,
@@ -301,7 +361,8 @@ impl<'a> Loader<'a> {
             if let Some(previous) = self.skills.insert(name.clone(), Skill { index, package }) {
                 ensure!(
                     self.documents[previous.index].info.scope != scope
-                        || self.documents[previous.index].root.path != root.path,
+                        || (scope != ResourceScope::Package
+                            && self.documents[previous.index].root.path != root.path),
                     "Duplicate skill name in the same discovery root"
                 );
                 self.documents[previous.index].info.active = false;
@@ -333,7 +394,8 @@ impl<'a> Loader<'a> {
             if let Some(previous) = self.prompts.insert(name.clone(), index) {
                 ensure!(
                     self.documents[previous].info.scope != scope
-                        || self.documents[previous].root.path != root.path,
+                        || (scope != ResourceScope::Package
+                            && self.documents[previous].root.path != root.path),
                     "Duplicate prompt name in the same discovery root"
                 );
                 self.documents[previous].info.active = false;

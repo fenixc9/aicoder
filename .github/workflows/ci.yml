@@ -40,6 +40,8 @@ jobs:
         run: |
           cargo build --locked -p aicoder-runtime --features mcp-fixtures --bin aicoder-mcp-fixture
           cargo run --locked -p aicoder-runtime --features mcp-stdio --example offline_mcp
+      - name: Pinned resource packages and public session state
+        run: cargo run --locked -p aicoder-runtime --example offline_packages
       - name: Embedded agent example
         run: cargo run --locked -p aicoder-core --example embedded_agent
       - name: Controlled offline agent example

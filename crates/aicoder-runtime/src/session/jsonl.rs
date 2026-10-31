@@ -284,6 +284,15 @@ impl JsonlSessionRepository {
     }
 }
 impl SessionRepository for JsonlSessionRepository {
+    fn extension_state(
+        &self,
+        id: &str,
+        namespace: &str,
+        max_bytes: usize,
+    ) -> Result<Option<aicoder_core::session::SessionExtensionState>> {
+        super::archive::extension_state(self, id, namespace, max_bytes)
+    }
+
     fn create(&self, cwd: &Path) -> Result<Session> {
         let timestamp = now_millis()?;
         let id = Uuid::new_v4().to_string();

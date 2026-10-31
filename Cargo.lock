@@ -105,6 +105,7 @@ dependencies = [
  "image",
  "libc",
  "regex",
+ "ring",
  "serde",
  "serde_json",
  "shlex",

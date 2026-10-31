@@ -18,6 +18,7 @@ serde_json.workspace = true
 dotenvy.workspace = true
 libc = "0.2"
 fs2 = "0.4"
+ring = "0.17.14"
 uuid = { version = "1", features = ["v4"] }
 tokio = { version = "1", features = ["fs", "io-util", "process", "signal", "time"] }
 url = "2"

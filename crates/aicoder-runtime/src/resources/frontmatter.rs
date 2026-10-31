@@ -5,11 +5,11 @@ use yaml_rust2::{
     parser::{Event, Parser},
     scanner::TScalarStyle,
 };
-pub(super) struct Frontmatter<'a> {
+pub(crate) struct Frontmatter<'a> {
     pub fields: BTreeMap<String, String>,
     pub body: &'a str,
 }
-pub(super) fn parse(text: &str, required: bool) -> Result<Frontmatter<'_>> {
+pub(crate) fn parse(text: &str, required: bool) -> Result<Frontmatter<'_>> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let mut lines = text.split_inclusive('\n');
     if lines
@@ -113,7 +113,7 @@ pub(super) fn parse(text: &str, required: bool) -> Result<Frontmatter<'_>> {
         body: &text[body..],
     })
 }
-pub(super) fn valid_name(value: &str) -> bool {
+pub(crate) fn valid_name(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
         && value

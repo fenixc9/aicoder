@@ -8,6 +8,7 @@ mod files;
 pub mod images;
 #[cfg(feature = "mcp-stdio")]
 pub mod mcp;
+pub mod packages;
 #[cfg(feature = "process-extensions")]
 pub mod process_extensions;
 mod process_owner;
@@ -48,6 +49,7 @@ pub struct Runtime {
     environment: Arc<dyn Environment>,
     overrides: RuntimeOverrides,
     discovery: ConfigDiscovery,
+    packages: OnceLock<Result<Arc<packages::PackageSnapshot>, String>>,
     resources: OnceLock<Result<Arc<resources::ResourceSnapshot>, String>>,
     global_resources: OnceLock<Result<Arc<resources::ResourceSnapshot>, String>>,
 }
@@ -84,6 +86,7 @@ impl Runtime {
             environment,
             overrides,
             discovery,
+            packages: OnceLock::new(),
             resources: OnceLock::new(),
             global_resources: OnceLock::new(),
         })
@@ -99,12 +102,92 @@ impl Runtime {
             self.environment.clone(),
         )
     }
+    /// Explicit package administration; private storage roots are host-selected only.
+    pub fn package_store(&self) -> Result<packages::PackageStore> {
+        packages::PackageStore::open(
+            self.config
+                .state_root
+                .as_ref()
+                .context("package storage requires a host state root")?
+                .join("packages"),
+        )
+    }
+    /// Freeze exact trusted pins for this runtime generation. This never starts package code.
+    pub fn package_snapshot(&self) -> Result<Arc<packages::PackageSnapshot>> {
+        self.packages
+            .get_or_init(|| {
+                (|| {
+                    if !self.config.packages.enabled
+                        || (!self.config.resources.global
+                            && self.config.packages.selected.is_none())
+                    {
+                        return Ok(Arc::new(packages::PackageSnapshot::default()));
+                    }
+                    let store = self
+                        .config
+                        .state_root
+                        .as_ref()
+                        .map(|root| packages::PackageStore::existing(&root.join("packages")))
+                        .transpose()?
+                        .flatten();
+                    let snapshot = match store {
+                        Some(store) => {
+                            store.snapshot(self.config.packages.selected.as_deref(), None)?
+                        }
+                        None => {
+                            anyhow::ensure!(
+                                self.config
+                                    .packages
+                                    .selected
+                                    .as_ref()
+                                    .is_none_or(Vec::is_empty),
+                                "selected packages require installed host content"
+                            );
+                            packages::PackageSnapshot::default()
+                        }
+                    };
+                    Ok(Arc::new(snapshot))
+                })()
+                .map_err(|error: anyhow::Error| format!("{error:#}"))
+            })
+            .clone()
+            .map_err(anyhow::Error::msg)
+    }
+    /// Explicit host restore: history may select trusted content, never install or authorize code.
+    pub fn with_package_state(&self, state: &packages::PackageSessionState) -> Result<Self> {
+        anyhow::ensure!(
+            self.config.packages.enabled,
+            "packages are disabled by the host"
+        );
+        let snapshot = Arc::new(state.validate(&self.package_store()?)?);
+        let next = Self {
+            config: self.config.clone(),
+            environment: self.environment.clone(),
+            overrides: self.overrides.clone(),
+            discovery: self.discovery.clone(),
+            packages: OnceLock::new(),
+            resources: OnceLock::new(),
+            global_resources: OnceLock::new(),
+        };
+        next.packages
+            .set(Ok(snapshot))
+            .expect("fresh package cache");
+        next.resources()?;
+        Ok(next)
+    }
     pub fn global_resources(&self) -> Result<Arc<resources::ResourceSnapshot>> {
         self.global_resources
             .get_or_init(|| {
-                resources::ResourceSnapshot::load_global(&self.config)
-                    .map(Arc::new)
-                    .map_err(|error| format!("{error:#}"))
+                (if self.config.resources.enabled {
+                    self.package_snapshot()
+                } else {
+                    Ok(Arc::default())
+                })
+                .and_then(|packages| {
+                    resources::ResourceSnapshot::load_global(&self.config, packages)
+                })
+                .map(Arc::new)
+                .map_err(|error| format!("{error:#}"))
             })
             .clone()
             .map_err(anyhow::Error::msg)
@@ -129,6 +212,7 @@ impl Runtime {
             environment: self.environment.clone(),
             overrides: self.overrides.clone(),
             discovery: self.discovery.clone(),
+            packages: OnceLock::new(),
             resources: OnceLock::new(),
             global_resources: OnceLock::new(),
         };
