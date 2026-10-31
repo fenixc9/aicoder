@@ -1,6 +1,7 @@
 //! Explicit native extension registration. Native code is trusted host code, not a sandbox.
 mod commands;
 mod hooks;
+pub mod process_protocol;
 mod registry;
 pub use commands::{CommandContext, CommandOutput, CommandRequest, CommandSpec, ExtensionCommand};
 pub use hooks::{

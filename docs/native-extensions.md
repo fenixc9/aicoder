@@ -8,7 +8,8 @@ instruction, model message or restored session can load native code or select it
 
 The manifest records a bounded ID, opaque version and api_version = 1. This is a logical
 registration contract, not a Rust shared-library ABI. Source compatibility follows the crate
-version; process extensions, package manifests/install/reload and MCP are separate S6 work.
+version. [Process tools](process-extensions.md) use an optional runtime adapter over this
+registration API; package manifests/install/reload and MCP remain separate S6 work.
 Native code has the host process's permissions and can access std/IO directly. These contracts
 bound cooperative callbacks and admitted data; they cannot sandbox arbitrary Rust code,
 preempt a blocking callback or recover from process exit/abort/allocation failure.

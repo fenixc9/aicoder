@@ -29,6 +29,9 @@ See [API migrations](docs/migrations.md) when updating an embedded application.
 [Native extensions](docs/native-extensions.md) register tools, provider routes, policies,
 context/guard hooks, observers and commands explicitly in Rust hosts; the same core loop
 retains approval, cancellation, budgets and canonical sessions.
+[Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
+with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime
+is part of the default build.
 Canonical sessions support [bounded JSON/HTML exports](docs/session-exports.md), with
 explicit publication adapters and no automatic third-party sharing.
 The [provider-neutral model API](docs/model-api.md) is shared by the agent

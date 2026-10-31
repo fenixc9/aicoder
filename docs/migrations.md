@@ -658,3 +658,20 @@ and records extension manifests/context-hook IDs; this is opt-in and uses the ex
 session input-context format. No session/event schema version changes or restored native
 callbacks/grants are introduced. See [the contract](native-extensions.md) for execution,
 callback delivery, timeout, error and cooperative native-code limits.
+
+## S6: optional versioned process tools
+
+Runtime's `process-extensions` feature adds ProcessConfig/ProcessExtension. The host supplies
+an absolute program, fixed workspace, explicit environment and optional aliases/capability
+overrides, then installs process.extension() into the existing native ExtensionRegistry.
+The default capability is Mutating. Existing builders, settings and session/event formats
+are unchanged; no project file or recorded model selection launches a program.
+
+Core exposes the serializable process_protocol tool contracts without process/HTTP IO.
+The JSON-RPC 2.0 stdio profile negotiates aicoder.tools.v1, with bounded prepare/call/commit/
+dispose and no implicit retries. Plans/connection ownership remain private live state. New
+snapshots rotate normal tool-registry authority; an old plan cannot migrate to a replacement
+connection. Explicit shutdown reports reaping/incomplete cleanup; last-handle/future drop
+signals owned groups and cleanup continues independently of Tokio. The shared owner also
+backs Bash without changing its public API. See [the protocol/limits](process-extensions.md)
+and [acceptance](s6-process-acceptance.md) before embedding a trusted external server.

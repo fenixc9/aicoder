@@ -1,0 +1,403 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aicoder.local/protocol/process-tools-v1.schema.json",
+  "title": "aicoder.tools.v1 stdio profile",
+  "description": "JSON shape only; runtime enforces UTF-8/serialized byte, queue, tool catalog, scope and lifecycle budgets. Synthetic examples contain no real plan authority.",
+  "$defs": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9_.-]+$"
+    },
+    "initialize": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": "aicoder.tools.v1"
+        }
+      },
+      "required": [
+        "protocolVersion"
+      ],
+      "additionalProperties": false
+    },
+    "server": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/name"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[!-~]+$"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "definition": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/name"
+        },
+        "description": {
+          "type": "string"
+        },
+        "parameters": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "name",
+        "parameters"
+      ],
+      "additionalProperties": false
+    },
+    "remote_tool": {
+      "type": "object",
+      "properties": {
+        "definition": {
+          "$ref": "#/$defs/definition"
+        },
+        "preparation": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "definition",
+        "preparation"
+      ],
+      "additionalProperties": false
+    },
+    "initialized": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "const": "aicoder.tools.v1"
+        },
+        "serverInfo": {
+          "$ref": "#/$defs/server"
+        },
+        "tools": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/remote_tool"
+          }
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "serverInfo",
+        "tools"
+      ],
+      "additionalProperties": false
+    },
+    "invocation": {
+      "type": "object",
+      "properties": {
+        "tool": {
+          "$ref": "#/$defs/name"
+        },
+        "arguments": {}
+      },
+      "required": [
+        "tool",
+        "arguments"
+      ],
+      "additionalProperties": false
+    },
+    "plan": {
+      "type": "object",
+      "properties": {
+        "tool": {
+          "$ref": "#/$defs/name"
+        },
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "tool",
+        "token"
+      ],
+      "additionalProperties": false
+    },
+    "preview": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "format": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "summary",
+        "body",
+        "format",
+        "truncated"
+      ],
+      "additionalProperties": false
+    },
+    "prepared": {
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "preview": {
+          "$ref": "#/$defs/preview"
+        }
+      },
+      "required": [
+        "token",
+        "preview"
+      ],
+      "additionalProperties": false
+    },
+    "completed": {
+      "type": "object",
+      "properties": {
+        "output": {},
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "output"
+      ],
+      "additionalProperties": false
+    },
+    "disposed": {
+      "type": "object",
+      "properties": {
+        "disposed": {
+          "const": true
+        }
+      },
+      "required": [
+        "disposed"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "minimum": -9223372036854775808,
+          "maximum": 9223372036854775807
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {}
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "request": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "method": {
+          "enum": [
+            "initialize",
+            "tools/prepare",
+            "tools/call",
+            "tools/commit",
+            "tools/dispose"
+          ]
+        },
+        "params": {}
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "initialize"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/initialize"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "tools/prepare"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/invocation"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "tools/call"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/invocation"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "tools/commit"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/plan"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "method": {
+                "const": "tools/dispose"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "params": {
+                "$ref": "#/$defs/plan"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "response": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 18446744073709551615
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/initialized"
+            },
+            {
+              "$ref": "#/$defs/prepared"
+            },
+            {
+              "$ref": "#/$defs/completed"
+            },
+            {
+              "$ref": "#/$defs/disposed"
+            }
+          ]
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id"
+      ],
+      "not": {
+        "required": [
+          "method"
+        ]
+      },
+      "oneOf": [
+        {
+          "required": [
+            "result"
+          ],
+          "not": {
+            "required": [
+              "error"
+            ]
+          }
+        },
+        {
+          "required": [
+            "error"
+          ],
+          "not": {
+            "required": [
+              "result"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/request"
+    },
+    {
+      "$ref": "#/$defs/response"
+    }
+  ]
+}

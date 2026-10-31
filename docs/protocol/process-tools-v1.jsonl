@@ -1,0 +1,12 @@
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"aicoder.tools.v1"}}
+{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"aicoder.tools.v1","serverInfo":{"id":"example","version":"1.0.0"},"tools":[{"definition":{"name":"write_note","description":"Write one captured note","parameters":{"type":"object","properties":{"content":{"type":"string"}},"required":["content"]}},"preparation":true}]}}
+{"jsonrpc":"2.0","id":2,"method":"tools/prepare","params":{"tool":"write_note","arguments":{"content":"after"}}}
+{"jsonrpc":"2.0","id":2,"result":{"token":"example-opaque-token","preview":{"summary":"Update note","body":"-before\n+after","format":"unified_diff","truncated":false}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/commit","params":{"tool":"write_note","token":"example-opaque-token"}}
+{"jsonrpc":"2.0","id":3,"result":{"output":{"written":true},"truncated":false}}
+{"jsonrpc":"2.0","id":4,"method":"tools/dispose","params":{"tool":"write_note","token":"example-unused-token"}}
+{"jsonrpc":"2.0","id":4,"result":{"disposed":true}}
+{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"tool":"read_note","arguments":{}}}
+{"jsonrpc":"2.0","id":5,"result":{"output":{"content":"after"},"truncated":false}}
+{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"tool":"read_note","arguments":{}}}
+{"jsonrpc":"2.0","id":6,"error":{"code":-32010,"message":"Example tool failure"}}

@@ -37,9 +37,20 @@ tempfile.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
+process-extensions = []
+process-extension-fixtures = ["process-extensions"]
 images = ["dep:image", "dep:base64"]
 tokenizer-tiktoken = ["dep:tiktoken-rs"]
 
 [[example]]
 name = "offline_images"
 required-features = ["images"]
+
+[[bin]]
+name = "aicoder-process-fixture"
+path = "tests/fixtures/process_server.rs"
+required-features = ["process-extension-fixtures"]
+
+[[example]]
+name = "offline_process_extensions"
+required-features = ["process-extensions"]

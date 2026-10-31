@@ -6,6 +6,9 @@ pub mod exports;
 mod files;
 #[cfg(feature = "images")]
 pub mod images;
+#[cfg(feature = "process-extensions")]
+pub mod process_extensions;
+mod process_owner;
 pub mod references;
 pub mod resources;
 pub mod session;

@@ -32,6 +32,10 @@ jobs:
         run: cargo run --locked -p aicoder-core --example model_provider
       - name: Native extension registration and plan guard
         run: cargo run --locked -p aicoder-core --example native_extensions
+      - name: Versioned process tools and owned-plan approval
+        run: |
+          cargo build --locked -p aicoder-runtime --features process-extension-fixtures --bin aicoder-process-fixture
+          cargo run --locked -p aicoder-runtime --features process-extensions --example offline_process_extensions
       - name: Embedded agent example
         run: cargo run --locked -p aicoder-core --example embedded_agent
       - name: Controlled offline agent example
@@ -111,3 +115,5 @@ jobs:
         run: '"$RUNNER_TEMP/aicoder-schema/bin/python" scripts/check_rpc_schema.py'
       - name: Validate canonical export fixture
         run: '"$RUNNER_TEMP/aicoder-schema/bin/python" scripts/check_export_schema.py'
+      - name: Validate published process-tool wire fixture
+        run: '"$RUNNER_TEMP/aicoder-schema/bin/python" scripts/check_process_protocol.py'

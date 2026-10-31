@@ -238,7 +238,8 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
   原生宿主显式安装冻结快照；见 [Rust 扩展契约](native-extensions.md) 与 [验收记录](s6-native-acceptance.md)。
 - [x] 区分观察与拦截 hook；定义顺序、超时、失败处理、可改字段和权限边界。
   有界上下文追加、审批前拒绝、事件观察和命令宿主投递均有离线契约测试。
-- [ ] 用版本化进程外协议实现动态工具扩展，避免 Rust 动态库 ABI；支持取消与崩溃诊断。
+- [x] 用版本化进程外协议实现动态工具扩展，避免 Rust 动态库 ABI；支持取消与崩溃诊断。
+  可选 stdio adapter 复用原生快照和 core 审批；见 [协议契约](process-extensions.md) 与 [验收记录](s6-process-acceptance.md)。
 - [ ] 接入 MCP，先 stdio，再按实际需求增加远端传输；复用审批、预算和 trace。
 - [ ] 提供资源包 manifest、发现/安装/卸载、版本固定、运行时重载与会话状态恢复。
   声明包包含的依赖及执行权限，默认包不引入脚本运行时。

@@ -77,6 +77,10 @@
   preparation and approval-cache lookup; observations cannot mutate execution. Preserve
   declared prefix boundaries, cancel dropped hook children and rotate registry authority
   when installing a new snapshot. Never load native code or restore grants from history.
+- Process tools use explicit host launch settings and conservative capabilities. Keep remote
+  plan tokens bound to the original connection and out of domain records; never retry an
+  uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership
+  through group signalling and report incomplete cleanup without restoring authority.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 
