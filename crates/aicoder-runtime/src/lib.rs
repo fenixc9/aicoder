@@ -1,5 +1,6 @@
 //! Shared application configuration and agent assembly. Core remains environment/UI independent.
 pub mod artifacts;
+pub mod code_mode;
 mod config;
 mod environment;
 pub mod exports;
@@ -304,6 +305,18 @@ impl Runtime {
         }
         if let Some(resources) = resources {
             resources.register_tools(&mut registry)?;
+        }
+        #[cfg(feature = "code-mode")]
+        if self.config.code_mode.enabled {
+            let mut config = aicoder_codemode::CodeModeConfig::default();
+            config.limits.duration =
+                std::time::Duration::from_millis(self.config.execution.tool_timeout_ms)
+                    .min(std::time::Duration::from_secs(600));
+            let mut tool = aicoder_codemode::CodeModeTool::new(config)?;
+            if let Some(tools) = &self.config.code_mode.tools {
+                tool = tool.only_tools(tools.clone())?;
+            }
+            registry.register(tool)?;
         }
         Ok(registry)
     }

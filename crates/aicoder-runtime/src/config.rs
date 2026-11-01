@@ -40,6 +40,7 @@ pub struct RuntimeConfig {
     pub context: ResolvedContext,
     pub resources: crate::resources::ResourcePolicy,
     pub packages: crate::packages::PackagePolicy,
+    pub code_mode: crate::code_mode::CodeModePolicy,
     pub sources: BTreeMap<String, ConfigSource>,
 }
 #[derive(Debug, Clone, Serialize)]
@@ -174,6 +175,25 @@ fn env_setting<T: std::str::FromStr>(
                 )
             };
             Ok((value, name.into()))
+        })
+        .transpose()
+}
+fn env_code_tools(env: &dyn Environment) -> Result<Option<(Setting<Vec<String>>, String)>> {
+    let name = "AICODER_CODE_MODE_TOOLS";
+    env_value(env, name)?
+        .map(|value| {
+            ensure!(
+                value.len() <= 32768,
+                "Code Mode selection environment budget exceeded"
+            );
+            let selected = if value == "null" {
+                Setting::Clear
+            } else {
+                Setting::Value(serde_json::from_str(&value).map_err(|_| {
+                    anyhow::anyhow!("Invalid environment setting {name}; expected a JSON array")
+                })?)
+            };
+            Ok((selected, name.into()))
         })
         .transpose()
 }
@@ -893,6 +913,24 @@ pub(crate) fn resolve(
         ),
     };
     packages.validate()?;
+    let code_mode = crate::code_mode::CodeModePolicy {
+        enabled: required(
+            "code_mode.enabled",
+            pick!(
+                "code_mode.enabled",
+                code_mode.enabled,
+                || env_setting::<bool>(env.as_ref(), "AICODER_CODE_MODE")
+            ),
+            false,
+        )?,
+        tools: optional(
+            pick!("code_mode.tools", code_mode.tools, || env_code_tools(
+                env.as_ref()
+            )),
+            None,
+        ),
+    };
+    code_mode.validate()?;
     let mut credential_references = profiles
         .values()
         .map(|profile| profile.api_key_env.clone())
@@ -951,6 +989,7 @@ pub(crate) fn resolve(
         context,
         resources,
         packages,
+        code_mode,
         sources: selector.sources,
     })
 }

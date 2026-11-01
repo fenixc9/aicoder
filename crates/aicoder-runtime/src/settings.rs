@@ -136,6 +136,7 @@ pub struct Settings {
     pub context: ContextSettings,
     pub resources: crate::resources::ResourceSettings,
     pub packages: crate::packages::PackageSettings,
+    pub code_mode: crate::code_mode::CodeModeSettings,
 }
 /// Trusted routing descriptor. API keys belong to a credential source, never this file.
 #[derive(Clone, Deserialize)]

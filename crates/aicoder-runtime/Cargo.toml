@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 aicoder-core.workspace = true
+aicoder-codemode = { path = "../aicoder-codemode", optional = true, features = ["engine"] }
 aicoder-providers.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
@@ -38,6 +39,7 @@ tempfile.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
+code-mode = ["dep:aicoder-codemode"]
 mcp-stdio = ["process-extensions", "dep:base64"]
 mcp-fixtures = ["mcp-stdio", "process-extension-fixtures"]
 process-extensions = []
@@ -66,3 +68,7 @@ required-features = ["mcp-fixtures"]
 [[example]]
 name = "offline_mcp"
 required-features = ["mcp-stdio"]
+
+[[example]]
+name = "offline_code_mode"
+required-features = ["code-mode"]

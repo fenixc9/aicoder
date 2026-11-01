@@ -130,6 +130,67 @@ impl RunJournal for SessionJournal<'_> {
             }],
         )
     }
+    async fn record_composition(
+        &self,
+        record: &crate::composition::CompositionRecord,
+    ) -> Result<()> {
+        crate::extensions::size(record, 512 * 1024)?;
+        let data = serde_json::to_value(record)?;
+        let mut state = self.state.lock().expect("session journal poisoned");
+        self.write(
+            &mut state,
+            vec![SessionEntryData::Extension {
+                namespace: crate::composition::COMPOSITION_NAMESPACE.into(),
+                data,
+            }],
+        )
+    }
+    async fn composition_state(
+        &self,
+        namespace: &str,
+        max_bytes: usize,
+    ) -> Result<Option<serde_json::Value>> {
+        ensure!(
+            !namespace.is_empty()
+                && namespace.len() <= 128
+                && (1024..=256 * 1024).contains(&max_bytes),
+            "invalid composition-state bounds"
+        );
+        let state = self.state.lock().expect("session journal poisoned");
+        let metadata = state.session.metadata();
+        let saved = self
+            .repository
+            .extension_state(&metadata.id, namespace, max_bytes)?;
+        if let Some(saved) = saved {
+            ensure!(
+                saved.metadata.revision == metadata.revision
+                    && saved.metadata.leaf_id == metadata.leaf_id,
+                "composition state source changed"
+            );
+            Ok(Some(saved.data))
+        } else {
+            Ok(None)
+        }
+    }
+    async fn commit_composition_state(
+        &self,
+        namespace: &str,
+        value: &serde_json::Value,
+    ) -> Result<()> {
+        ensure!(
+            !namespace.is_empty() && namespace.len() <= 128,
+            "invalid composition-state namespace"
+        );
+        crate::extensions::size(value, 256 * 1024)?;
+        let mut state = self.state.lock().expect("session journal poisoned");
+        self.write(
+            &mut state,
+            vec![SessionEntryData::Extension {
+                namespace: namespace.into(),
+                data: value.clone(),
+            }],
+        )
+    }
     async fn record_summary(
         &self,
         draft: &crate::summary::SummaryDraft,

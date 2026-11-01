@@ -8,6 +8,7 @@ pub mod agent_input;
 pub use agent_input::AgentInput;
 pub mod cancellation;
 pub mod completion;
+pub mod composition;
 pub mod context;
 pub mod context_policy;
 pub mod control;

@@ -25,3 +25,7 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[features]
+default = []
+code-mode = ["aicoder-runtime/code-mode"]

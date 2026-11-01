@@ -97,6 +97,11 @@
   preview parsing. Guards retain the approved plan and fail closed for opaque mutation effects.
   Worker examples use fixed host profiles and separate sessions/controls/budgets; correlate
   provenance without importing parent authority, and report unknown usage/trace gaps honestly.
+- Optional tool programs emit bounded intents into the existing dispatcher; they cannot bypass
+  guards, owned preparation, leaf approvals, cancellation, archives or parent budgets. Admit
+  ordinary and composed calls atomically. Keep JS dependencies outside default builds, record
+  leaf facts separately from provider projection, and never retry completed effects on failure.
+  Branch stores contain public JSON only; cancellation/steering must not commit late state.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

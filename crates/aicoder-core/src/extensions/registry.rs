@@ -444,6 +444,9 @@ struct PinnedTool {
 }
 #[async_trait]
 impl ExecutableTool for PinnedTool {
+    fn composition_factory(&self) -> Option<&dyn crate::composition::ToolCompositionFactory> {
+        self.inner.composition_factory()
+    }
     fn definition(&self) -> ToolDefinition {
         self.definition.clone()
     }

@@ -66,6 +66,9 @@ struct Cli {
     env_file: Option<PathBuf>,
     #[arg(long)]
     no_resources: bool,
+    /// Enable bounded JavaScript tool composition (requires the code-mode build feature).
+    #[arg(long)]
+    code_mode: bool,
     #[arg(long)]
     no_parent_context: bool,
     #[arg(long)]
@@ -110,6 +113,14 @@ pub async fn run_cli() -> Result<()> {
                         .reasoning_effort
                         .map(|v| v.setting())
                         .unwrap_or(Setting::Inherit),
+                    ..Default::default()
+                },
+                code_mode: aicoder_runtime::code_mode::CodeModeSettings {
+                    enabled: if cli.code_mode {
+                        Setting::Value(true)
+                    } else {
+                        Setting::Inherit
+                    },
                     ..Default::default()
                 },
                 resources: ResourceSettings {

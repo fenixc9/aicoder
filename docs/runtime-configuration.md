@@ -231,3 +231,15 @@ model compatibility checks and the new metadata commands are described in
 Cargo feature; auto reports estimated fallback when a hint/encoder is missing.
 [Token counting and ContextPolicy](context-policy.md) separates text precision, request
 framing estimates and provider-reported usage.
+
+
+## Optional Code Mode
+
+The runtime code-mode build feature adds a bounded QuickJS tool, disabled until code_mode.enabled
+is true. CLI/TUI/Web --code-mode opt in through that same setting. CodeModeSettings.tools
+selects exact frozen registry names; null/inherit offers all non-composite tools, while []
+offers none. Environment equivalents are AICODER_CODE_MODE and AICODER_CODE_MODE_TOOLS (a JSON
+array or null). Ordinary per-field precedence applies. Builds without the feature reject an
+enabled setting before provider IO. No JS program or public branch store can install tools,
+route credentials, change those limits or supply authorization rules. See [Code Mode](code-mode.md)
+for SDK registration, bounds, output, leaf approvals and canonical record semantics.

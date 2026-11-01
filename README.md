@@ -18,6 +18,8 @@ are separate crates.
 - aicoder-eval: isolated evaluation runner, deterministic evaluators,
   SWE-bench adapter, batch runner, and official harness integration.
 - aicoder-web: optional loopback HTTP/SSE/browser example (`server` feature).
+- aicoder-codemode: optional bounded QuickJS programs (`engine` feature); disabled in
+  default runtime/frontend builds.
 
 Each package lives under `crates/`; the root manifest defines the Cargo
 workspace and shared dependency versions. See [contributing](CONTRIBUTING.md)
@@ -39,6 +41,9 @@ in SDK hosts. [Extension UI](docs/extension-ui.md) provides scoped native notifi
 status and commands with real TUI/Web adapters and explicit headless behavior.
 [Coding extension examples](docs/coding-extension-examples.md) demonstrate planning, guarded
 prepared paths and explicitly managed read-only worker Agents over the same loop.
+[Code Mode](docs/code-mode.md) optionally composes real registered tools in JavaScript,
+with discovery/filtering and branch-local state while preserving per-tool approvals and
+parent budgets. Enable the host's `code-mode` build feature and `--code-mode` setting.
 Canonical sessions support [bounded JSON/HTML exports](docs/session-exports.md), with
 explicit publication adapters and no automatic third-party sharing.
 The [provider-neutral model API](docs/model-api.md) is shared by the agent
@@ -56,7 +61,7 @@ bench traces. S0–S3 are complete on the verified Linux platform. Runtime provi
 [concrete tools/storage](docs/runtime-backends.md), [bounded read/search](docs/file-tools.md),
 [checked edits and diffs](docs/file-mutations.md), [shell supervision](docs/shell-tools.md)
 and [session tool grants](docs/approvals.md). S4 long-context management is complete;
-S5 frontends have passed [Linux acceptance](docs/s5-images-acceptance.md); the next stage is S6 extensions. [Branch model-context projections](docs/model-context.md) keep recovery
+S5 frontends have passed [Linux acceptance](docs/s5-images-acceptance.md); S6 extensions are implemented; S7 evaluation and the final Pi comparison remain. [Branch model-context projections](docs/model-context.md) keep recovery
 views separate from recorded history. See the settings guide for the explicit `--env-file` migration and
 [S3 acceptance](docs/s3-approvals-acceptance.md) for verification and cumulative costs.
 

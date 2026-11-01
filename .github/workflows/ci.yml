@@ -42,6 +42,11 @@ jobs:
         run: |
           cargo build --locked -p aicoder-runtime --features mcp-fixtures --bin aicoder-mcp-fixture
           cargo run --locked -p aicoder-runtime --features mcp-stdio --example offline_mcp
+      - name: Optional bounded JavaScript over actual tools and cold JSONL state
+        run: |
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_code_mode
+          cargo build --locked -p aicoder-cli --features code-mode
+          python3 scripts/check_code_mode.py
       - name: Pinned resource packages and public session state
         run: cargo run --locked -p aicoder-runtime --example offline_packages
       - name: Embedded agent example

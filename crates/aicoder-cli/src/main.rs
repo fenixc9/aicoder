@@ -106,6 +106,9 @@ struct Cli {
     /// Disable all instruction, skill and template discovery.
     #[arg(long)]
     no_resources: bool,
+    /// Enable bounded JavaScript tool composition (requires the code-mode build feature).
+    #[arg(long)]
+    code_mode: bool,
     /// Disable installed package selection for this invocation.
     #[arg(long, conflicts_with = "package_lock")]
     no_packages: bool,
@@ -673,6 +676,14 @@ async fn application() -> Result<()> {
                 packages: aicoder_runtime::packages::PackageSettings {
                     enabled: if cli.no_packages {
                         Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    ..Default::default()
+                },
+                code_mode: aicoder_runtime::code_mode::CodeModeSettings {
+                    enabled: if cli.code_mode {
+                        Setting::Value(true)
                     } else {
                         Setting::Inherit
                     },

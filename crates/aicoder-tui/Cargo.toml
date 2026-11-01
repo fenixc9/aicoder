@@ -30,3 +30,7 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[features]
+default = []
+code-mode = ["aicoder-runtime/code-mode"]

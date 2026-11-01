@@ -1,4 +1,13 @@
 use crate::run::{RunFailure, RunLimiter, RunStage};
+mod composition;
+#[derive(Clone, Copy)]
+struct CallScope<'a> {
+    context: Option<&'a TurnExecutionContext>,
+    limits: Option<&'a RunLimiter>,
+    journal: Option<&'a dyn crate::RunJournal>,
+    nested: bool,
+    admitted: bool,
+}
 use std::{
     path::Path,
     sync::{Arc, Mutex},
@@ -227,8 +236,13 @@ impl ToolDispatcher {
             self.execute_call(
                 call,
                 events,
-                context,
-                control.map(|(limits, _, _)| limits.as_ref()),
+                CallScope {
+                    context,
+                    limits: control.map(|(limits, _, _)| limits.as_ref()),
+                    journal: control.and_then(|(_, _, journal)| journal.map(|j| j.journal)),
+                    nested: false,
+                    admitted: false,
+                },
             )
             .await
         };
@@ -312,16 +326,19 @@ impl ToolDispatcher {
         &self,
         call: &ModelToolCall,
         events: Option<&AgentEventEmitter>,
-        context: Option<&TurnExecutionContext>,
-        limits: Option<&RunLimiter>,
+        scope: CallScope<'_>,
     ) -> Result<Message> {
+        let context = scope.context;
+        let limits = scope.limits;
         if let Some(context) = context
             && context.is_cancelled()
         {
             return Err(context.error().into());
         }
-        if let Some(limits) = limits {
-            limits.tool_started();
+        if let Some(limits) = limits
+            && !scope.admitted
+        {
+            limits.admit_tool()?;
         }
         emit_event(
             events,
@@ -360,6 +377,11 @@ impl ToolDispatcher {
                 .await);
         };
 
+        if tool.composition_factory().is_some()
+            && (scope.nested || context.is_none() || limits.is_none() || scope.journal.is_none())
+        {
+            return Ok(self.failed_tool_message(events,call,limits,ToolFailure::new("composition_scope_required","Tool composition requires a root Agent run and supported journal; nested composition is unavailable")).await);
+        }
         if !self.hooks.is_empty() {
             let checking = timeout(
                 self.config.tool_timeout,
@@ -439,6 +461,19 @@ impl ToolDispatcher {
                     .await);
             }
         };
+        if prepared.is_some() && tool.composition_factory().is_some() {
+            return Ok(self
+                .failed_tool_message(
+                    events,
+                    call,
+                    limits,
+                    ToolFailure::new(
+                        "composition_prepared_plan",
+                        "Composite tools cannot replace an owned prepared operation",
+                    ),
+                )
+                .await);
+        }
         let preview = prepared.as_ref().map(|plan| plan.preview());
         if preview.as_ref().is_some_and(|preview| {
             serde_json::to_vec(preview)
@@ -655,30 +690,51 @@ impl ToolDispatcher {
             arguments_bytes = invocation.arguments.to_string().len(),
             "Executing tool"
         );
-        let execution = timeout(self.config.tool_timeout, async {
-            match prepared {
-                Some(plan) => plan.execute(tool_context).await,
-                None => tool.execute(tool_context, arguments).await,
-            }
-        });
-        let execution = match context {
-            Some(context) => tokio::select! {
-                biased;
-                cancelled = context.cancelled() => {
+        let execution = if let Some(factory) = tool.composition_factory() {
+            match self
+                .execute_composition(factory, call, arguments, events, scope)
+                .await
+            {
+                Ok(result) => Ok(result),
+                Err(error) => {
                     emit_event(
                         events,
                         AgentRawEvent::ToolExecutionEnded {
-                            artifacts:Vec::new(),
+                            artifacts: Vec::new(),
                             call_id: call.id.clone().into(),
                             name: call.name.clone().into(),
                             outcome: ToolExecutionOutcome::Cancelled.into(),
                         },
                     );
-                    return Err(cancelled.into());
+                    return Err(error);
+                }
+            }
+        } else {
+            let execution = timeout(self.config.tool_timeout, async {
+                match prepared {
+                    Some(plan) => plan.execute(tool_context).await,
+                    None => tool.execute(tool_context, arguments).await,
+                }
+            });
+            match context {
+                Some(context) => tokio::select! {
+                    biased;
+                    cancelled = context.cancelled() => {
+                        emit_event(
+                            events,
+                            AgentRawEvent::ToolExecutionEnded {
+                                artifacts:Vec::new(),
+                                call_id: call.id.clone().into(),
+                                name: call.name.clone().into(),
+                                outcome: ToolExecutionOutcome::Cancelled.into(),
+                            },
+                        );
+                        return Err(cancelled.into());
+                    },
+                    execution = execution => execution,
                 },
-                execution = execution => execution,
-            },
-            None => execution.await,
+                None => execution.await,
+            }
         };
         let (envelope, outcome) = match execution {
             Ok(Ok(success)) => super::output::success_envelope(success, &self.context).await,

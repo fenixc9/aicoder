@@ -756,3 +756,25 @@ FileArtifactStore::with_lock_timeout, each with a 1 ms–5 s hard bound. Default
 and 100 ms. The additions preserve shell input/output/session formats and do not alter
 process/pipe cleanup limits or retry completed operations. Explicit positive-test budgets
 avoid mistaking slow disk finalization for a missing-archive implementation failure.
+
+
+## S6: optional bounded tool composition
+
+ExecutableTool has an additive default composition_factory method. Existing ordinary tools
+need no change. Native wrappers forwarding a composed tool must forward this factory as well;
+composition and a nonempty owned PreparedTool are mutually exclusive. Core's program protocol
+owns no JS/HTTP/frontend dependency. Default builds and ordinary tool registration are unchanged.
+
+Enable a host's code-mode feature explicitly and opt in through runtime settings or --code-mode.
+Custom Settings/RuntimeConfig literals should use Default/update syntax or include code_mode.
+The optional aicoder-codemode engine adds rquickjs/core/sys and relative-path; no loader or Node
+runtime is enabled. Runtime and core do not require that dependency in default builds.
+
+RunJournal adds record_composition, composition_state and commit_composition_state with default
+implementations. Custom persistent journals must implement recording before allowing composition;
+the default returns an unsupported error before any leaf operation. State commits also require
+explicit support. SessionJournal and the explicitly transient () journal implement these methods.
+Session-v3 storage needs no migration: real leaf facts and public branch state are Extension
+records. Provider projection still contains the original outer assistant/tool pair only.
+A composition interrupted after an external effect does not roll that effect back or retry it.
+See [Code Mode](code-mode.md) for output, branch, cleanup and accounting semantics.

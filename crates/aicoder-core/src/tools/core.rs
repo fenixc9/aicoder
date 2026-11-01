@@ -56,6 +56,9 @@ impl ToolFailure {
 
 #[async_trait]
 pub trait ExecutableTool: Send + Sync {
+    fn composition_factory(&self) -> Option<&dyn crate::composition::ToolCompositionFactory> {
+        None
+    }
     fn definition(&self) -> ToolDefinition;
     fn capability(&self) -> ToolCapability;
     /// Read-only preparation before approval. The returned plan must retain the exact

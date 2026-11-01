@@ -43,6 +43,10 @@ impl ToolContext {
         self.ui = ui;
         self
     }
+    pub(crate) fn bounded_output(mut self, max: usize) -> Self {
+        self.max_output_bytes = self.max_output_bytes.min(max);
+        self
+    }
     pub fn workspace_root(&self) -> &Path {
         &self.workspace_root
     }

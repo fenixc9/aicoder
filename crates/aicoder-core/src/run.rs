@@ -453,9 +453,24 @@ impl RunLimiter {
         }
         Ok(())
     }
-    pub fn tool_started(&self) {
+    pub fn admit_tool(&self) -> anyhow::Result<()> {
+        self.check()?;
         let mut state = self.state.lock().expect("run budget poisoned");
+        if let Some(limit) = self.budget.max_tool_calls
+            && state.tool_calls >= limit
+        {
+            let stop = BudgetExceeded {
+                resource: BudgetResource::ToolCalls,
+                limit: limit as u64,
+                used: state.tool_calls as u64,
+                requested: Some(1),
+            };
+            drop(state);
+            self.stop(stop.clone());
+            return Err(stop.into());
+        }
         state.tool_calls = state.tool_calls.saturating_add(1);
+        Ok(())
     }
     pub fn remaining_tokens(&self) -> Option<u64> {
         self.budget.max_tokens.map(|limit| {

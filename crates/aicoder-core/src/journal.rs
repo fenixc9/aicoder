@@ -23,12 +23,42 @@ pub trait RunJournal: Send + Sync {
     ) -> anyhow::Result<Option<String>> {
         Ok(None)
     }
+    /// Record real nested operation facts without changing transcript checkpoint indices.
+    async fn record_composition(
+        &self,
+        _record: &crate::composition::CompositionRecord,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support canonical tool composition records")
+    }
+    async fn composition_state(
+        &self,
+        _namespace: &str,
+        _max_bytes: usize,
+    ) -> anyhow::Result<Option<serde_json::Value>> {
+        Ok(None)
+    }
+    async fn commit_composition_state(
+        &self,
+        _namespace: &str,
+        _state: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support branch-local composition state")
+    }
     /// Called before terminal run events. Must retain the stop even when execution was cancelled.
     async fn finish(&self, outcome: &RunOutcome) -> anyhow::Result<()>;
 }
 #[async_trait]
 impl RunJournal for () {
     async fn checkpoint(&self, _: usize, _: &Message) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn record_composition(
+        &self,
+        _: &crate::composition::CompositionRecord,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn commit_composition_state(&self, _: &str, _: &serde_json::Value) -> anyhow::Result<()> {
         Ok(())
     }
     async fn finish(&self, _: &RunOutcome) -> anyhow::Result<()> {

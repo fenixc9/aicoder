@@ -1,6 +1,6 @@
 # aicoder 路线图
 
-状态：S0、S1、S2、S3、S4、S5 已完成当前 Linux 范围验收；下一阶段 S6。本文替代旧 TODO 的排期。
+状态：S0–S6 已完成当前 Linux 范围实现；下一阶段 S7 最终验收与 Pi 对照。本文替代旧 TODO 的排期。
 基线和验证依据见 [S0 开发基线](development-baseline.md)。
 S1 的统一模型契约已贯穿执行器、工具、会话、CLI/TUI 和 bench，wire types 已移至
 providers；部分结果、任务预算和 provider 配置均已接通。S1 验收见 [验收记录](s1-acceptance.md)。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
@@ -250,8 +250,9 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
   见 [UI 契约](extension-ui.md) 与 [验收记录](s6-ui-acceptance.md)；core 不依赖终端或 Web 类型。
 - [x] 提供 plan、子 Agent、保护路径等扩展示例，验证扩展无需 fork 执行循环。
   同一 core 支持规划拦截、已准备目标保护及独立有界只读 worker；见 [示例契约](coding-extension-examples.md) 与 [验收记录](s6-coding-examples-acceptance.md)。
-- [ ] 可选 Code Mode 通过受限组合执行器调用已注册工具；
-  若需要 JS 引擎，放到独立可选组件，工具调用仍经过相同审批、取消、预算和记录。
+- [x] 可选 Code Mode 通过受限组合执行器调用已注册工具；
+  独立可选 QuickJS 组件支持真实 JS、并行只读、过滤、发现及分支存储；叶调用复用审批、取消、父预算和规范记录。
+  见 [Code Mode 契约](code-mode.md) 与 [S6 全项验收](s6-code-mode-acceptance.md)，Pi 特有 helper 和最终功能矩阵留给 S7 核验。
 
 验收：扩展作者可新增工具/provider/命令并影响上下文；扩展失败不会静默损坏会话；
 默认发行不要求运行可选脚本引擎。类型契约、生命周期和示例与实现同步。
@@ -280,4 +281,4 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 - 跨 crate 改动通过 fmt、Clippy、workspace tests；公共文档和示例同步更新。
 - 新依赖说明用途与默认构建成本；宿主可选能力不进入 core 的强制依赖。
 - API/会话格式变更写明迁移，旧入口只在迁移期保留；不维护两套独立执行循环。
-- S5 已完成当前 Linux 范围验收；下一阶段 **S6**；按验收结果逐阶段推进，不并行堆叠后续功能。
+- S0–S6 已完成当前 Linux 范围实现；下一阶段 **S7** 最终验收与对照；按实际证据报告 Pi 剩余差异。
