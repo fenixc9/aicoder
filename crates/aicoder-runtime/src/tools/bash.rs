@@ -229,6 +229,7 @@ async fn execute(
             captures,
             process::Completion::tool_timeout(false),
             output_limit,
+            false,
         )
         .await;
     }
@@ -238,7 +239,7 @@ async fn execute(
         Ok(Err(error)) => return Err(error),
         Err(_) => process::Completion::tool_timeout(captures.spawned),
     };
-    finish(captures, completion, output_limit).await
+    finish(captures, completion, output_limit, false).await
 }
 async fn run(
     context: &ToolContext,
@@ -247,20 +248,39 @@ async fn run(
     excluded: &[String],
     captures: &mut Captures,
 ) -> Result<process::Completion, ToolFailure> {
-    // Subscribe before spawn so even a fast child's SIGCHLD cannot be missed.
-    let mut exits = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())
-        .map_err(start_error)?;
     let requested = args
         .timeout_seconds
         .map(Duration::from_secs)
         .unwrap_or(context.tool_timeout());
-    let deadline = tokio::time::Instant::now()
-        .checked_add(requested)
-        .ok_or_else(|| ToolFailure::new("invalid_arguments", "Shell deadline is too large"))?;
     let mut command = Command::new("/bin/bash");
     command
         .args(["--noprofile", "--norc", "-c"])
         .arg(&args.command)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .current_dir(context.workspace_root())
+        .process_group(0);
+    run_command(
+        context, command, limits, excluded, captures, requested, None,
+    )
+    .await
+}
+async fn run_command(
+    context: &ToolContext,
+    mut command: Command,
+    limits: ShellLimits,
+    excluded: &[String],
+    captures: &mut Captures,
+    requested: Duration,
+    cancellation: Option<&aicoder_core::TurnExecutionContext>,
+) -> Result<process::Completion, ToolFailure> {
+    let mut exits = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())
+        .map_err(start_error)?;
+    let deadline = tokio::time::Instant::now()
+        .checked_add(requested)
+        .ok_or_else(|| ToolFailure::new("invalid_arguments", "Process deadline is too large"))?;
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -289,8 +309,11 @@ async fn run(
         &mut stdout,
         &mut stderr,
         captures,
-        limits.max_output_bytes,
-        deadline,
+        capture::DriveOptions {
+            limit: limits.max_output_bytes,
+            deadline,
+            cancellation,
+        },
     )
     .await;
     let signalled = managed.signal_group();
@@ -307,6 +330,83 @@ async fn run(
     }
     Ok(completion)
 }
+pub(crate) async fn capture_host(
+    command: Command,
+    context: &ToolContext,
+    options: crate::process::ProcessCaptureOptions,
+    cancellation: aicoder_core::TurnExecutionContext,
+) -> anyhow::Result<ShellOutput> {
+    options
+        .limits
+        .validate()
+        .map_err(|e| anyhow::anyhow!(e.message))?;
+    anyhow::ensure!(
+        (Duration::from_millis(1)..=Duration::from_secs(86400)).contains(&context.tool_timeout())
+            && (1024..=65536).contains(&context.max_output_bytes()),
+        "invalid host process duration/preview limits"
+    );
+    anyhow::ensure!(
+        (Duration::from_millis(1)..=Duration::from_secs(5)).contains(&options.archive_timeout),
+        "invalid host archive timeout"
+    );
+    anyhow::ensure!(
+        options.excluded_environment.len() <= 256
+            && options
+                .excluded_environment
+                .iter()
+                .all(|name| valid_variable(name)),
+        "invalid host credential references"
+    );
+    let count = std::iter::once(command.get_program())
+        .chain(command.get_args())
+        .try_fold(0usize, |used, arg| {
+            used.checked_add(arg.as_encoded_bytes().len() + 1)
+        })
+        .ok_or_else(|| anyhow::anyhow!("process argument size overflow"))?;
+    anyhow::ensure!(
+        count <= options.limits.max_command_bytes,
+        "host process argument byte budget exceeded"
+    );
+    let mut captures = Captures::new(context.max_output_bytes() / 2)
+        .with_store(context.artifact_store().cloned())
+        .with_archive_timeout(options.archive_timeout);
+    let completion = if cancellation.is_cancelled() {
+        process::Completion {
+            stop: Stop::Cancelled,
+            exit_code: None,
+            signal: None,
+            signal_requested: false,
+            reaped: false,
+            cleanup_ok: true,
+        }
+    } else {
+        run_command(
+            context,
+            command,
+            options.limits,
+            &options.excluded_environment,
+            &mut captures,
+            context.tool_timeout(),
+            Some(&cancellation),
+        )
+        .await
+        .map_err(|failure| anyhow::anyhow!(failure.code))?
+    };
+    let value = match finish(
+        captures,
+        completion,
+        context.max_output_bytes(),
+        context.artifact_store().is_some(),
+    )
+    .await
+    {
+        Ok(result) => result.output,
+        Err(failure) => failure
+            .details
+            .ok_or_else(|| anyhow::anyhow!("host capture failed: {}", failure.code))?,
+    };
+    Ok(serde_json::from_value(value)?)
+}
 fn start_error(error: std::io::Error) -> ToolFailure {
     ToolFailure::new(
         "command_failed",
@@ -317,6 +417,7 @@ async fn finish(
     mut captures: Captures,
     mut completion: process::Completion,
     limit: usize,
+    archive_all: bool,
 ) -> Result<ToolSuccess, ToolFailure> {
     if captures.limit_hit {
         completion.stop = Stop::OutputLimit;
@@ -325,7 +426,7 @@ async fn finish(
         completion.stop = Stop::CaptureError;
     }
     let initial = output_for(&captures, &completion, limit);
-    if initial["truncated"] == true {
+    if archive_all || initial["truncated"] == true {
         captures.stdout.finalize_archive().await;
         captures.stderr.finalize_archive().await;
     }
@@ -356,6 +457,10 @@ async fn finish(
         Stop::Timeout => Some((
             "timeout",
             "Command exceeded its active time limit; partial output retained",
+        )),
+        Stop::Cancelled => Some((
+            "cancelled",
+            "Host process was cancelled; completed operations were not repeated",
         )),
         Stop::ToolTimeout => Some((
             "timeout",

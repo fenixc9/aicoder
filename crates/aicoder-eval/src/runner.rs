@@ -17,11 +17,17 @@ use crate::{
 pub struct EvalRunner {
     evaluators: Vec<Arc<dyn Evaluator>>,
     trace_limits: crate::TraceLimits,
+    excluded_environment: Vec<String>,
 }
 
 impl EvalRunner {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn excluding_environment(mut self, variables: Vec<String>) -> Self {
+        self.excluded_environment = variables;
+        self
     }
 
     pub fn trace_limits(mut self, limits: crate::TraceLimits) -> Result<Self> {
@@ -62,7 +68,13 @@ impl EvalRunner {
             .prefix("aicoder-eval-")
             .tempdir()
             .context("Failed to create temporary evaluation workspace")?;
-        prepare_fixture(&case.fixture, temporary.path())?;
+        prepare_fixture(
+            &case.fixture,
+            temporary.path(),
+            execution_context.clone(),
+            &self.excluded_environment,
+        )
+        .await?;
         let before = WorkspaceSnapshot::capture(temporary.path())?;
         let executor = executor_factory(temporary.path())
             .context("Failed to build evaluation turn executor")?;
@@ -99,7 +111,12 @@ impl EvalRunner {
         };
         let workspace_patch = if workspace_error.is_none() {
             let patch = if temporary.path().join(".git").exists() {
-                git_patch(temporary.path())
+                git_patch(
+                    temporary.path(),
+                    execution_context.clone(),
+                    &self.excluded_environment,
+                )
+                .await
             } else {
                 before.unified_patch(&after)
             };

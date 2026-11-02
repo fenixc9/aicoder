@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use crate::{AgentTrace, WorkspaceDiff, WorkspaceSnapshot};
 
 /// Source used to prepare a fresh workspace for each evaluation run.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkspaceFixture {
     Empty,
     CopyFrom(PathBuf),

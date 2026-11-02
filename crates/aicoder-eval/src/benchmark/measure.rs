@@ -80,6 +80,7 @@ impl SourceStamp {
                 ".json",
                 ".html",
                 ".css",
+                ".py",
                 "Cargo.toml",
                 "Cargo.lock",
                 "rust-toolchain.toml",
@@ -122,7 +123,7 @@ impl SourceStamp {
             platform:format!("{}/{}",std::env::consts::OS,std::env::consts::ARCH),
             source_sha256:digest.finish().as_ref().iter().map(|b|format!("{b:02x}")).collect(),
             file_count:paths.len(),
-            scope:"Rust, Cargo/toolchain manifests and embedded JS/JSON/HTML/CSS; includes untracked sources".into(),
+            scope:"Rust, Cargo/toolchain manifests and embedded JS/JSON/HTML/CSS/Python; includes untracked sources".into(),
         })
     }
 }
@@ -234,7 +235,7 @@ fn sample(data: &Mutex<MemoryObservation>) {
     }
 }
 
-fn executable_fingerprint() -> Result<String> {
+pub fn executable_fingerprint() -> Result<String> {
     let mut file = std::fs::File::open("/proc/self/exe")?;
     ensure!(
         file.metadata()?.len() <= 512 * 1024 * 1024,

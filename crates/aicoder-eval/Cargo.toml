@@ -22,7 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 ring = "0.17.14"
 libc = "0.2"
-shlex = "2"
+fs2 = "0.4"
 similar = { version = "3", default-features = false, features = ["std", "text"] }
 tempfile.workspace = true
 tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "sync", "time"] }

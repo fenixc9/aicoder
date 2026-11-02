@@ -268,7 +268,9 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
   网络/provider 的非确定性作为实验限制记录。
 - [x] 保存事件与工作区 diff；可重放 scripted provider/tool 验证回归。
   事件回放仅验证记录与展示，不宣称能还原外部命令或精确复现模型输出。
-- [ ] SWE-bench 保持生成与官方 grading 隔离；失败样本计入总体结果。
+- [x] SWE-bench 保持生成与官方 grading 隔离；失败样本计入总体结果。
+  schema 4 续跑绑定全量输入与产物，官方 5.0.2 / 本地 Docker 夹具已互通；见 [契约](swebench-contract.md) 与 [验收](s7-swe-acceptance.md)。
+  夹具比例不作为实际 SWE-bench 编码成绩；真实模型与 Pi 对照仍待采集。
 - [ ] 在相同任务、模型和资源预算下对比 Pi；分别报告功能覆盖与编码成功率。
 - [ ] 对照第 4 节逐项验收，完成公开 API 文档、迁移说明、运行示例及发布说明。
 

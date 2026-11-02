@@ -1,0 +1,4 @@
+# Optional official Docker harness for manual integration; never a production agent dependency.
+# PyPI wheel SHA-256: b7f0416a1e686eca22c2f749b5f816685a202835032f6683080e2b53545bbb62
+# The Rust runner independently checks all 65 swebench/ package files before launching it.
+swebench==5.0.2

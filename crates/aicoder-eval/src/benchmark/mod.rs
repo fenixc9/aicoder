@@ -5,7 +5,7 @@ mod suite;
 use aicoder_core::{TurnExecutionContext, TurnExecutor, model::ModelRequest};
 use anyhow::{Result, ensure};
 pub use archive::{BenchArtifact, BenchComparison};
-pub use measure::{MemoryObservation, SourceStamp};
+pub use measure::{MemoryObservation, SourceStamp, executable_fingerprint};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -503,7 +503,7 @@ impl BenchRunner {
         report.cancelled = context.is_cancelled();
         report.summary = BenchSummary::from_cases(&report.cases);
         report.validate_structure()?;
-        storage.finish(&report)?;
+        storage.publish_json("manifest.json", &report, 4 * 1024 * 1024, false)?;
         Ok(report)
     }
 }

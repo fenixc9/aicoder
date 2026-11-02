@@ -32,7 +32,10 @@
   inputs and keep every selected failure in benchmark denominators. Bounded capture failures
   retain progress and explicit uncertainty; artifact failure never retries completed work.
   Replay is observation only. Unknown usage/prices and sampled process RSS are not exact cost
-  or isolated agent peak memory.
+  or isolated agent peak memory. SWE-bench resume binds complete inputs and owned artifact
+  receipts; missing/corrupt evidence never silently reexecutes a case. Keep generation failures
+  in grading denominators, isolate official cache namespaces, and clean external containers
+  only with authority created for the current fresh host invocation.
 - Keep canonical recorded history separate from provider projections. Recovery repairs
   and pruning must not become historical facts; journal indices follow canonical input.
   Preserve declared runtime prefixes and branch provenance when constructing model views.

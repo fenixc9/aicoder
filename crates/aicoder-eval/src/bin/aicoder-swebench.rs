@@ -4,7 +4,7 @@ use aicoder_core::tools::AllowAllApproval;
 use aicoder_eval::{
     SweBenchAdapter, SweBenchBatchOptions, SweBenchBatchRunner, SweBenchDataset, SweBenchFilter,
     SweBenchHarnessConfig, SweBenchHarnessReport, SweBenchRepositoryCache,
-    SweBenchRepositorySource, run_swebench_harness,
+    SweBenchRepositorySource, SweBenchScore, run_swebench_harness_with_context,
 };
 use aicoder_runtime::resources::ResourceSettings;
 use aicoder_runtime::verification::WorkspaceChangeVerifier;
@@ -32,9 +32,11 @@ enum Command {
     /// Generate patches for a local SWE-bench JSON/JSONL dataset.
     Run(Box<RunArgs>),
     /// Run the official Python/Docker harness for generated predictions.
-    Grade(GradeArgs),
+    Grade(Box<GradeArgs>),
     /// Read and normalize an official harness aggregate report.
     Import { report: PathBuf },
+    /// Verify a complete generation plan, selected denominator and artifact references.
+    VerifyGeneration { run: PathBuf },
 }
 
 #[derive(Debug, Args)]
@@ -120,6 +122,12 @@ struct GradeArgs {
     instance_ids: Vec<String>,
     #[arg(long)]
     modal: bool,
+    #[arg(long)]
+    generation_run: Option<PathBuf>,
+    #[arg(long, default_value_t = 7200)]
+    total_timeout: u64,
+    #[arg(long = "exclude-env")]
+    excluded_environment: Vec<String>,
 }
 
 #[tokio::main]
@@ -127,11 +135,22 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_target(false)
         .with_level(true)
+        .with_writer(std::io::stderr)
         .init();
     match Cli::parse().command {
         Command::Run(arguments) => run(*arguments).await,
-        Command::Grade(arguments) => grade(arguments),
+        Command::Grade(arguments) => grade(*arguments).await,
         Command::Import { report } => import(report),
+        Command::VerifyGeneration { run } => {
+            let report = aicoder_eval::SweBenchBatchReport::load_verified(run)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &json!({"verified":true,"plan_sha256":report.plan_sha256,"predictions_sha256":report.predictions_sha256,"summary":report.summary})
+                )?
+            );
+            Ok(())
+        }
     }
 }
 
@@ -189,11 +208,28 @@ async fn run(arguments: RunArgs) -> Result<()> {
         difficulty: arguments.difficulty,
         limit: arguments.limit,
     })?;
-    let cache_root = arguments
-        .repository_cache
-        .unwrap_or_else(|| arguments.output.join("repositories"));
+    let cache_root = arguments.repository_cache.unwrap_or_else(|| {
+        arguments
+            .output
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(".aicoder-swe-repositories")
+    });
+    let context = aicoder_core::TurnExecutionContext::new();
+    let signal = context.clone();
+    let signal_owner = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            signal.cancel("SWE-bench SIGINT");
+        }
+    });
     let cache = SweBenchRepositoryCache::new(&cache_root);
-    cache.prepare(&selected.instances)?;
+    cache
+        .prepare_with_context(
+            &selected.instances,
+            context.clone(),
+            &runtime.config().credential_references,
+        )
+        .await?;
     let adapter = SweBenchAdapter::new(&model)
         .model_name_or_path(&model_name_or_path)
         .repository_source(SweBenchRepositorySource::LocalRoot(cache_root))
@@ -206,43 +242,59 @@ async fn run(arguments: RunArgs) -> Result<()> {
                 .as_deref()
                 .unwrap_or_default(),
         );
-    let budget = runtime.config().execution.budget.clone();
+    let parameters = json!({
+        "runner_version":env!("CARGO_PKG_VERSION"),
+        "runner_executable_sha256":aicoder_eval::benchmark::executable_fingerprint()?,
+        "dataset_path":arguments.dataset,
+        "selected_instance_ids":selected.instances.iter().map(|i|&i.instance_id).collect::<Vec<_>>(),
+        "include_hints":!arguments.no_hints,
+        "runtime":runtime.config(),
+        "global_resources":runtime.global_resources()?.manifest(),
+        "resource_scope":"isolated_case_workspace_with_frozen_globals",
+        "require_workspace_change":!arguments.allow_empty_patch,
+    });
+    let execution_pin =
+        ring::digest::digest(&ring::digest::SHA256, &serde_json::to_vec(&parameters)?)
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
     let options = SweBenchBatchOptions::new(&arguments.output, &arguments.run_id)
         .dataset(selected.name.clone())
         .concurrency(arguments.workers)
         .resume(!arguments.no_resume)
-        .parameters(json!({
-            "dataset_path": arguments.dataset,
-            "selected_instance_ids": selected.instances.iter().map(|item| &item.instance_id).collect::<Vec<_>>(),
-            "include_hints": !arguments.no_hints,
-            "temperature": runtime.config().options.temperature,
-            "max_tokens": runtime.config().options.max_output_tokens,
-            "max_rounds": runtime.config().execution.max_rounds,
-            "budget": budget,
-            "runtime": runtime.config(),
-            "global_resources":runtime.global_resources()?.manifest(),
-            "resource_scope":"isolated_case_workspace_with_frozen_globals",
-            "stream": runtime.config().execution.stream,
-            "require_workspace_change": !arguments.allow_empty_patch,
-        }));
+        .parameters(parameters)
+        .execution_pin(execution_pin);
     let cases = adapter.adapt_dataset(&selected)?;
     let provider = Arc::new(runtime.client()?);
     let allow_empty_patch = arguments.allow_empty_patch;
-    let report = SweBenchBatchRunner::new(adapter, options)
-        .run(cases, move |workspace| {
-            let builder = runtime
-                .executor_builder_for(provider.clone(), workspace)?
-                .approval(AllowAllApproval);
-            if allow_empty_patch {
-                builder.build()
-            } else {
-                builder
-                    .completion_verifier(WorkspaceChangeVerifier::new())
-                    .build()
-            }
-        })
-        .await?;
+    let excluded = runtime.config().credential_references.clone();
+    let outcome = SweBenchBatchRunner::new(adapter, options)
+        .eval_runner(aicoder_eval::EvalRunner::new().excluding_environment(excluded))
+        .run_with_context(
+            cases,
+            move |workspace| {
+                let builder = runtime
+                    .executor_builder_for(provider.clone(), workspace)?
+                    .approval(AllowAllApproval);
+                if allow_empty_patch {
+                    builder.build()
+                } else {
+                    builder
+                        .completion_verifier(WorkspaceChangeVerifier::new())
+                        .build()
+                }
+            },
+            context.clone(),
+        )
+        .await;
+    signal_owner.abort();
+    let _ = signal_owner.await;
+    let report = outcome?;
     println!("{}", serde_json::to_string_pretty(&report.summary)?);
+    if context.is_cancelled() {
+        std::process::exit(130);
+    }
     ensure!(
         report.summary.failed == 0 && report.summary.incomplete == 0,
         "{} SWE-bench cases failed and {} were incomplete; resume after correcting the cause or changing the run configuration",
@@ -252,7 +304,7 @@ async fn run(arguments: RunArgs) -> Result<()> {
     Ok(())
 }
 
-fn grade(arguments: GradeArgs) -> Result<()> {
+async fn grade(arguments: GradeArgs) -> Result<()> {
     let mut config = SweBenchHarnessConfig::new(
         arguments.dataset_name,
         arguments.predictions,
@@ -265,20 +317,48 @@ fn grade(arguments: GradeArgs) -> Result<()> {
     config.timeout_seconds = arguments.timeout;
     config.report_dir = arguments.report_dir;
     config.modal = arguments.modal;
-    let execution = run_swebench_harness(&config)?;
-    print!("{}", String::from_utf8_lossy(&execution.output.stdout));
-    if let Some(report) = execution.report {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+    config.generation_manifest = arguments.generation_run;
+    config.total_timeout_seconds = arguments.total_timeout;
+    config.excluded_environment = arguments.excluded_environment;
+    let context = aicoder_core::TurnExecutionContext::new();
+    let signal = context.clone();
+    let owner = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            signal.cancel("SWE-bench grading SIGINT");
+        }
+    });
+    let result = run_swebench_harness_with_context(&config, context.clone()).await;
+    owner.abort();
+    let _ = owner.await;
+    if context.is_cancelled() {
+        eprintln!("Grading cancelled and owned process cleanup awaited; no success was published");
+        std::process::exit(130);
     }
+    let execution = result?;
+    eprint!("{}", String::from_utf8_lossy(&execution.output.stdout));
+    eprint!("{}", String::from_utf8_lossy(&execution.output.stderr));
+    println!("{}", serde_json::to_string_pretty(&execution.score)?);
     Ok(())
 }
 
 fn import(path: PathBuf) -> Result<()> {
+    if path.is_dir() || path.file_name().is_some_and(|name| name == "score.json") {
+        let directory = if path.is_dir() {
+            path.as_path()
+        } else {
+            path.parent().unwrap_or_else(|| std::path::Path::new("."))
+        };
+        let score = SweBenchScore::load_verified(directory)?;
+        println!("{}", serde_json::to_string_pretty(&score)?);
+        return Ok(());
+    }
     let report = SweBenchHarnessReport::load(path)?;
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
             "resolved_rate": report.resolved_rate(),
+            "submitted_resolved_rate":report.submitted_resolved_rate(),
+            "denominator":"official_total_instances",
             "report": report,
         }))?
     );

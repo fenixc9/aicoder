@@ -157,6 +157,10 @@ through core/runtime, with hidden post-run grading, verifiable events/diffs and 
 comparisons. `aicoder-bench run` defaults to offline scripted contracts; service runs require
 explicit `--live`. Contract pass rates are separate from real-model coding success.
 
+[SWE-bench contracts](docs/swebench-contract.md) pin generation/resume inputs and official
+5.0.2 grading, preserve failed samples in the selected denominator, and isolate cache/cleanup
+ownership. The optional Docker fixture verifies interoperability without real model calls.
+
 See [the evaluation README](crates/aicoder-eval/README.md) for evaluation and
 SWE-bench usage.
 See [the development baseline](docs/development-baseline.md) for toolchain and

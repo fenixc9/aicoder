@@ -266,15 +266,24 @@ async fn consume(
     }
     Ok(())
 }
+pub(super) struct DriveOptions<'a> {
+    pub limit: u64,
+    pub deadline: Instant,
+    pub cancellation: Option<&'a aicoder_core::TurnExecutionContext>,
+}
 pub(super) async fn drive(
     child: &mut ManagedChild,
     exits: &mut Signal,
     stdout: &mut ChildStdout,
     stderr: &mut ChildStderr,
     capture: &mut Captures,
-    limit: u64,
-    deadline: Instant,
+    options: DriveOptions<'_>,
 ) -> Stop {
+    let DriveOptions {
+        limit,
+        deadline,
+        cancellation,
+    } = options;
     let (mut out, mut err) = ([0_u8; CHUNK], [0_u8; CHUNK]);
     loop {
         match child.exited() {
@@ -284,6 +293,7 @@ pub(super) async fn drive(
         }
         let count = (limit.saturating_sub(capture.seen()) + 1).min(CHUNK as u64) as usize;
         tokio::select! {biased;
+            _=async {match cancellation {Some(context)=>context.cancelled().await,None=>std::future::pending().await}}=>return Stop::Cancelled,
             _=tokio::time::sleep_until(deadline)=>return Stop::Timeout,
             signal=exits.recv()=>if signal.is_none(){return Stop::WaitError;},
             read=read_any(stdout,stderr,capture,&mut out[..count],&mut err[..count])=>if let Err(stop)=consume(read,&out,&err,capture,limit).await{return stop;},

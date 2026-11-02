@@ -1,9 +1,8 @@
 use aicoder_core::model::{ModelOptions, ModelToolChoice};
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
 };
 
 use aicoder_core::model::{Message, MessageRole, ModelRequest};
@@ -14,7 +13,7 @@ use serde_json::Value;
 use crate::{EvalCase, EvalReport, WorkspaceFixture};
 
 /// One row from an official SWE-bench family dataset.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SweBenchInstance {
     pub repo: String,
     pub instance_id: String,
@@ -52,6 +51,9 @@ pub struct SweBenchInstance {
     pub pr_url: Option<String>,
     #[serde(default)]
     pub difficulty: Option<String>,
+    /// Preserve current grading/image/test metadata for identity, never include it in prompts.
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 /// Locally loaded SWE-bench dataset. Both JSON arrays and JSONL exports are supported.
@@ -64,8 +66,7 @@ pub struct SweBenchDataset {
 impl SweBenchDataset {
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let content = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read SWE-bench dataset {}", path.display()))?;
+        let content = String::from_utf8(crate::bounds::read(path, 256 * 1024 * 1024)?)?;
         let instances = parse_instances(&content)
             .with_context(|| format!("Failed to parse SWE-bench dataset {}", path.display()))?;
         validate_instances(&instances)?;
@@ -104,6 +105,14 @@ impl SweBenchDataset {
 
     pub fn filtered(&self, filter: &SweBenchFilter) -> Result<Self> {
         let instance_ids = filter.instance_ids.iter().collect::<HashSet<_>>();
+        ensure!(
+            instance_ids.len() == filter.instance_ids.len(),
+            "duplicate requested SWE-bench instance id"
+        );
+        ensure!(
+            instance_ids.iter().all(|id| self.get(id).is_some()),
+            "requested SWE-bench instance is absent from the dataset"
+        );
         let repositories = filter.repositories.iter().collect::<HashSet<_>>();
         let mut instances = self
             .instances
@@ -124,7 +133,7 @@ impl SweBenchDataset {
             instances.truncate(limit);
         }
         ensure!(
-            !instances.is_empty(),
+            !instances.is_empty() && instances.len() <= 20_000,
             "SWE-bench filter selected no instances"
         );
         Self::from_instances(self.name.clone(), instances)
@@ -266,6 +275,12 @@ impl SweBenchAdapter {
             report.case.id,
             case.instance.instance_id
         );
+        ensure!(
+            report.case.model == case.eval_case.request.model
+                && report.workspace_capture_complete
+                && report.workspace_patch.is_some(),
+            "generation patch is unavailable or belongs to a different model"
+        );
         Ok(SweBenchPrediction {
             instance_id: case.instance.instance_id.clone(),
             model_patch: report.workspace_patch.clone().unwrap_or_default(),
@@ -317,87 +332,137 @@ impl SweBenchRepositoryCache {
     }
 
     pub fn prepare(&self, instances: &[SweBenchInstance]) -> Result<()> {
-        fs::create_dir_all(&self.root).with_context(|| {
-            format!(
-                "Failed to create SWE-bench repository cache {}",
-                self.root.display()
-            )
-        })?;
+        let cache = self.clone();
+        let rows = instances.to_vec();
+        std::thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?
+                .block_on(cache.prepare_with_context(
+                    &rows,
+                    aicoder_core::TurnExecutionContext::new(),
+                    &[],
+                ))
+        })
+        .join()
+        .map_err(|_| anyhow::anyhow!("repository cache owner panicked"))?
+    }
+    pub async fn prepare_with_context(
+        &self,
+        instances: &[SweBenchInstance],
+        context: aicoder_core::TurnExecutionContext,
+        excluded: &[String],
+    ) -> Result<()> {
+        fs::create_dir_all(&self.root)?;
+        let storage = crate::storage::StorageRoot::existing(&self.root)?;
+        let _lease = storage.lease()?;
         let mut repositories = HashSet::new();
         for instance in instances {
-            if repositories.insert(instance.repo.as_str()) {
-                self.prepare_repository(&instance.repo)?;
+            validate_repo_name(&instance.repo)?;
+            ensure_safe_commit(&instance.base_commit)?;
+            if repositories.insert(&instance.repo) {
+                self.prepare_repository(&instance.repo, context.clone(), excluded)
+                    .await?;
             }
         }
         for instance in instances {
-            self.ensure_commit(&instance.repo, &instance.base_commit)?;
+            self.ensure_commit(
+                &instance.repo,
+                &instance.base_commit,
+                context.clone(),
+                excluded,
+            )
+            .await?;
         }
         Ok(())
     }
-
-    fn prepare_repository(&self, repo: &str) -> Result<()> {
-        validate_repo_name(repo)?;
+    async fn prepare_repository(
+        &self,
+        repo: &str,
+        context: aicoder_core::TurnExecutionContext,
+        excluded: &[String],
+    ) -> Result<()> {
         let cached = self.path_for(repo);
         if cached.exists() {
             ensure!(
-                cached.is_dir(),
-                "Repository cache is not a directory: {}",
-                cached.display()
+                fs::symlink_metadata(&cached)?.is_dir(),
+                "repository cache must be an owned directory"
             );
             return Ok(());
         }
-        let temporary = cached.with_extension(format!("clone-{}.tmp", std::process::id()));
-        let output = Command::new("git")
-            .args(["init", "--quiet", "--bare", "--"])
-            .arg(&temporary)
-            .output()
-            .with_context(|| format!("Failed to initialize repository cache for {repo}"))?;
-        ensure_git_success("git init --bare", output)?;
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&temporary)
-            .args(["remote", "add", "origin"])
-            .arg(format!("https://github.com/{repo}.git"))
-            .output()
-            .with_context(|| format!("Failed to configure repository cache for {repo}"))?;
-        ensure_git_success("git remote add", output)?;
-        fs::rename(&temporary, &cached)
-            .with_context(|| format!("Failed to publish repository cache {}", cached.display()))
+        let temporary = tempfile::tempdir_in(&self.root)?;
+        crate::git::run(
+            temporary.path(),
+            vec!["init".into(), "--quiet".into(), "--bare".into()],
+            None,
+            context.clone(),
+            excluded,
+        )
+        .await?;
+        crate::git::run(
+            temporary.path(),
+            vec![
+                "remote".into(),
+                "add".into(),
+                "origin".into(),
+                format!("https://github.com/{repo}.git").into(),
+            ],
+            None,
+            context,
+            excluded,
+        )
+        .await?;
+        fs::rename(temporary.path(), &cached)?;
+        Ok(())
     }
-
-    fn ensure_commit(&self, repo: &str, commit: &str) -> Result<()> {
-        ensure_safe_commit(commit)?;
+    async fn ensure_commit(
+        &self,
+        repo: &str,
+        commit: &str,
+        context: aicoder_core::TurnExecutionContext,
+        excluded: &[String],
+    ) -> Result<()> {
         let cached = self.path_for(repo);
         let object = format!("{commit}^{{commit}}");
-        let present = Command::new("git")
-            .arg("-C")
-            .arg(&cached)
-            .args(["cat-file", "-e"])
-            .arg(&object)
-            .output()
-            .with_context(|| format!("Failed to inspect cached commit {commit} for {repo}"))?;
+        let present = crate::git::run(
+            &cached,
+            vec!["cat-file".into(), "-e".into(), object.into()],
+            None,
+            context.clone(),
+            excluded,
+        )
+        .await
+        .is_ok();
+        ensure!(
+            !context.is_cancelled(),
+            "repository cache preparation cancelled"
+        );
         let reference = format!("refs/heads/aicoder-cache-{commit}");
-        if present.status.success() {
-            let output = Command::new("git")
-                .arg("-C")
-                .arg(&cached)
-                .args(["update-ref", &reference, commit])
-                .output()
-                .with_context(|| {
-                    format!("Failed to reference cached commit {commit} for {repo}")
-                })?;
-            ensure_git_success("git update-ref", output)?;
-            return Ok(());
+        if present {
+            crate::git::run(
+                &cached,
+                vec!["update-ref".into(), reference.into(), commit.into()],
+                None,
+                context,
+                excluded,
+            )
+            .await?;
+        } else {
+            crate::git::run(
+                &cached,
+                vec![
+                    "fetch".into(),
+                    "--quiet".into(),
+                    "--depth=1".into(),
+                    "origin".into(),
+                    format!("{commit}:{reference}").into(),
+                ],
+                None,
+                context,
+                excluded,
+            )
+            .await?;
         }
-        let refspec = format!("{commit}:{reference}");
-        let output = Command::new("git")
-            .arg("-C")
-            .arg(&cached)
-            .args(["fetch", "--quiet", "--depth=1", "origin"])
-            .arg(refspec)
-            .output()
-            .with_context(|| format!("Failed to fetch cached commit {commit} for {repo}"))?;
-        ensure_git_success("git fetch", output)?;
         Ok(())
     }
 
@@ -425,10 +490,35 @@ pub fn write_swebench_predictions(
     predictions: &[SweBenchPrediction],
 ) -> Result<()> {
     let path = path.as_ref();
-    let encoded = serde_json::to_string_pretty(predictions)
-        .context("Failed to encode SWE-bench predictions")?;
-    fs::write(path, encoded)
-        .with_context(|| format!("Failed to write SWE-bench predictions {}", path.display()))
+    ensure!(
+        predictions.len() <= 5000,
+        "prediction count budget exceeded"
+    );
+    let mut ids = HashSet::new();
+    for prediction in predictions {
+        ensure!(
+            valid_instance_id(&prediction.instance_id)
+                && valid_model_label(&prediction.model_name_or_path)
+                && ids.insert(&prediction.instance_id)
+                && prediction.model_patch.len() <= 8 * 1024 * 1024,
+            "invalid prediction identity/patch budget"
+        );
+    }
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    let mut writer = crate::bounds::LimitedWriter {
+        inner: temporary.as_file_mut(),
+        remaining: 256 * 1024 * 1024,
+    };
+    serde_json::to_writer(&mut writer, predictions)?;
+    use std::io::Write;
+    writer.flush()?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }
 
 fn chat_message(role: MessageRole, content: String) -> Message {
@@ -463,7 +553,7 @@ fn validate_instances(instances: &[SweBenchInstance]) -> Result<()> {
     let mut ids = HashSet::new();
     for instance in instances {
         ensure!(
-            !instance.instance_id.trim().is_empty(),
+            valid_instance_id(&instance.instance_id),
             "SWE-bench instance id cannot be empty"
         );
         ensure!(
@@ -472,6 +562,12 @@ fn validate_instances(instances: &[SweBenchInstance]) -> Result<()> {
             instance.instance_id
         );
         validate_repo_name(&instance.repo)?;
+        crate::bounds::encoded_size(instance, 4 * 1024 * 1024)?;
+        ensure!(
+            !instance.problem_statement.trim().is_empty(),
+            "SWE-bench issue text is empty"
+        );
+        ensure_safe_commit(&instance.base_commit)?;
         ensure!(
             !instance.base_commit.is_empty(),
             "SWE-bench instance {} has no base commit",
@@ -508,18 +604,6 @@ fn ensure_safe_commit(commit: &str) -> Result<()> {
     Ok(())
 }
 
-fn ensure_git_success(operation: &str, output: Output) -> Result<()> {
-    if output.status.success() {
-        Ok(())
-    } else {
-        anyhow::bail!(
-            "{operation} failed with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        )
-    }
-}
-
 fn deserialize_test_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -531,9 +615,9 @@ where
             .into_iter()
             .map(|value| match value {
                 Value::String(value) => Ok(value),
-                other => Err(serde::de::Error::custom(format!(
-                    "test list contains non-string value: {other}"
-                ))),
+                _ => Err(serde::de::Error::custom(
+                    "test list contains a non-string value",
+                )),
             })
             .collect(),
         Value::String(value) if value.trim().is_empty() => Ok(Vec::new()),
@@ -544,4 +628,48 @@ where
             "test list must be a JSON string or array, got {other}"
         ))),
     }
+}
+
+pub(crate) fn valid_instance_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id != "."
+        && id != ".."
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))
+}
+pub(crate) fn valid_run_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
+}
+impl SweBenchInstance {
+    pub fn fingerprint(&self) -> Result<String> {
+        Ok(crate::bounds::sha256(&crate::bounds::encode(
+            self,
+            4 * 1024 * 1024,
+        )?))
+    }
+}
+impl SweBenchCase {
+    pub fn input_fingerprint(&self) -> Result<String> {
+        Ok(crate::bounds::sha256(&crate::bounds::encode(
+            &serde_json::json!({"instance":self.instance.fingerprint()?,"request":self.eval_case.request,"fixture":self.eval_case.fixture}),
+            8 * 1024 * 1024,
+        )?))
+    }
+}
+
+pub(crate) fn valid_model_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= 128
+        && label != "."
+        && label != ".."
+        && label.replace('/', "__").len() <= 128
+        && label
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_./:-".contains(&b))
 }

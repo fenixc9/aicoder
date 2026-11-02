@@ -10,6 +10,7 @@ pub mod images;
 #[cfg(feature = "mcp-stdio")]
 pub mod mcp;
 pub mod packages;
+pub mod process;
 #[cfg(feature = "process-extensions")]
 pub mod process_extensions;
 mod process_owner;

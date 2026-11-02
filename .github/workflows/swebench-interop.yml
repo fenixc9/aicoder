@@ -1,0 +1,36 @@
+name: Official SWE-bench fixture interop
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  official-fixture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.92.0
+      - name: Install runtime tool and optional pinned harness
+        run: |
+          sudo apt-get update && sudo apt-get install --yes ripgrep
+          python3 -m venv "$RUNNER_TEMP/swe-harness"
+          "$RUNNER_TEMP/swe-harness/bin/python" -m pip install -r scripts/requirements-swebench.txt
+      - name: Build direct generation/grading entry
+        run: cargo build --locked -p aicoder-eval --bins --example offline_swebench
+      - name: Build local fixture and run actual official package
+        run: |
+          docker build -t aicoder-swe-fixture:local crates/aicoder-eval/fixtures/swebench
+          SWE_FIXTURE_IMAGE=$(docker image inspect --format '{{.Id}}' aicoder-swe-fixture:local)
+          python3 scripts/check_swebench.py --official-python "$RUNNER_TEMP/swe-harness/bin/python" --image "$SWE_FIXTURE_IMAGE" --output "$RUNNER_TEMP/official-swe"
+      - name: Preserve fixture evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: official-swebench-fixture
+          path: ${{ runner.temp }}/official-swe
+          if-no-files-found: ignore

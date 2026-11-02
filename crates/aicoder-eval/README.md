@@ -97,27 +97,31 @@ cargo run -p aicoder-eval --bin aicoder-swebench -- run \
   --workers 2
 ~~~
 
-Every selected case writes report.json, trace.json, and checkpoint.json. The
-batch writes run.json and the official predictions.json. Re-running the same
-command resumes valid checkpoints by default; pass --no-resume to run all
-selected cases again.
+Every admitted case writes a started marker and, when available, report/trace artifacts
+plus a terminal receipt. The batch writes plan.json, run.json and one official prediction
+row per selected case, including failed placeholders. Same pinned inputs can reuse valid
+receipts; unsupported/uncertain evidence never causes automatic reexecution. Choose a new
+output for intentional regeneration. --no-resume requires a fresh output and retains old data.
 
 The batch runner rejects a final answer while the Git workspace is clean and
 lets the agent continue. Pass `--allow-empty-patch` only when an empty patch is
 an intentional result.
 
-Run the official installed SWE-bench Python/Docker harness separately:
+Install the optional pinned swebench 5.0.2 package and grade separately using the same local
+dataset plus verified generation manifest:
 
 ~~~bash
 cargo run -p aicoder-eval --bin aicoder-swebench -- grade \
   --predictions artifacts/swebench-lite-baseline/predictions.json \
-  --dataset-name princeton-nlp/SWE-bench_Lite \
+  --dataset-name datasets/SWE-bench_Lite.jsonl \
+  --generation-run artifacts/swebench-lite-baseline/run.json \
   --run-id baseline-v1 \
   --report-dir artifacts/swebench-lite-baseline/harness
 ~~~
 
-Use aicoder-swebench import with an official report path to print a normalized
-resolved rate and the original aggregate fields.
+Use aicoder-swebench import with a grading directory for verified linked results, or with
+an official report path for its explicit total/submitted denominators. The latter alone
+cannot prove a generation link.
 
 
 The [S7 coding benchmark CLI](../../docs/coding-benchmarks.md) adds pinned Rust/JSON tasks,
@@ -133,3 +137,17 @@ cargo run --locked -p aicoder-eval --bin aicoder-bench -- run --output artifacts
 Default runs are deterministic scripted contracts, not measurements of LLM coding ability.
 Service calls require explicit --live. Completed but ungraded runs are now Inconclusive;
 check trace_capture and workspace_capture_complete before interpreting reports as complete.
+
+
+[SWE-bench schema 4](../../docs/swebench-contract.md) binds full input/receipt identities,
+refuses unsafe implicit reruns, preserves failed prediction rows and joins the exact generation
+scope to pinned official 5.0.2 grading. Run the offline pipeline with:
+
+```sh
+cargo build --locked -p aicoder-eval --bins --example offline_swebench
+python3 scripts/check_swebench.py
+```
+
+Official Docker integration is optional and separate from model generation. Cached score
+imports verify hashes and facts without launching Python/containers. Legacy submitted-only
+rates are a separate diagnostic, not the full experiment denominator.

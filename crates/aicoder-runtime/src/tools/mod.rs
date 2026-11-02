@@ -19,6 +19,7 @@ mod util;
 mod workspace;
 pub use workspace::WorkspacePaths;
 
+pub(crate) use bash::capture_host;
 pub use bash::{BashTool, ConfiguredBash, ShellLimits, ShellOutput, ShellStopReason};
 pub use edit_file::EditFileTool;
 pub use grep::GrepTool;

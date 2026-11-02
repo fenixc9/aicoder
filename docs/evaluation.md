@@ -33,6 +33,9 @@ cargo run -p aicoder-eval --bin aicoder-swebench -- run \
   --max-tokens 4096
 ~~~
 
+For schema 4, plan.json pins the full selected inputs before execution; run.json is the
+verified generation summary. Resume never reruns uncertain or incompatible old cases.
+See [SWE-bench contracts](swebench-contract.md) for the current source/artifact pins and migration.
 run.json is the reproducibility manifest and generation summary.
 predictions.json is the official harness input. Case directories contain:
 
@@ -41,7 +44,8 @@ predictions.json is the official harness input. Case directories contain:
 - trace.json: ordered versioned event envelopes with structured JSON payloads and producer elapsed time;
 - error.json: failure chain when generation could not complete.
 
-After generation, run the official harness and preserve its aggregate report
+After generation, run the pinned official harness with --generation-run and the same local dataset export,
+and preserve its aggregate report
 beside the generation artifacts. The primary metric is resolved rate; retain
 generation failures, empty patches, total tokens, and duration as diagnostic
 metrics rather than hiding them in the resolved-rate denominator.
@@ -72,7 +76,8 @@ mode's history and unsupported-parameter behavior.
 
 Trace consumers should validate [event protocol v1](events.md). Incomplete observation
 is an evaluator error; old Debug-string traces are historical artifacts, and SWE-bench
-checkpoints without the event version are regenerated rather than mixed into new runs.
+legacy/incompatible checkpoints are refused without automatic reexecution. Use a fresh
+output for an intentional new attempt; do not mix old results into current evidence.
 
 
 ## S7 coding cases and verifiable archives
@@ -85,3 +90,10 @@ stays in the denominator. This does not replace the official SWE-bench resolved-
 EvalRunner now reports completed but ungraded runs as Inconclusive, bounds trace/workspace
 retention, and preserves progress when post-run observation fails. Legacy SWE-bench generation
 completion and official test resolution remain different outcomes; see the migration notes.
+
+
+Official grading targets the published swebench 5.0.2 wheel/content hash, not mutable upstream
+main. Failed generation receives an explicit empty prediction and remains selected. Import
+resolved_rate uses official total_instances, with submitted_resolved_rate separate. Grading
+cache identity includes the exact staged prediction/dataset and a fresh private official run
+nonce. See [the S7 contract](swebench-contract.md) and [acceptance](s7-swe-acceptance.md).

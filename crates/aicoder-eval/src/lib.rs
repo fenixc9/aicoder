@@ -8,11 +8,13 @@ pub mod benchmark;
 mod bounds;
 mod command;
 mod evaluator;
+mod git;
 mod model;
 mod provenance;
 mod report;
 pub use provenance::EvalProvenance;
 mod runner;
+mod storage;
 mod swebench;
 mod swebench_batch;
 mod swebench_harness;
@@ -38,7 +40,9 @@ pub use swebench_batch::{
     SweBenchBatchRunner, SweBenchBatchSummary,
 };
 pub use swebench_harness::{
-    SweBenchHarnessConfig, SweBenchHarnessExecution, SweBenchHarnessReport, run_swebench_harness,
+    SWEBENCH_HARNESS_PACKAGE_SHA256, SWEBENCH_HARNESS_VERSION, SweBenchHarnessConfig,
+    SweBenchHarnessExecution, SweBenchHarnessIdentity, SweBenchHarnessReport, SweBenchScore,
+    run_swebench_harness, run_swebench_harness_with_context,
 };
 pub use trace::{AgentTrace, AgentTraceRecorder, TimedAgentEvent, TraceCapture, TraceLimits};
 pub use workspace::{WorkspaceDiff, WorkspaceLimits, WorkspaceSnapshot};

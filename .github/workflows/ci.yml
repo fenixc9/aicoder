@@ -37,6 +37,17 @@ jobs:
           name: offline-coding-benchmark
           path: ${{ runner.temp }}/aicoder-bench
           if-no-files-found: ignore
+      - name: Offline SWE-bench generation, resume and grading contracts
+        run: |
+          cargo build --locked -p aicoder-eval --bins --example offline_swebench
+          python3 scripts/check_swebench.py --output "$RUNNER_TEMP/aicoder-swebench"
+      - name: Preserve SWE-bench contract evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: offline-swebench-contract
+          path: ${{ runner.temp }}/aicoder-swebench
+          if-no-files-found: ignore
       - name: Offline smoke
         run: cargo run --locked -p aicoder-runtime --example offline_smoke
       - name: In-memory model provider example

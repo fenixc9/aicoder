@@ -804,3 +804,29 @@ checkpoints retain their historical grading fields; this new benchmark archive f
 not import them or claim their old Passed flag is an official resolved test. Benchmark
 manifest-v1 archives are exclusive, have no implicit resume, and verify their own input and
 artifact identities. See [coding benchmarks](coding-benchmarks.md) for scope and Linux support.
+
+
+## S7: owned host processes and SWE-bench schema 4
+
+Runtime's process::capture exposes the existing bounded process owner to explicit Rust hosts,
+using native OS arguments and an execution context. It installs no model tool. ShellStopReason
+adds Cancelled (the enum remains non_exhaustive). Existing Bash tools keep their arguments and
+approval path. Full raw archives can be requested by offering a scoped store, including for
+small/binary output. CommandEvaluator now preserves native OS arguments instead of requiring
+UTF-8 shell quoting; its old deadline bounds remain.
+
+SWE-bench generation schema 4 records immutable plan/receipt/input/artifact identities and one
+prediction row for every selected case, including failed placeholders. Supply an execution_pin
+for resume. Legacy/incompatible/missing/corrupt receipts are refused without agent reexecution.
+Use a fresh output directory for intentional regeneration; --no-resume never deletes an old
+run. Unknown dataset IDs and path-like instance/job labels are rejected. Modern/future row
+fields are preserved for hashes without becoming prompts. Async context-aware cache/batch APIs
+support cancellation; synchronous entry points retain compatibility through an owned thread.
+
+Official grading pins swebench==5.0.2 and its package contents. SweBenchHarnessConfig adds
+optional generation_manifest, total_timeout_seconds and excluded_environment. The context-aware
+async runner is preferred; the synchronous wrapper remains. Complete cache returns capture=None,
+not fabricated process observations. Grading reports now use the full total/selected denominator;
+submitted_resolved_rate preserves the separate legacy diagnostic. Linked grading requires the
+same local dataset and a verified schema-4 generation file. Old generation/grade artifacts are
+retained but never silently upgraded/reexecuted as current evidence. See [contracts](swebench-contract.md).

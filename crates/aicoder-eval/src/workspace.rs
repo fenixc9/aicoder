@@ -2,7 +2,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
 };
 
 use anyhow::{Context, Result, ensure};
@@ -250,7 +249,12 @@ impl WorkspaceDiff {
     }
 }
 
-pub(crate) fn prepare_fixture(fixture: &WorkspaceFixture, destination: &Path) -> Result<()> {
+pub(crate) async fn prepare_fixture(
+    fixture: &WorkspaceFixture,
+    destination: &Path,
+    context: aicoder_core::TurnExecutionContext,
+    excluded: &[String],
+) -> Result<()> {
     match fixture {
         WorkspaceFixture::Empty => Ok(()),
         WorkspaceFixture::CopyFrom(source) => {
@@ -267,69 +271,101 @@ pub(crate) fn prepare_fixture(fixture: &WorkspaceFixture, destination: &Path) ->
         WorkspaceFixture::GitCheckout {
             repository,
             base_commit,
-        } => prepare_git_checkout(repository, base_commit, destination),
+        } => prepare_git_checkout(repository, base_commit, destination, context, excluded).await,
     }
 }
 
-pub(crate) fn git_patch(workspace: &Path) -> Result<Option<String>> {
+pub(crate) async fn git_patch(
+    workspace: &Path,
+    context: aicoder_core::TurnExecutionContext,
+    excluded: &[String],
+) -> Result<Option<String>> {
     if !workspace.join(".git").exists() {
         return Ok(None);
     }
-    let index_directory = tempfile::tempdir().context("Failed to create temporary Git index")?;
-    let index_path = index_directory.path().join("index");
-    run_git_with_index(workspace, &index_path, ["read-tree", "HEAD"])?;
-    run_git_with_index(workspace, &index_path, ["add", "-A", "--", "."])?;
-    let output = run_git_with_index(
+    let directory = tempfile::tempdir()?;
+    let index = directory.path().join("index");
+    crate::git::run(
         workspace,
-        &index_path,
-        ["diff", "--cached", "--binary", "--no-ext-diff"],
-    )?;
-    String::from_utf8(output.stdout)
-        .context("Generated Git patch is not valid UTF-8")
-        .map(Some)
+        ["read-tree", "HEAD"].into_iter().map(Into::into).collect(),
+        Some(&index),
+        context.clone(),
+        excluded,
+    )
+    .await?;
+    crate::git::run(
+        workspace,
+        ["add", "-A", "--", "."]
+            .into_iter()
+            .map(Into::into)
+            .collect(),
+        Some(&index),
+        context.clone(),
+        excluded,
+    )
+    .await?;
+    let bytes = crate::git::run(
+        workspace,
+        [
+            "diff",
+            "--cached",
+            "--binary",
+            "--no-ext-diff",
+            "--no-textconv",
+        ]
+        .into_iter()
+        .map(Into::into)
+        .collect(),
+        Some(&index),
+        context,
+        excluded,
+    )
+    .await?;
+    Ok(Some(String::from_utf8(bytes)?))
 }
-
-fn prepare_git_checkout(repository: &str, base_commit: &str, destination: &Path) -> Result<()> {
+async fn prepare_git_checkout(
+    repository: &str,
+    base_commit: &str,
+    destination: &Path,
+    context: aicoder_core::TurnExecutionContext,
+    excluded: &[String],
+) -> Result<()> {
     ensure_safe_commit(base_commit)?;
-    let output = Command::new("git")
-        .args(["clone", "--quiet", "--no-checkout", "--"])
-        .arg(repository)
-        .arg(destination)
-        .output()
-        .context("Failed to start git clone for evaluation fixture")?;
-    ensure_command_succeeded("git clone", output)?;
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(destination)
-        .args(["checkout", "--quiet", "--detach", "--force"])
-        .arg(base_commit)
-        .output()
-        .context("Failed to start git checkout for evaluation fixture")?;
-    ensure_command_succeeded("git checkout", output)?;
+    let repository = if Path::new(repository).exists() {
+        Path::new(repository).canonicalize()?.into_os_string()
+    } else {
+        repository.into()
+    };
+    crate::git::run(
+        destination,
+        vec![
+            "clone".into(),
+            "--quiet".into(),
+            "--no-checkout".into(),
+            "--".into(),
+            repository,
+            destination.as_os_str().into(),
+        ],
+        None,
+        context.clone(),
+        excluded,
+    )
+    .await?;
+    crate::git::run(
+        destination,
+        vec![
+            "checkout".into(),
+            "--quiet".into(),
+            "--detach".into(),
+            "--force".into(),
+            base_commit.into(),
+        ],
+        None,
+        context,
+        excluded,
+    )
+    .await?;
     Ok(())
-}
-
-fn run_git_with_index<const N: usize>(
-    workspace: &Path,
-    index_path: &Path,
-    arguments: [&str; N],
-) -> Result<Output> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(workspace)
-        .args(arguments)
-        .env("GIT_INDEX_FILE", index_path)
-        .output()
-        .context("Failed to start git while extracting evaluation patch")?;
-    ensure_command_succeeded("git patch extraction", output)
-}
-
-fn ensure_command_succeeded(operation: &str, output: Output) -> Result<Output> {
-    if output.status.success() {
-        return Ok(output);
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    anyhow::bail!("{operation} failed with {}: {stderr}", output.status)
 }
 
 fn ensure_safe_commit(commit: &str) -> Result<()> {
@@ -505,6 +541,71 @@ mod tests {
                 modified: vec!["existing.txt".to_string()],
                 deleted: vec!["deleted.txt".to_string()],
             }
+        );
+    }
+}
+
+#[cfg(test)]
+mod binary_patch_tests {
+    use super::*;
+    #[tokio::test]
+    async fn git_binary_patch_keeps_all_raw_bytes_beyond_the_text_preview() {
+        let root = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(root.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "--quiet"]);
+        let original = vec![0u8; 131072];
+        std::fs::write(root.path().join("binary.dat"), &original).unwrap();
+        git(&["add", "."]);
+        git(&[
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            "base",
+        ]);
+        let mut state = 123456789u32;
+        let changed = (0..131072)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect::<Vec<_>>();
+        std::fs::write(root.path().join("binary.dat"), &changed).unwrap();
+        let patch = git_patch(root.path(), aicoder_core::TurnExecutionContext::new(), &[])
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(patch.len() > 65536 && patch.contains("GIT binary patch"));
+        let file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(file.path(), patch).unwrap();
+        git(&["apply", "--reverse", file.path().to_str().unwrap()]);
+        assert_eq!(
+            std::fs::read(root.path().join("binary.dat")).unwrap(),
+            original
+        );
+        git(&["apply", file.path().to_str().unwrap()]);
+        assert_eq!(
+            std::fs::read(root.path().join("binary.dat")).unwrap(),
+            changed
         );
     }
 }

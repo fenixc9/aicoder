@@ -173,7 +173,8 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
     let output = root.path().join("batch");
     let options = SweBenchBatchOptions::new(&output, "baseline-test")
         .dataset("fixture")
-        .concurrency(2);
+        .concurrency(2)
+        .execution_pin("1".repeat(64));
     let batch = SweBenchBatchRunner::new(adapter.clone(), options)
         .run(
             vec![adapter.adapt(&dataset.instances[0]).unwrap()],
@@ -193,7 +194,7 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
     assert!(output.join("predictions.json").is_file());
     let trace_path = output.join("cases/owner__repo-1/trace.json");
     assert!(trace_path.is_file());
-    assert_eq!(batch.schema_version, 3);
+    assert_eq!(batch.schema_version, 4);
     assert_eq!(
         batch.event_schema_version,
         aicoder_core::events::EVENT_SCHEMA_VERSION
@@ -208,7 +209,10 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
 
     let resumed = SweBenchBatchRunner::new(
         adapter.clone(),
-        SweBenchBatchOptions::new(&output, "baseline-test").dataset("fixture"),
+        SweBenchBatchOptions::new(&output, "baseline-test")
+            .dataset("fixture")
+            .concurrency(2)
+            .execution_pin("1".repeat(64)),
     )
     .run(vec![adapter.adapt(&dataset.instances[0]).unwrap()], |_| {
         anyhow::bail!("agent factory must not run when checkpoint is valid")
@@ -222,51 +226,37 @@ async fn adapter_loads_jsonl_hides_gold_and_exports_official_prediction() {
     let checkpoint = output.join("cases/owner__repo-1/checkpoint.json");
     let mut legacy: serde_json::Value =
         serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
-    legacy
-        .as_object_mut()
-        .unwrap()
-        .remove("event_schema_version");
+    legacy.as_object_mut().unwrap().remove("schema_version");
     fs::write(&checkpoint, serde_json::to_vec(&legacy).unwrap()).unwrap();
-    let regenerated = SweBenchBatchRunner::new(
+    let refused = SweBenchBatchRunner::new(
         adapter.clone(),
-        SweBenchBatchOptions::new(&output, "baseline-test").dataset("fixture"),
+        SweBenchBatchOptions::new(&output, "baseline-test")
+            .dataset("fixture")
+            .concurrency(2)
+            .execution_pin("1".repeat(64)),
     )
-    .run(
-        vec![adapter.adapt(&dataset.instances[0]).unwrap()],
-        |workspace| {
-            TurnExecutor::builder(PatchProvider::new())
-                .workspace(workspace)
-                .registry(aicoder_runtime::tools::default_registry().unwrap())
-                .approval(AllowAllApproval)
-                .build()
-        },
-    )
+    .run(vec![adapter.adapt(&dataset.instances[0]).unwrap()], |_| {
+        anyhow::bail!("invalid receipt must not rerun the agent")
+    })
     .await
     .unwrap();
-    assert_eq!(regenerated.summary.resumed, 0);
-    assert_eq!(regenerated.summary.completed, 1);
-
+    assert_eq!(refused.summary.resumed, 0);
+    assert_eq!(refused.summary.failed, 1);
+    assert_eq!(refused.summary.predictions, 1);
+    assert_eq!(refused.summary.empty_patches, 1);
     let changed = SweBenchBatchRunner::new(
         adapter.clone(),
         SweBenchBatchOptions::new(&output, "baseline-test")
             .dataset("fixture")
-            .parameters(json!({"max_rounds": 9})),
+            .concurrency(2)
+            .execution_pin("1".repeat(64))
+            .parameters(json!({"max_rounds":9})),
     )
-    .run(
-        vec![adapter.adapt(&dataset.instances[0]).unwrap()],
-        |workspace| {
-            TurnExecutor::builder(PatchProvider::new())
-                .workspace(workspace)
-                .registry(aicoder_runtime::tools::default_registry().unwrap())
-                .approval(AllowAllApproval)
-                .build()
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(changed.summary.completed, 1);
-    assert_eq!(changed.summary.resumed, 0);
-    assert!(!changed.cases[0].resumed);
+    .run(vec![adapter.adapt(&dataset.instances[0]).unwrap()], |_| {
+        anyhow::bail!("changed plan must not execute")
+    })
+    .await;
+    assert!(changed.is_err());
 }
 
 fn run_git<const N: usize>(repository: &Path, arguments: [&str; N]) {
