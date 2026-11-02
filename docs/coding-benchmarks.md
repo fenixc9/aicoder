@@ -48,6 +48,12 @@ with resources/extensions through their executor factory; actual resource proven
 registrations are captured. Model options retain unset values; a supported, otherwise unset
 seed becomes 0. Unsupported seed requests fail through normal adapter validation.
 
+An isolated host can first run `aicoder-bench observe-source --source-root ROOT`, then pass
+its bounded JSON through `run --source-observation FILE`. Loading checks the current executable,
+platform and compiler before admitting a case. The executor needs no source checkout mounted;
+the explicit host owns the source-content claim. This metadata restores no tool/model/IO
+authority. Default source capture and persisted archive schemas remain unchanged.
+
 Run exits 0 only when every selected case passes, 1 for failed/incomplete/inconclusive cases,
 and 130 after an owned SIGINT cancellation is recorded. Remaining unstarted cases stay in the
 manifest. No implicit resume or retry is installed. A completed operation is never repeated

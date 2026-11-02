@@ -22,6 +22,24 @@ pub struct SourceStamp {
     pub platform: String,
 }
 impl SourceStamp {
+    /// Read a trusted pre-launch source observation without mounting source into an executor.
+    ///
+    /// This is metadata, never restored execution authority. Validate the observed executable,
+    /// platform and grading compiler against this process; the host owns the source claim.
+    pub fn load_observation(path: impl AsRef<Path>) -> Result<Self> {
+        let bytes = crate::bounds::read(path.as_ref(), 16 * 1024)?;
+        let observed: Self = serde_json::from_slice(&bytes)
+            .map_err(|_| anyhow::anyhow!("invalid benchmark source observation"))?;
+        observed.validate()?;
+        ensure!(
+            observed.executable_sha256.as_deref() == Some(&executable_fingerprint()?)
+                && observed.platform
+                    == format!("{}/{}", std::env::consts::OS, std::env::consts::ARCH)
+                && observed.grader_rustc == grader_compiler()?,
+            "source observation does not match the current executable/platform/compiler"
+        );
+        Ok(observed)
+    }
     pub(crate) fn validate(&self) -> Result<()> {
         ensure!(
             (40..=64).contains(&self.revision.len())
@@ -107,16 +125,7 @@ impl SourceStamp {
             digest.update(&[0]);
             digest.update(&bytes);
         }
-        let probe = tempfile::tempdir()?;
-        std::fs::write(
-            probe.path().join("rust-toolchain.toml"),
-            include_str!("../../../../rust-toolchain.toml"),
-        )?;
-        let grader_rustc = metadata(probe.path(), "rustc", &["--version"])
-            .ok()
-            .and_then(|bytes| String::from_utf8(bytes).ok())
-            .map(|text| text.trim().to_string())
-            .filter(|text| text.len() <= 256 && !text.chars().any(char::is_control));
+        let grader_rustc = grader_compiler()?;
         let executable_sha256 = executable_fingerprint().ok();
         Ok(Self {
             revision, dirty, executable_sha256, grader_rustc,
@@ -126,6 +135,18 @@ impl SourceStamp {
             scope:"Rust, Cargo/toolchain manifests and embedded JS/JSON/HTML/CSS/Python; includes untracked sources".into(),
         })
     }
+}
+fn grader_compiler() -> Result<Option<String>> {
+    let probe = tempfile::tempdir()?;
+    std::fs::write(
+        probe.path().join("rust-toolchain.toml"),
+        include_str!("../../../../rust-toolchain.toml"),
+    )?;
+    Ok(metadata(probe.path(), "rustc", &["--version"])
+        .ok()
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .map(|text| text.trim().to_string())
+        .filter(|text| text.len() <= 256 && !text.chars().any(char::is_control)))
 }
 fn git(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
     metadata(root, "git", args)

@@ -18,6 +18,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Run(Box<Run>),
+    /// Capture source/compiler/executable metadata before entering an isolated executor.
+    ObserveSource {
+        #[arg(long, default_value = ".")]
+        source_root: PathBuf,
+    },
     Verify {
         archive: PathBuf,
     },
@@ -45,6 +50,9 @@ struct Run {
     suite: Option<PathBuf>,
     #[arg(long, default_value = ".")]
     source_root: PathBuf,
+    /// Explicit trusted pre-launch observation; must match this executable/platform/compiler.
+    #[arg(long)]
+    source_observation: Option<PathBuf>,
     #[arg(long = "case")]
     cases: Vec<String>,
     #[arg(long, default_value_t = 1)]
@@ -83,6 +91,13 @@ fn suite(path: Option<PathBuf>) -> Result<CodingSuite> {
 async fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Run(args) => run(*args).await,
+        Command::ObserveSource { source_root } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&SourceStamp::capture(source_root)?)?
+            );
+            Ok(())
+        }
         Command::Verify { archive } => {
             let report = BenchReport::verify(archive)?;
             println!(
@@ -143,6 +158,10 @@ async fn run(args: Run) -> Result<()> {
             && (1..=600000).contains(&args.time_budget_ms),
         "benchmark execution bounds exceeded"
     );
+    let source = match &args.source_observation {
+        Some(path) => SourceStamp::load_observation(path)?,
+        None => SourceStamp::capture(&args.source_root)?,
+    };
     let suite = suite(args.suite)?;
     let model = args.model.unwrap_or_else(|| "offline-coding-v1".into());
     let settings = Settings {
@@ -208,7 +227,7 @@ async fn run(args: Run) -> Result<()> {
     }
     let mut options = BenchOptions::new(
         &args.output,
-        SourceStamp::capture(&args.source_root)?,
+        source,
         if args.live {
             BenchMode::LiveProvider
         } else {
@@ -218,6 +237,10 @@ async fn run(args: Run) -> Result<()> {
     options.repetitions = args.repetitions;
     options.selected_ids = args.cases;
     options.host_parameters = json!({"runtime":runtime.config(),"approval":"explicit_benchmark_allow_all","provider_kind":if args.live {"live"}else{"scripted_contract"},"variant":args.variant,"resources":"disabled","concurrency":1,"effective_model_options":effective_options});
+    if args.source_observation.is_some() {
+        options.host_parameters["source_observation"] =
+            json!("explicit_host_prelaunch_observation");
+    }
     options.excluded_environment = runtime.config().credential_references.clone();
     let runner = BenchRunner::new(suite, options)?;
     let context = TurnExecutionContext::new();

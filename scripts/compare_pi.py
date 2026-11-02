@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
+from pi_comparison_isolation import IsolatedExecutables, manifest_digest
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +35,14 @@ MAX_ARCHIVE = 128 * 1024 * 1024
 
 
 def encoded(value):
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+    output = bytearray()
+    encoder = json.JSONEncoder(ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    for part in encoder.iterencode(value):
+        chunk = part.encode()
+        if len(chunk) > 32 * 1024 * 1024 - len(output):
+            raise RuntimeError('comparison serialization budget exhausted')
+        output.extend(chunk)
+    return bytes(output)
 
 
 def sha(data):
@@ -169,6 +177,17 @@ def verify_from_directory(root_fd):
     plan = verified_json('plan.json', 1024 * 1024)
     if report['plan'] != plan or 'plan.json' not in seen:
         raise RuntimeError('comparison plan mismatch')
+    if 'execution_inputs' in plan:
+        ref = plan['execution_inputs']
+        if by_name.get(ref['path']) != ref:
+            raise RuntimeError('execution input reference mismatch')
+        pin = verified_json(ref['path'], 8 * 1024 * 1024)
+        if not 1 <= len(pin['entries']) <= 32768 or pin['sha256'] != manifest_digest(pin['entries']):
+            raise RuntimeError('execution input manifest mismatch')
+        binaries = {e['path']: e for e in pin['entries']}
+        if (binaries['aicoder-bench']['sha256'] != plan['bench_sha256']
+                or plan['source_observation']['executable_sha256'] != plan['bench_sha256']):
+            raise RuntimeError('observed executable pin mismatch')
     if not isinstance(plan['selected'], list) or not 1 <= len(plan['selected']) <= 32:
         raise RuntimeError('comparison selection budget')
     expected = {(c, a) for c in plan['selected'] for a in ['aicoder', 'pi']}
@@ -187,7 +206,7 @@ def verify_from_directory(root_fd):
     return report
 
 
-def run_owned(command, cwd, environment, timeout):
+def run_owned(command, cwd, environment, timeout, on_started=None):
     """Bound pipes, retain the unreaped leader until group signalling, then await cleanup."""
     started = time.monotonic()
     child = subprocess.Popen(command, cwd=cwd, env=environment, stdin=subprocess.DEVNULL,
@@ -201,6 +220,8 @@ def run_owned(command, cwd, environment, timeout):
     peak_rss = None
     post_signal = None
     try:
+        if on_started:
+            on_started(child.pid)
         with selectors.DefaultSelector() as selector:
             for pipe in buffers:
                 selector.register(pipe, selectors.EVENT_READ)
@@ -439,7 +460,7 @@ def snapshot(root):
     return files
 
 
-def grade(case, files, environment, archive, prefix):
+def grade(case, files, environment, archive, prefix, frozen):
     changed = sorted(k for k in files.keys() | case['files'].keys()
                      if files.get(k) != case['files'].get(k, '').encode())
     if set(changed) - set(case['allowed_changes']):
@@ -458,14 +479,18 @@ def grade(case, files, environment, archive, prefix):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
         (root / 'harness.rs').write_text(grading['tests'])
-        compile_result, out, err = run_owned(['rustup', 'run', '1.92.0', 'rustc', '--edition=2024',
-            '--test', 'harness.rs', '-o', 'tests'], root, environment, 30)
+        compile_command = frozen.wrap(['/opt/toolchain/bin/rustc', '--edition=2024',
+            '--test', 'harness.rs', '-o', 'tests'], {}, [(root, '/grading', True)], cwd='/grading')
+        compile_result, out, err = run_owned(compile_command, root, environment, 30)
+        compile_result['root_process_role'] = 'bubblewrap_launcher'
         archive.write(prefix + '/grader-compile.stdout', out)
         archive.write(prefix + '/grader-compile.stderr', err)
         passed = compile_result['exit_code'] == 0 and compile_result['capture_complete']
         test_result = None
         if passed:
-            test_result, out, err = run_owned([str(root / 'tests')], root, environment, 5)
+            test_command = frozen.wrap(['/grading/tests'], {}, [(root, '/grading', False)], cwd='/grading')
+            test_result, out, err = run_owned(test_command, root, environment, 5)
+            test_result['root_process_role'] = 'bubblewrap_launcher'
             archive.write(prefix + '/grader-test.stdout', out)
             archive.write(prefix + '/grader-test.stderr', err)
             passed = test_result['exit_code'] == 0 and test_result['capture_complete']
@@ -510,7 +535,19 @@ def main():
         parser.error('--models-config requires --live, and live runs need that explicit file')
     if options.live and options.fixture_variant != 'correct':
         parser.error('live runs cannot select a scripted failure variant')
-    _, entry = pi_package(options.pi_package)
+    package, _ = pi_package(options.pi_package)
+    with IsolatedExecutables(options.bench, package) as frozen:
+        return run_cohort(options, frozen.pi_entry, frozen)
+
+
+def run_cohort(options, pi_entry, frozen):
+    base_env = {k: os.environ[k] for k in ['PATH', 'RUSTUP_HOME', 'CARGO_HOME'] if k in os.environ}
+    captured, source_bytes, _ = run_owned(
+        [str(frozen.root / 'aicoder-bench'), 'observe-source', '--source-root', str(ROOT)],
+        ROOT, base_env, 15)
+    if captured['exit_code'] != 0 or not captured['capture_complete'] or len(source_bytes) > 16 * 1024:
+        raise RuntimeError('source observation incomplete; no model request started')
+    observation = json.loads(source_bytes)
     upstream = None
     if options.live:
         with open(options.models_config, 'rb') as config_file:
@@ -527,12 +564,11 @@ def main():
         if endpoint.scheme not in ['http', 'https'] or not endpoint.hostname or endpoint.username or endpoint.password or endpoint.query or endpoint.fragment:
             raise RuntimeError('invalid selected provider route')
         upstream = provider['baseUrl'], os.environ.get(key, key)
-    if (ROOT / '.aicoder/settings.json').exists():
-        raise RuntimeError('comparison source root must not supply project settings')
     suite_bytes = (ROOT / 'crates/aicoder-eval/fixtures/coding-v1.json').read_bytes()
     suite = json.loads(suite_bytes)
     archive = Archive(options.output)
     mode = 'live' if options.live else 'scripted_contract'
+    code = archive.write('execution-inputs.json', frozen.describe())
     plan = {'schema_version': 1, 'mode': mode, 'model': options.model, 'provider': options.provider,
         'fixture_variant': None if options.live else options.fixture_variant,
         'upstream_route_sha256': sha(upstream[0].encode()) if upstream else None,
@@ -540,9 +576,12 @@ def main():
         'repetitions': 1, 'upstream_options': {'seed': 0, 'temperature': 0, 'stream': False},
         'source_revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
         'source_dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT)),
-        'bench_sha256': sha(options.bench.read_bytes()), 'pi_package_version': '1.4.0',
-        'pi_cli_bundle_sha256': sha(entry.read_bytes()), 'comparison_script_sha256': sha(Path(__file__).read_bytes()),
-        'node': subprocess.check_output(['node', '--version'], text=True).strip(),
+        'bench_sha256': next(r['sha256'] for r in frozen.entries if r['path'] == 'aicoder-bench'),
+        'pi_package_version': '1.4.0', 'pi_cli_bundle_sha256': sha((frozen.root / 'pi' / pi_entry).read_bytes()),
+        'execution_inputs': code, 'source_observation': observation,
+        'comparison_script_sha256': sha(Path(__file__).read_bytes()),
+        'isolation_script_sha256': sha((ROOT / 'scripts/pi_comparison_isolation.py').read_bytes()),
+        'node': subprocess.check_output([str(frozen.root / 'node'), '--version'], text=True).strip(),
         'rustc': subprocess.check_output(['rustup', 'run', '1.92.0', 'rustc', '--version'], text=True).strip(),
         'cost': None, 'prices': 'unknown; Pi zero-cost placeholders are not billed cost'}
     archive.write('plan.json', plan)
@@ -559,6 +598,8 @@ def main():
                 server.routes['/' + route.nonce + '/v1/chat/completions'] = route
                 with tempfile.TemporaryDirectory(prefix='aicoder-pi-case-') as folder:
                     root = Path(folder)
+                    metadata = root / 'metadata'
+                    metadata.mkdir()
                     workspace = root / 'workspace'
                     workspace.mkdir()
                     for name, content in case['files'].items():
@@ -569,7 +610,7 @@ def main():
                     env.update(AICODER_HOME=str(root / 'state'), COMPARISON_KEY='comparison-loopback',
                                PI_CODING_AGENT_DIR=str(root / 'pi'), PI_OFFLINE='1')
                     if agent == 'aicoder':
-                        config = root / 'provider.json'
+                        config = metadata / 'provider.json'
                         config.write_text(json.dumps({'version': 1, 'profiles': {'comparison': {
                             'base_url': url, 'api_key_env': 'COMPARISON_KEY', 'provider_id': options.provider,
                             'model': options.model, 'proxy': 'disabled', 'max_retries': 0,
@@ -579,12 +620,16 @@ def main():
                             'settings': {'provider_profile': 'comparison', 'options': {'temperature': 0}}}))
                         output = archive.root / prefix / 'coding-archive'
                         output.parent.mkdir(parents=True, exist_ok=True)
-                        command = [str(options.bench.resolve()), 'run', '--live', '--model', options.model,
-                            '--user-config', str(config), '--source-root', str(ROOT), '--output', str(output),
+                        (metadata / 'source.json').write_bytes(source_bytes)
+                        command = ['/opt/aicoder-bench', 'run', '--live', '--model', options.model,
+                            '--user-config', '/inputs/provider.json', '--source-root', '/app',
+                            '--source-observation', '/inputs/source.json', '--output', '/output/coding-archive',
                             '--case', case['id'], '--seed', '0', '--max-rounds', '8', '--max-tool-calls', '16',
                             '--token-budget', '32000', '--time-budget-ms', '120000']
+                        command = frozen.wrap(command, {'COMPARISON_KEY': 'comparison-loopback'},
+                            [(metadata, '/inputs', False), (output.parent, '/output', True)], engine='aicoder')
                         capture, out, err = run_owned(command, ROOT, env, 160)
-                        verified = subprocess.run([str(options.bench.resolve()), 'verify', str(output)],
+                        verified = subprocess.run([str(frozen.root / 'aicoder-bench'), 'verify', str(output)],
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15).returncode == 0
                         manifest = json.loads((output / 'manifest.json').read_bytes()) if verified else None
                         case_result = manifest['cases'][0] if manifest else None
@@ -592,7 +637,7 @@ def main():
                         detail = {'archive_verified': verified, 'case': case_result}
                         archive.adopt(output)
                     else:
-                        pi = root / 'pi'
+                        pi = metadata / 'pi'
                         pi.mkdir()
                         (pi / 'models.json').write_text(json.dumps({'providers': {options.provider: {
                             'api': 'openai-completions', 'baseUrl': url, 'apiKey': 'comparison-loopback', 'authHeader': True,
@@ -602,10 +647,18 @@ def main():
                         (pi / 'settings.json').write_text(json.dumps({'quietStartup': True,
                             'retry': {'enabled': False}, 'compaction': {'enabled': False}, 'cacheWarming': 'off',
                             'providerRetry': {'maxRetries': 0}}))
-                        command = ['node', str(entry), '--offline', '--no-session', '--no-extensions', '--no-mcp',
+                        arguments = ['--offline', '--no-session', '--no-extensions', '--no-mcp',
                             '--no-skills', '--no-prompt-templates', '--no-context-files', '--no-themes',
                             '--thinking', 'off', '--provider', options.provider, '--model', options.model,
                             '--mode', 'json', '--print', case['prompt']]
+                        launch = ('mkdir -p /tmp/pi-state && '
+                                  'cp /inputs/pi/models.json /inputs/pi/settings.json /tmp/pi-state/ && '
+                                  'exec "$@"')
+                        command = frozen.wrap(['/bin/sh', '-c', launch, 'pi-entry',
+                            '/opt/node', '/opt/pi/' + str(pi_entry), *arguments],
+                            {'PI_CODING_AGENT_DIR': '/tmp/pi-state'},
+                            [(metadata, '/inputs', False), (workspace, '/workspace', True)],
+                            cwd='/workspace', engine='pi')
                         capture, out, err = run_owned(command, workspace, env, 120)
                         frames = [json.loads(raw) for raw in out.splitlines()] if capture['capture_complete'] else []
                         messages = [f['message'] for f in frames if f.get('type') == 'message_end' and f['message'].get('role') == 'assistant']
@@ -614,10 +667,11 @@ def main():
                         files = snapshot(workspace)
                         for name, data in files.items():
                             archive.write(prefix + '/workspace/' + name, data)
-                        grading = grade(case, files, env, archive, prefix)
+                        grading = grade(case, files, env, archive, prefix, frozen)
                         passed = bool(complete and grading['passed'])
                         detail = {'engine_completed': bool(complete), 'grading': grading,
                             'tool_failures': sum(f.get('type') == 'tool_execution_end' and bool(f.get('isError')) for f in frames)}
+                    capture['root_process_role'] = 'bubblewrap_launcher'
                     route.finish()
                     archive.write(prefix + '/stdout', out)
                     archive.write(prefix + '/stderr', err)
@@ -640,8 +694,8 @@ def main():
                 'Budgets admit at most eight model attempts and sixteen response tool calls. Observed token usage is checked after each completed response; the last charged request can exceed the cap. Unknown usage stops further requests.',
                 'System prompts, tools and agent implementation differ. Identical upstream options do not guarantee deterministic or equally tokenized execution.',
                 'Aicoder agent duration is core time; Pi agent duration is observed stdout event delivery. Process wall time includes different startup/grading/archive work.',
-                'Root-process RSS is sampled at ten-millisecond intervals through process lifetime; children/proxy/grading outside that process are excluded. It is not exact peak or isolated agent memory.',
-                'Grading is hidden after execution but is not an OS sandbox. Process groups do not contain detached descendants.',
+                'Root-process RSS samples the bubblewrap launcher, not the agent process. Children/proxy are excluded. Use the separately scoped internal aicoder case observation where available; these launcher values cannot compare agent memory.',
+                'Each engine uses a private PID namespace and /tmp, read-only system/application code and only its own case storage. Host networking remains shared for the explicit proxy. This is not a complete network/kernel/resource sandbox or an adversarial anti-cheating guarantee.',
                 'One sample per tiny case cannot establish general success rate, full Pi parity or billed cost.']}
         archive.write('comparison.json', report)
         print(json.dumps({'mode': mode, 'summary': summary, 'cost': None}), flush=True)

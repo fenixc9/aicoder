@@ -36,6 +36,10 @@
   receipts; missing/corrupt evidence never silently reexecutes a case. Keep generation failures
   in grading denominators, isolate official cache namespaces, and clean external containers
   only with authority created for the current fresh host invocation.
+  External comparisons freeze executable packages before launch and isolate tool/candidate
+  execution from host private paths and shared temporary state. Do not mount source checkouts
+  or credentials into agent namespaces. Pre-launch source observations bind executable/compiler
+  identity but never restore IO, model routing or tool authority.
 - Keep canonical recorded history separate from provider projections. Recovery repairs
   and pruning must not become historical facts; journal indices follow canonical input.
   Preserve declared runtime prefixes and branch provenance when constructing model views.

@@ -1,5 +1,16 @@
 # API migrations
 
+## S7: source observations for isolated benchmarks
+
+`SourceStamp::load_observation` accepts a bounded explicit host observation only when current
+executable, platform and compiler match. `aicoder-bench observe-source` emits that observation;
+`run --source-observation` permits execution without the source checkout. Source contents
+remain the host's claim and grant no authority. Existing runs still capture directly and
+keep their original parameter shape; persisted benchmark/session schemas are unchanged.
+The optional Pi comparison now requires Linux Bubblewrap and freezes full executable
+packages instead of running tools on the host. Historical unisolated evidence remains valid
+only under its recorded exploratory limitations; it is not relabelled by a newer reader.
+
 ## S7: host extension adoption
 
 `Runtime::with_extensions` explicitly adopts an immutable registration snapshot; reloads
