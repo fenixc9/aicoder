@@ -39,6 +39,11 @@ The receipt binds input hashes, prediction, usage and artifact references. Resum
 plan, complete receipt, artifact bytes/hashes, request identity, captured patch and event facts.
 Terminal failed cases are reused as failed cases; they do not silently rerun.
 
+The creating process explicitly unlocks its lease on scope exit. Closing a parent descriptor
+alone can leave a flock held by an unrelated child's inherited open file description before
+exec. A forked child's guard drop cannot unlock the live parent, and dropping an old inherited
+descriptor cannot unlock a later owner. Live concurrent generation/grading remains excluded.
+
 Mismatched inputs, unsupported legacy receipts, corrupt/missing artifacts or a started marker
 without a complete receipt never cause automatic agent execution. Keep the old directory and
 choose a fresh output for an intentional new attempt. --no-resume also requires a fresh output;

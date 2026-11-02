@@ -17,6 +17,19 @@ pub struct OutputRef {
 pub(crate) struct StorageRoot {
     directory: File,
 }
+/// The parent owns the lease lifetime even while another child temporarily inherits its fd.
+pub(crate) struct OutputLease {
+    file: File,
+    parent_pid: u32,
+}
+impl Drop for OutputLease {
+    fn drop(&mut self) {
+        // Closing only our fd can leave the flock alive in a forked child's open description.
+        if std::process::id() == self.parent_pid {
+            let _ = fs2::FileExt::unlock(&self.file);
+        }
+    }
+}
 fn descriptor_path(file: &File) -> PathBuf {
     #[cfg(target_os = "linux")]
     {
@@ -158,7 +171,7 @@ impl StorageRoot {
             sha256: crate::bounds::sha256(&bytes),
         })
     }
-    pub fn lease(&self) -> Result<File> {
+    pub fn lease(&self) -> Result<OutputLease> {
         let path = descriptor_path(&self.directory).join(".aicoder.lock");
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
@@ -172,7 +185,10 @@ impl StorageRoot {
         let file = options.open(path)?;
         ensure!(file.metadata()?.is_file(), "invalid output lease file");
         fs2::FileExt::try_lock_exclusive(&file)?;
-        Ok(file)
+        Ok(OutputLease {
+            file,
+            parent_pid: std::process::id(),
+        })
     }
     pub fn exists(&self, path: &str) -> Result<bool> {
         match self.parent(path, false) {
@@ -209,4 +225,60 @@ fn relative(path: &str) -> Result<()> {
         "invalid scoped output path"
     );
     Ok(())
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    #[test]
+    fn lease_release_does_not_wait_for_an_inherited_open_file_description() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = StorageRoot::create(&parent.path().join("output")).unwrap();
+        let lease = root.lease().unwrap();
+        // dup shares the same kernel open file description as a child inherits before exec.
+        let inherited = lease.file.try_clone().unwrap();
+        assert!(root.lease().is_err(), "live owner must remain exclusive");
+        drop(lease);
+        let successor = root
+            .lease()
+            .expect("returning owner must release its lease before child exec");
+        drop(inherited);
+        assert!(
+            root.lease().is_err(),
+            "old descriptor drop cannot unlock the next owner"
+        );
+        drop(successor);
+        assert!(root.lease().is_ok());
+    }
+    #[test]
+    fn a_forked_child_cannot_release_the_live_parent_lease() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = StorageRoot::create(&parent.path().join("output")).unwrap();
+        let lease = root.lease().unwrap();
+        // The child only closes this File and exits: no allocation, locks or Rust unwinding.
+        let child = unsafe { libc::fork() };
+        assert!(child >= 0, "fork failed");
+        if child == 0 {
+            drop(lease);
+            unsafe { libc::_exit(0) }
+        }
+        let mut status = 0;
+        loop {
+            let result = unsafe { libc::waitpid(child, &mut status, 0) };
+            if result == child {
+                break;
+            }
+            assert_eq!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(libc::EINTR)
+            );
+        }
+        assert_eq!(status, 0);
+        assert!(
+            root.lease().is_err(),
+            "child drop cannot unlock the live parent"
+        );
+        drop(lease);
+        assert!(root.lease().is_ok());
+    }
 }
