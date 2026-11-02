@@ -91,6 +91,10 @@ impl Shared {
         self.kill();
         self.wake();
     }
+    pub(crate) fn abort(&self) {
+        self.close(ProcessErrorKind::Shutdown);
+        self.kill();
+    }
     fn kill(&self) {
         if let Some(process) = self.process.lock().expect("process owner").as_mut() {
             let _ = process.exited(); // Disown a leader already reaped by a foreign host handler.

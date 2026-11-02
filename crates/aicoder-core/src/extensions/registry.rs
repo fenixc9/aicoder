@@ -31,17 +31,20 @@ pub struct ExtensionCatalog {
     pub registrations: Vec<RegistrationInfo>,
 }
 
+#[derive(Clone)]
 struct Command {
     owner: String,
     spec: CommandSpec,
     execution: HookSpec,
     callback: Arc<dyn ExtensionCommand>,
 }
+#[derive(Clone)]
 struct Observer {
     priority: i32,
     callback: Arc<dyn AgentEventHandler>,
 }
 /// An owned, bounded set of native contributions. Installation consumes and freezes it.
+#[derive(Clone)]
 pub struct Extension {
     manifest: ExtensionManifest,
     tools: Vec<Arc<dyn ExecutableTool>>,
@@ -319,6 +322,18 @@ pub struct ExtensionSet {
     extensions: Vec<Extension>,
 }
 impl ExtensionSet {
+    /// Compose immutable native registrations in order; collisions publish no replacement.
+    pub fn combine(&self, other: &Self) -> Result<Self> {
+        let mut registry = ExtensionRegistry::new();
+        for extension in self.extensions.iter().chain(&other.extensions) {
+            registry.install(extension.clone())?;
+        }
+        Ok(registry.finish())
+    }
+    /// Read-only collision/budget validation against a frozen base tool catalog.
+    pub fn validate_tools(&self, base: &ToolRegistry) -> Result<()> {
+        self.registry(base).map(|_| ())
+    }
     pub fn catalog(&self) -> ExtensionCatalog {
         ExtensionCatalog {
             extensions: self.extensions.iter().map(|e| e.manifest.clone()).collect(),

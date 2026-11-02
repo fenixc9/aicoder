@@ -31,6 +31,7 @@ See [API migrations](docs/migrations.md) when updating an embedded application.
 [Native extensions](docs/native-extensions.md) register tools, provider routes, policies,
 context/guard hooks, observers and commands explicitly in Rust hosts; the same core loop
 retains approval, cancellation, budgets and canonical sessions.
+[Explicit host launch files](docs/host-extensions.md) enable process/MCP tools in CLI, TUI and Web.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime
 is part of the default build. [MCP stdio](docs/mcp.md) supports modern per-request metadata

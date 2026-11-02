@@ -69,6 +69,9 @@ struct Cli {
     /// Enable bounded JavaScript tool composition (requires the code-mode build feature).
     #[arg(long)]
     code_mode: bool,
+    /// Explicit trusted stdio launch file (requires host-extensions for transports).
+    #[arg(long)]
+    extension_config: Option<PathBuf>,
     #[arg(long)]
     no_parent_context: bool,
     #[arg(long)]
@@ -170,38 +173,70 @@ pub async fn run_cli() -> Result<()> {
     } else {
         theme::Theme::named(cli.theme.as_deref().unwrap_or("dark"))?
     };
-    init_logging(application.state_root()?)?;
-    let model = application.config().provider.model.clone();
-    let initial_reasoning = application.config().options.reasoning_effort;
-    let runtime = AgentRuntime::new(application)?;
-    let mut app = App::new(runtime.sessions()?);
-    app.reasoning_effort = initial_reasoning;
-    app.theme = palette;
-    if let Some(session_id) = cli.session {
-        if cli.model.is_some() || cli.profile.is_some() {
-            runtime
-                .select_model(&session_id, &model, runtime.execution_context())
-                .await?;
+    let activation = if let Some(path) = &cli.extension_config {
+        let manifest = aicoder_runtime::host_extensions::HostExtensionManifest::read(path)?;
+        let context = aicoder_core::TurnExecutionContext::new();
+        let work = application.activate_extensions(&manifest, context.clone());
+        tokio::pin!(work);
+        let result = loop {
+            tokio::select! {biased;
+                _=tokio::signal::ctrl_c()=>context.cancel("TUI startup cancelled"),
+                result=&mut work=>break result,
+            }
+        };
+        Some(result?)
+    } else {
+        None
+    };
+    let application = if let Some(active) = &activation {
+        application.with_extensions(active.extensions())?
+    } else {
+        application
+    };
+    let outcome = async {
+        init_logging(application.state_root()?)?;
+        let model = application.config().provider.model.clone();
+        let initial_reasoning = application.config().options.reasoning_effort;
+        let runtime = AgentRuntime::new(application)?;
+        let mut app = App::new(runtime.sessions()?);
+        app.reasoning_effort = initial_reasoning;
+        app.theme = palette;
+        if let Some(session_id) = cli.session {
+            if cli.model.is_some() || cli.profile.is_some() {
+                runtime
+                    .select_model(&session_id, &model, runtime.execution_context())
+                    .await?;
+            }
+            if let Some(choice) = cli.reasoning_effort {
+                runtime
+                    .select_reasoning(&session_id, choice.0, runtime.execution_context())
+                    .await?;
+            }
+            let session = runtime.open_run_session(&session_id)?;
+            app.selected_session = app
+                .sessions
+                .iter()
+                .position(|candidate| candidate.id == session_id)
+                .context("Selected session is missing from the workspace session list")?;
+            app.load_run_session(&session);
         }
-        if let Some(choice) = cli.reasoning_effort {
-            runtime
-                .select_reasoning(&session_id, choice.0, runtime.execution_context())
-                .await?;
-        }
-        let session = runtime.open_run_session(&session_id)?;
-        app.selected_session = app
-            .sessions
-            .iter()
-            .position(|candidate| candidate.id == session_id)
-            .context("Selected session is missing from the workspace session list")?;
-        app.load_run_session(&session);
-    }
 
-    let _guard = TerminalGuard::enter()?;
-    let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::new(backend).context("Failed to initialize terminal")?;
-    terminal.clear()?;
-    run(&mut terminal, app, runtime, &model).await
+        let _guard = TerminalGuard::enter()?;
+        let backend = CrosstermBackend::new(io::stdout());
+        let mut terminal = Terminal::new(backend).context("Failed to initialize terminal")?;
+        terminal.clear()?;
+        run(&mut terminal, app, runtime, &model).await
+    }
+    .await;
+    let cleanup = if let Some(active) = activation {
+        active.shutdown().await
+    } else {
+        Ok(())
+    };
+    match (outcome, cleanup) {
+        (Err(error), _) => Err(error),
+        (Ok(()), result) => result,
+    }
 }
 
 /// Run the terminal adapter with host-owned provider and immutable native extensions.

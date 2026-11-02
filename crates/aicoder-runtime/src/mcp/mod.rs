@@ -226,6 +226,17 @@ impl McpExtension {
     pub fn wire_diagnostics(&self) -> McpWireDiagnostics {
         self.snapshot.connection.peer.diagnostics()
     }
+    /// Invalidate the connection now; graceful protocol/group cleanup is owned by its OS worker.
+    pub(crate) fn abort(&self) {
+        self.snapshot.connection.client.shared.abort();
+    }
+    pub fn request_shutdown(&self) {
+        self.snapshot
+            .connection
+            .client
+            .shared
+            .close(crate::process_extensions::ProcessErrorKind::Shutdown);
+    }
     pub async fn shutdown(&self) -> ProcessDiagnostics {
         self.snapshot.connection.client.shutdown().await
     }

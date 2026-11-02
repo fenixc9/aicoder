@@ -109,6 +109,9 @@ struct Cli {
     /// Enable bounded JavaScript tool composition (requires the code-mode build feature).
     #[arg(long)]
     code_mode: bool,
+    /// Explicit trusted host stdio launch file; never discovered from project settings.
+    #[arg(long)]
+    extension_config: Option<PathBuf>,
     /// Disable installed package selection for this invocation.
     #[arg(long, conflicts_with = "package_lock")]
     no_packages: bool,
@@ -646,6 +649,7 @@ async fn application() -> Result<()> {
                 || cli.print
                 || cli.json
                 || cli.rpc
+                || cli.extension_config.is_some()
                 || cli.input.is_some()
                 || !cli.images.is_empty()),
         "execution input/output flags cannot be combined with metadata commands"
@@ -860,10 +864,36 @@ async fn application() -> Result<()> {
             return Ok(());
         }
     }
-    if cli.rpc {
+    let activation = if let Some(path) = &cli.extension_config {
+        let manifest = aicoder_runtime::host_extensions::HostExtensionManifest::read(path)?;
+        let context = aicoder_core::TurnExecutionContext::new();
+        let active = execution::cancellable(
+            context.clone(),
+            runtime.activate_extensions(&manifest, context.clone()),
+        )
+        .await??;
+        Some(active)
+    } else {
+        None
+    };
+    let runtime = if let Some(active) = &activation {
+        runtime.with_extensions(active.extensions())?
+    } else {
+        runtime
+    };
+    let outcome = if cli.rpc {
         rpc::run(&cli, &runtime).await
     } else {
         execution::run(&cli, explicit_prompt, &runtime).await
+    };
+    let cleanup = if let Some(active) = activation {
+        active.shutdown().await
+    } else {
+        Ok(())
+    };
+    match (outcome, cleanup) {
+        (Err(error), _) => Err(error),
+        (Ok(()), result) => result,
     }
 }
 

@@ -27,5 +27,6 @@ tracing-subscriber.workspace = true
 tempfile.workspace = true
 
 [features]
+host-extensions = ["aicoder-runtime/process-extensions", "aicoder-runtime/mcp-stdio"]
 default = []
 code-mode = ["aicoder-runtime/code-mode"]

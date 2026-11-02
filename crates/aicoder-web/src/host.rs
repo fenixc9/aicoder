@@ -138,10 +138,12 @@ impl WebHost {
                 .min(8 * 1024 * 1024),
         );
         config.budget.max_tool_calls = Some(config.budget.max_tool_calls.unwrap_or(32).min(32));
-        let mut builder = runtime.executor_builder(provider)?.config(config);
-        if let Some(extensions) = &options.extensions {
-            builder = builder.extensions(extensions.clone());
-        }
+        let builder = if let Some(extensions) = &options.extensions {
+            runtime.executor_builder_with_extensions(provider, extensions.clone())?
+        } else {
+            runtime.executor_builder(provider)?
+        };
+        let builder = builder.config(config);
         let executor = builder.build()?;
         let agent = Agent::new(executor, runtime.agent_config()).following_session_models();
         let agent = if !runtime.follows_session_reasoning()

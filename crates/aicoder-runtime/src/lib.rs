@@ -5,6 +5,7 @@ mod config;
 mod environment;
 pub mod exports;
 mod files;
+pub mod host_extensions;
 #[cfg(feature = "images")]
 pub mod images;
 #[cfg(feature = "mcp-stdio")]
@@ -48,6 +49,7 @@ use std::{
 /// Immutable effective settings plus request-time credentials. Reload creates a new snapshot.
 pub struct Runtime {
     config: RuntimeConfig,
+    extension_snapshot: Option<Arc<aicoder_core::extensions::ExtensionSet>>,
     environment: Arc<dyn Environment>,
     overrides: RuntimeOverrides,
     discovery: ConfigDiscovery,
@@ -85,6 +87,7 @@ impl Runtime {
         )?;
         Ok(Self {
             config,
+            extension_snapshot: None,
             environment,
             overrides,
             discovery,
@@ -92,6 +95,23 @@ impl Runtime {
             resources: OnceLock::new(),
             global_resources: OnceLock::new(),
         })
+    }
+    /// Explicit host adoption only; callers retain executable owners and await shutdown.
+    pub fn with_extensions(
+        mut self,
+        extensions: Arc<aicoder_core::extensions::ExtensionSet>,
+    ) -> Result<Self> {
+        let extensions = if let Some(current) = &self.extension_snapshot {
+            Arc::new(current.combine(&extensions)?)
+        } else {
+            extensions
+        };
+        extensions.validate_tools(&self.default_registry()?)?;
+        self.extension_snapshot = Some(extensions);
+        Ok(self)
+    }
+    pub fn extensions(&self) -> Option<Arc<aicoder_core::extensions::ExtensionSet>> {
+        self.extension_snapshot.clone()
     }
     pub fn config(&self) -> &RuntimeConfig {
         &self.config
@@ -103,6 +123,10 @@ impl Runtime {
             self.discovery.clone(),
             self.environment.clone(),
         )
+        .map(|mut runtime| {
+            runtime.extension_snapshot = self.extension_snapshot.clone();
+            runtime
+        })
     }
     /// Explicit package administration; private storage roots are host-selected only.
     pub fn package_store(&self) -> Result<packages::PackageStore> {
@@ -164,6 +188,7 @@ impl Runtime {
         let snapshot = Arc::new(state.validate(&self.package_store()?)?);
         let next = Self {
             config: self.config.clone(),
+            extension_snapshot: self.extension_snapshot.clone(),
             environment: self.environment.clone(),
             overrides: self.overrides.clone(),
             discovery: self.discovery.clone(),
@@ -211,6 +236,7 @@ impl Runtime {
     pub fn reload_resources(&self) -> Result<Self> {
         let next = Self {
             config: self.config.clone(),
+            extension_snapshot: self.extension_snapshot.clone(),
             environment: self.environment.clone(),
             overrides: self.overrides.clone(),
             discovery: self.discovery.clone(),
@@ -338,7 +364,12 @@ impl Runtime {
         provider: Arc<dyn ModelProvider>,
         extensions: Arc<aicoder_core::extensions::ExtensionSet>,
     ) -> Result<TurnExecutorBuilder> {
-        Ok(self.executor_builder(provider)?.extensions(extensions))
+        let combined = if let Some(current) = &self.extension_snapshot {
+            Arc::new(current.combine(&extensions)?)
+        } else {
+            extensions
+        };
+        Ok(self.executor_builder(provider)?.extensions(combined))
     }
     /// Case/tool workspace differs from invocation settings: isolate parents and reuse frozen globals.
     pub fn executor_builder_for(
@@ -376,6 +407,9 @@ impl Runtime {
                 ),
                 ..Default::default()
             });
+        if let Some(extensions) = &self.extension_snapshot {
+            builder = builder.extensions(extensions.clone());
+        }
         builder = builder.token_counter(tokenizers::counter(self.config.context.tokenizer));
         if let Some(store) = self.artifact_store_for(workspace)? {
             builder = builder.artifact_store(store);

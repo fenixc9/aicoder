@@ -8,6 +8,7 @@ rust-version.workspace = true
 workspace = true
 
 [features]
+host-extensions = ["aicoder-runtime/process-extensions", "aicoder-runtime/mcp-stdio"]
 default = []
 code-mode = ["server", "aicoder-runtime/code-mode"]
 server = ["dep:aicoder-core", "dep:aicoder-runtime", "dep:anyhow", "dep:axum", "dep:clap", "dep:futures", "dep:serde", "dep:serde_json", "dep:tokio", "dep:tower", "dep:tracing-subscriber"]

@@ -23,6 +23,8 @@ struct Cli {
     #[arg(long)]
     code_mode: bool,
     #[arg(long)]
+    extension_config: Option<PathBuf>,
+    #[arg(long)]
     profile: Option<String>,
     #[arg(long)]
     model: Option<String>,
@@ -93,6 +95,29 @@ async fn main() -> Result<()> {
         },
         environment_file(cli.env_file.as_deref())?,
     )?;
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let activation = if let Some(path) = &cli.extension_config {
+        let manifest = aicoder_runtime::host_extensions::HostExtensionManifest::read(path)?;
+        let context = aicoder_core::TurnExecutionContext::new();
+        let work = runtime.activate_extensions(&manifest, context.clone());
+        tokio::pin!(work);
+        let result = loop {
+            tokio::select! {biased;
+                _=tokio::signal::ctrl_c()=>context.cancel("Web startup cancelled"),
+                _=term.recv()=>context.cancel("Web startup terminated"),
+                result=&mut work=>break result,
+            }
+        };
+        Some(result?)
+    } else {
+        None
+    };
+    let runtime = if let Some(active) = &activation {
+        runtime.with_extensions(active.extensions())?
+    } else {
+        runtime
+    };
+    let outcome=async {
     let host = WebHost::new(runtime, options)?;
     let router = host.router();
     let (close, closed) = tokio::sync::oneshot::channel::<()>();
@@ -104,7 +129,6 @@ async fn main() -> Result<()> {
             .await
     });
     eprintln!("Web example listening at http://{address}");
-    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let ended = tokio::select! {result=&mut server=>Some(result),_=tokio::signal::ctrl_c()=>None,_=term.recv()=>None};
     host.shutdown().await;
     let _ = close.send(());
@@ -119,5 +143,15 @@ async fn main() -> Result<()> {
             }
         }
     }
+
+    Ok::<_,anyhow::Error>(())
+    }.await;
+    let extension_cleanup = if let Some(active) = &activation {
+        active.shutdown().await
+    } else {
+        Ok(())
+    };
+    outcome?;
+    extension_cleanup?;
     Ok(())
 }

@@ -6,6 +6,8 @@ Launch authority remains explicit host ProcessConfig; model/project/session data
 select a program, environment or credential route. Remote transport and package/UI discovery
 are separate work; this adapter launches no server in default builds.
 
+Stock CLI/TUI/Web hosts can explicitly opt into [host launch files](host-extensions.md).
+
 ## Protocol profiles
 
 The target is the official [2026-07-28 base protocol](https://modelcontextprotocol.io/specification/2026-07-28/basic/versioning),

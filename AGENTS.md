@@ -88,6 +88,10 @@
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership
   through group signalling and report incomplete cleanup without restoring authority.
+  Stock launch files are explicit host authority: preflight references before spawning,
+  publish complete immutable catalogs, retain executable guards separately from registrations,
+  and await owners after startup cancellation and normal/error exits. Reload must not restart
+  programs implicitly or let cloned tools outlive a dropped executable owner.
 - MCP metadata/annotations never grant authority. Freeze catalogs, revalidate freshness/epochs
   before dispatch, keep private result metadata out of history, and archive typed binary
   media without counting base64 as text. Completed-call capture failures cannot retry tools.

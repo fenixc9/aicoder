@@ -102,10 +102,16 @@ impl AgentRuntime {
         extensions: Option<Arc<aicoder_core::extensions::ExtensionSet>>,
     ) -> Result<Self> {
         let repository = Arc::new(runtime.sessions()?);
-        let mut builder = runtime.executor_builder(provider.clone())?;
-        if let Some(extensions) = &extensions {
-            builder = builder.extensions(extensions.clone());
-        }
+        let builder = if let Some(extensions) = &extensions {
+            runtime.executor_builder_with_extensions(provider.clone(), extensions.clone())?
+        } else {
+            runtime.executor_builder(provider.clone())?
+        };
+        let extensions = match (runtime.extensions(), extensions) {
+            (Some(base), Some(extra)) => Some(Arc::new(base.combine(&extra)?)),
+            (Some(base), None) => Some(base),
+            (_, extra) => extra,
+        };
         let executor = builder.build()?;
         let agent = Agent::new(executor, runtime.agent_config())
             .following_session_models()
@@ -266,10 +272,14 @@ impl AgentRuntime {
     }
     pub fn reload_resources(&mut self) -> Result<()> {
         let runtime = self.runtime.reload_resources()?;
-        let mut builder = runtime.executor_builder(self.provider.clone())?;
-        if let Some(extensions) = &self.extensions {
-            builder = builder.extensions(extensions.clone());
-        }
+        let builder = if let Some(extensions) = &self.extensions {
+            // This field is the fully combined snapshot already adopted by the current host.
+            runtime
+                .executor_builder(self.provider.clone())?
+                .extensions(extensions.clone())
+        } else {
+            runtime.executor_builder(self.provider.clone())?
+        };
         let executor = builder.build()?;
         let agent = Agent::new(executor, runtime.agent_config())
             .following_session_models()

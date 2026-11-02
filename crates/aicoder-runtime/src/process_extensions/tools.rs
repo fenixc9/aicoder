@@ -183,6 +183,13 @@ impl ProcessExtension {
         }
         Ok(extension)
     }
+    /// Synchronous invalidation; the OS worker owns bounded cleanup independently of Tokio.
+    pub(crate) fn abort(&self) {
+        self.client.shared.abort();
+    }
+    pub fn request_shutdown(&self) {
+        self.client.shared.close(super::ProcessErrorKind::Shutdown);
+    }
     pub async fn shutdown(&self) -> ProcessDiagnostics {
         self.client.shutdown().await
     }

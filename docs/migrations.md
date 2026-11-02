@@ -1,5 +1,15 @@
 # API migrations
 
+## S7: host extension adoption
+
+`Runtime::with_extensions` explicitly adopts an immutable registration snapshot; reloads
+preserve it. Builders now include that snapshot. `executor_builder_with_extensions` combines
+additional native registrations, rejecting collisions instead of replacing host-installed
+tools. Hosts without an adopted snapshot keep their existing behavior. The separate
+`ActivatedExtensions` guard owns configured process/MCP connections and must be retained
+and shut down explicitly; cloning runtime registrations never extends process authority.
+See [host launch files](host-extensions.md). No persisted session format changed.
+
 ## S1: canonical model, execution and storage contracts
 
 The HTTP client lives in `aicoder-providers`; core contains the provider-neutral

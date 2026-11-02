@@ -6,6 +6,8 @@ process lifetime and tool adapters. Default core/runtime/frontends do not start 
 load a project-selected executable or inherit credentials. Package discovery/installation
 remains a separate roadmap item; [MCP stdio](mcp.md) uses a distinct optional protocol profile.
 
+Stock CLI/TUI/Web hosts can explicitly opt into [host launch files](host-extensions.md).
+
 ## Wire contract
 
 Frames are UTF-8 JSON objects terminated by a newline. Envelopes follow
