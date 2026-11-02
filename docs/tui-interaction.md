@@ -59,6 +59,16 @@ loads an explicit bounded (4 KiB) JSON file with optional base plus #RRGGBB colo
 accent, user, tool, error, muted, foreground and background. Unknown fields fail. Theme data
 never enters runtime/core settings, prompts, session authority or provider requests.
 
+`--theme-package PACKAGE:PATH` and `/theme PACKAGE:PATH` read an installed package's declared
+theme asset directly. Explicit selection works without automatic/global resource discovery;
+host-disabled packages still reject. Runtime returns immutable verified bytes/pin metadata,
+while the TUI alone interprets colors. Assets must be declared in resources.themes, remain
+inside their pinned package root and fit 4 KiB. Selecting data never installs or activates
+package code. Each selection revalidates current trust/content; errors preserve the current
+palette. Captured colors stay unchanged until another explicit selection, including after
+resource reload or package removal. The startup theme options are mutually exclusive.
+See [packaged palette acceptance](s7-package-theme-acceptance.md) for actual terminal checks.
+
 Rendering escapes terminal controls in untrusted text while retaining raw canonical data.
 Visible transcript previews/history caches are bounded and label omitted material; reopen
 available core/archive/artifact history to inspect full data. Persistence failures remain

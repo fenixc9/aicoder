@@ -123,8 +123,10 @@ jobs:
           cargo run --locked -p aicoder-runtime --features images --example offline_images
           cargo build --locked -p aicoder-cli -p aicoder-tui
           python3 scripts/check_images.py
-      - name: Native extension UI in a real terminal
+      - name: Packaged palettes and native extension UI in a real terminal
+        # Package palettes are data and work without enabling process transports.
         run: |
+          python3 scripts/check_package_themes.py
           cargo build --locked -p aicoder-tui --example offline_extension_ui
           python3 scripts/check_extension_ui.py
       - name: Build optional Web and SDK parity entry

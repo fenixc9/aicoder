@@ -38,10 +38,13 @@ use runtime::AgentRuntime;
 struct Cli {
     #[arg(long, default_value = ".")]
     workspace: PathBuf,
-    #[arg(long, conflicts_with = "theme_file")]
+    #[arg(long, conflicts_with_all = ["theme_file", "theme_package"])]
     theme: Option<String>,
-    #[arg(long)]
+    #[arg(long, conflicts_with = "theme_package")]
     theme_file: Option<PathBuf>,
+    /// Use a declared installed theme asset: PACKAGE:PATH.
+    #[arg(long)]
+    theme_package: Option<String>,
 
     #[arg(long)]
     model: Option<String>,
@@ -173,7 +176,9 @@ pub async fn run_cli() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(application.config())?);
         return Ok(());
     }
-    let palette = if let Some(path) = &cli.theme_file {
+    let palette = if let Some(selection) = &cli.theme_package {
+        theme::Theme::from_package(&application, selection)?
+    } else if let Some(path) = &cli.theme_file {
         theme::Theme::load(path)?
     } else {
         theme::Theme::named(cli.theme.as_deref().unwrap_or("dark"))?
@@ -701,7 +706,7 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                     return;
                 }
                 Some(Ok(commands::SlashCommand::Theme)) => {
-                    match theme::Theme::named(commands::arguments(&prompt)) {
+                    match runtime.theme(commands::arguments(&prompt)) {
                         Ok(theme) => app.theme = theme,
                         Err(error) => app.timeline.push(TimelineItem::Error(error.to_string())),
                     }

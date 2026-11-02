@@ -181,8 +181,8 @@ const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         command: SlashCommand::Theme,
         name: "theme",
-        usage: "/theme NAME",
-        description: "Select dark, light or mono colors",
+        usage: "/theme NAME|PACKAGE:PATH",
+        description: "Select built-in colors or a declared package theme",
         arguments: ArgumentPolicy::Required,
     },
     CommandSpec {

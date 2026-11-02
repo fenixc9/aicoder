@@ -92,6 +92,9 @@ pub struct AgentRuntime {
 }
 
 impl AgentRuntime {
+    pub fn theme(&self, selection: &str) -> Result<crate::theme::Theme> {
+        crate::theme::Theme::select(&self.runtime, selection)
+    }
     pub fn new(runtime: aicoder_runtime::Runtime) -> Result<Self> {
         let provider: Arc<dyn aicoder_core::ModelProvider> = Arc::new(runtime.session_client()?);
         Self::with_provider(runtime, provider, None)

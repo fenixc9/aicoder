@@ -102,8 +102,11 @@ order is global, dependency-first packages, parent/workspace resources, nested i
 Two packages declaring the same skill/template name fail reload; workspace definitions can
 override them. Instructions append to the protected runtime prefix and never replace canonical
 user/tool records. Skill assets are allowlisted and SHA-256 verified even when read in pages.
-Themes are validated JSON assets accessible via `PackageObject::read_asset`; frontend theme
-selection/rendering is a separate host operation.
+Themes are validated JSON assets accessible via `PackageObject::read_asset`. The explicit
+`Runtime::package_theme_asset` API applies host policy, current installed trust, declared
+theme kind and caller byte limits, returning immutable data/pin metadata without code
+activation or creating absent storage. TUI [package selectors](tui-interaction.md) interpret
+these bytes using its existing palette format; colors remain outside runtime/core types.
 
 `PackageSessionState::capture/save/restore` stores exact pins and declared primitive public
 fields on the selected session branch. Saves require the expected revision and idle run

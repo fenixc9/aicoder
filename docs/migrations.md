@@ -1,5 +1,14 @@
 # API migrations
 
+## S7: explicit package palette data
+
+`Runtime::package_theme_asset` reads only declared installed themes under host policy and
+returns an immutable `PackageAsset` with pin/path/bytes getters. TUI --theme-package and
+/theme PACKAGE:PATH use the existing 4 KiB palette format. Automatic resource discovery and
+global enablement are not required for an explicit selection; package-host disabling still
+applies. Reading data grants no executable authority. Existing palette/file options and
+session/package formats remain compatible; invalid selections preserve the current colors.
+
 ## S7: explicit package executable owners
 
 CLI/RPC/TUI/Web opt into installed package executables with --activate-packages and an

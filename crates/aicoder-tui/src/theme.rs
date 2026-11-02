@@ -62,8 +62,25 @@ impl Theme {
         ensure!(file.metadata()?.is_file(), "theme must be a regular file");
         let mut bytes = Vec::new();
         file.take(4097).read_to_end(&mut bytes)?;
+        Self::from_bytes(&bytes)
+    }
+    pub fn from_package(runtime: &aicoder_runtime::Runtime, selection: &str) -> Result<Self> {
+        let (package, path) = selection
+            .split_once(':')
+            .ok_or_else(|| anyhow::anyhow!("package theme must be PACKAGE:PATH"))?;
+        let asset = runtime.package_theme_asset(package, path, 4096)?;
+        Self::from_bytes(asset.bytes())
+    }
+    pub fn select(runtime: &aicoder_runtime::Runtime, selection: &str) -> Result<Self> {
+        if selection.contains(':') {
+            Self::from_package(runtime, selection)
+        } else {
+            Self::named(selection)
+        }
+    }
+    fn from_bytes(bytes: &[u8]) -> Result<Self> {
         ensure!(bytes.len() <= 4096, "theme exceeds 4 KiB");
-        let value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        let value: serde_json::Value = serde_json::from_slice(bytes)?;
         let object = value
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("theme must be a JSON object"))?;

@@ -1,6 +1,7 @@
 //! Explicit content-pinned resource bundles. Registry trust is host state, never model history.
 #[cfg(feature = "process-extensions")]
 mod activation;
+mod assets;
 mod manifest;
 mod snapshot;
 mod state;
@@ -9,6 +10,7 @@ use crate::Setting;
 #[cfg(feature = "process-extensions")]
 pub use activation::{HostProgram, PackageActivation, PackagePrograms};
 use anyhow::{Result, ensure};
+pub use assets::PackageAsset;
 pub use manifest::{
     MANIFEST_FILE, PackageExecutable, PackageManifest, PackagePermissions, PackagePin,
     PackageProgram, PackageProtocol, PackageResources, ProgramRequirement, StateField,
