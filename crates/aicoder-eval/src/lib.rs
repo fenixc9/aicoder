@@ -1,12 +1,17 @@
 //! Offline evaluation infrastructure for `aicoder-core` agents.
 //!
-//! Evaluations run in a temporary workspace, capture the complete agent event stream, and apply
+//! Evaluations run in a temporary workspace, capture a bounded agent event stream with explicit completeness, and apply
 //! independent deterministic evaluators after execution. The core agent does not depend on this
 //! crate and its behavior is not changed by evaluation.
 
+pub mod benchmark;
+mod bounds;
+mod command;
 mod evaluator;
 mod model;
+mod provenance;
 mod report;
+pub use provenance::EvalProvenance;
 mod runner;
 mod swebench;
 mod swebench_batch;
@@ -35,5 +40,5 @@ pub use swebench_batch::{
 pub use swebench_harness::{
     SweBenchHarnessConfig, SweBenchHarnessExecution, SweBenchHarnessReport, run_swebench_harness,
 };
-pub use trace::{AgentTrace, AgentTraceRecorder, TimedAgentEvent};
-pub use workspace::{WorkspaceDiff, WorkspaceSnapshot};
+pub use trace::{AgentTrace, AgentTraceRecorder, TimedAgentEvent, TraceCapture, TraceLimits};
+pub use workspace::{WorkspaceDiff, WorkspaceLimits, WorkspaceSnapshot};

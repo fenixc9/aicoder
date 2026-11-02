@@ -1,7 +1,7 @@
 # aicoder-eval
 
 Offline evaluation infrastructure for `aicoder-core`. Each run gets a temporary workspace copied
-from a fixture, a complete raw event trace, deterministic post-run evaluators, and a serializable
+from a fixture, a bounded raw event trace with explicit completeness, deterministic post-run evaluators, and a serializable
 report. Evaluation never changes the TurnExecutor or feeds grader output back into the model.
 
 ```rust,no_run
@@ -118,3 +118,18 @@ cargo run -p aicoder-eval --bin aicoder-swebench -- grade \
 
 Use aicoder-swebench import with an official report path to print a normalized
 resolved rate and the original aggregate fields.
+
+
+The [S7 coding benchmark CLI](../../docs/coding-benchmarks.md) adds pinned Rust/JSON tasks,
+post-run hidden graders, observed execution metadata, exclusive output archives, verification,
+observation-only replay and strict comparisons. Start with:
+
+```sh
+cargo run --locked -p aicoder-eval --bin aicoder-bench -- list
+mkdir -p artifacts
+cargo run --locked -p aicoder-eval --bin aicoder-bench -- run --output artifacts/coding-smoke
+```
+
+Default runs are deterministic scripted contracts, not measurements of LLM coding ability.
+Service calls require explicit --live. Completed but ungraded runs are now Inconclusive;
+check trace_capture and workspace_capture_complete before interpreting reports as complete.

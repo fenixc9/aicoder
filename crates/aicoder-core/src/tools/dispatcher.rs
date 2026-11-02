@@ -50,7 +50,7 @@ impl DispatchCapture {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DispatcherConfig {
     pub max_calls_per_round: usize,
     pub tool_timeout: Duration,
@@ -169,6 +169,10 @@ impl ToolDispatcher {
             .await
     }
 
+    /// Immutable settings installed by the host, including actual tool/output bounds.
+    pub fn configuration(&self) -> &DispatcherConfig {
+        &self.config
+    }
     pub fn max_calls_per_round(&self) -> usize {
         self.config.max_calls_per_round
     }

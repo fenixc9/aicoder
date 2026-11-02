@@ -73,3 +73,15 @@ mode's history and unsupported-parameter behavior.
 Trace consumers should validate [event protocol v1](events.md). Incomplete observation
 is an evaluator error; old Debug-string traces are historical artifacts, and SWE-bench
 checkpoints without the event version are regenerated rather than mixed into new runs.
+
+
+## S7 coding cases and verifiable archives
+
+[aicoder-bench](coding-benchmarks.md) adds a small Rust/JSON task suite over the same EvalRunner
+and core/runtime API, with an offline default, explicit service opt-in, observed input pins,
+independent post-run graders, immutable artifact references, validation, event replay and
+strict comparison. Every selected setup/provider/budget/grader/artifact/cancellation outcome
+stays in the denominator. This does not replace the official SWE-bench resolved-rate workflow.
+EvalRunner now reports completed but ungraded runs as Inconclusive, bounds trace/workspace
+retention, and preserves progress when post-run observation fails. Legacy SWE-bench generation
+completion and official test resolution remain different outcomes; see the migration notes.

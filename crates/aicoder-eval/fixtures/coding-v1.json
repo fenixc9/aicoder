@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "id": "coding_v1",
+  "cases": [
+    {
+      "id": "inclusive_range",
+      "prompt": "Fix contains in src/lib.rs so both bounds are inclusive. Invalid ranges must contain no values. Preserve the public API.",
+      "files": {
+        "src/lib.rs": "pub fn contains(value: i32, lower: i32, upper: i32) -> bool { lower < value && value < upper }\n"
+      },
+      "allowed_changes": [
+        "src/lib.rs"
+      ],
+      "grading": {
+        "kind": "rust_tests",
+        "tests": "#[path=\"candidate/src/lib.rs\"] mod candidate;\n#[test] fn bounds() { assert!(candidate::contains(1,1,2)); assert!(candidate::contains(2,1,2)); assert!(candidate::contains(1,1,1)); assert!(!candidate::contains(1,2,1)); assert!(candidate::contains(i32::MIN,i32::MIN,i32::MAX)); assert!(!candidate::contains(3,1,2)); }\n"
+      },
+      "script": [
+        {
+          "id": "read",
+          "name": "read_file",
+          "arguments": {
+            "path": "src/lib.rs"
+          }
+        },
+        {
+          "id": "repair",
+          "name": "edit_file",
+          "arguments": {
+            "path": "src/lib.rs",
+            "edits": [
+              {
+                "old_text": "pub fn contains(value: i32, lower: i32, upper: i32) -> bool { lower < value && value < upper }\n",
+                "new_text": "pub fn contains(value: i32, lower: i32, upper: i32) -> bool { lower <= value && value <= upper }\n"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "checked_clamp",
+      "prompt": "Repair checked_clamp in src/lib.rs. Return None if min > max; otherwise clamp to the inclusive range, including integer extremes. Preserve the public API.",
+      "files": {
+        "src/lib.rs": "pub fn checked_clamp(value: i32, min: i32, max: i32) -> Option<i32> { Some(value.max(min).min(max)) }\n"
+      },
+      "allowed_changes": [
+        "src/lib.rs"
+      ],
+      "grading": {
+        "kind": "rust_tests",
+        "tests": "#[path=\"candidate/src/lib.rs\"] mod candidate;\n#[test] fn clamp() { assert_eq!(candidate::checked_clamp(3,9,1),None); assert_eq!(candidate::checked_clamp(-9,1,4),Some(1)); assert_eq!(candidate::checked_clamp(9,1,4),Some(4)); assert_eq!(candidate::checked_clamp(3,1,4),Some(3)); assert_eq!(candidate::checked_clamp(i32::MIN,i32::MIN,i32::MAX),Some(i32::MIN)); }\n"
+      },
+      "script": [
+        {
+          "id": "read",
+          "name": "read_file",
+          "arguments": {
+            "path": "src/lib.rs"
+          }
+        },
+        {
+          "id": "repair",
+          "name": "edit_file",
+          "arguments": {
+            "path": "src/lib.rs",
+            "edits": [
+              {
+                "old_text": "pub fn checked_clamp(value: i32, min: i32, max: i32) -> Option<i32> { Some(value.max(min).min(max)) }\n",
+                "new_text": "pub fn checked_clamp(value: i32, min: i32, max: i32) -> Option<i32> { if min > max { None } else { Some(value.max(min).min(max)) } }\n"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "unicode_suffix",
+      "prompt": "Fix suffix_after in src/lib.rs. It must return the text after the first occurrence of a delimiter char, including multibyte delimiters and empty suffixes; return None if missing. Preserve the public API.",
+      "files": {
+        "src/lib.rs": "pub fn suffix_after(text: &str, delimiter: char) -> Option<&str> { text.find(delimiter).map(|i| &text[i + 1..]) }\n"
+      },
+      "allowed_changes": [
+        "src/lib.rs"
+      ],
+      "grading": {
+        "kind": "rust_tests",
+        "tests": "#[path=\"candidate/src/lib.rs\"] mod candidate;\n#[test] fn suffix() { assert_eq!(candidate::suffix_after(\"a::b\",':'),Some(\":b\")); assert_eq!(candidate::suffix_after(\"汉字🔎目标\",'🔎'),Some(\"目标\")); assert_eq!(candidate::suffix_after(\"a字\",'字'),Some(\"\")); assert_eq!(candidate::suffix_after(\"hello\",':'),None); }\n"
+      },
+      "script": [
+        {
+          "id": "read",
+          "name": "read_file",
+          "arguments": {
+            "path": "src/lib.rs"
+          }
+        },
+        {
+          "id": "repair",
+          "name": "edit_file",
+          "arguments": {
+            "path": "src/lib.rs",
+            "edits": [
+              {
+                "old_text": "pub fn suffix_after(text: &str, delimiter: char) -> Option<&str> { text.find(delimiter).map(|i| &text[i + 1..]) }\n",
+                "new_text": "pub fn suffix_after(text: &str, delimiter: char) -> Option<&str> { text.find(delimiter).map(|i| &text[i + delimiter.len_utf8()..]) }\n"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "retry_config",
+      "prompt": "Update config.json to allow exactly three retry attempts. Preserve the backoff and telemetry settings. Keep valid JSON.",
+      "files": {
+        "config.json": "{\"retry\": {\"attempts\": 0, \"backoff_ms\": 100}, \"telemetry\": false}\n"
+      },
+      "allowed_changes": [
+        "config.json"
+      ],
+      "grading": {
+        "kind": "json",
+        "path": "config.json",
+        "expected": {
+          "retry": {
+            "attempts": 3,
+            "backoff_ms": 100
+          },
+          "telemetry": false
+        }
+      },
+      "script": [
+        {
+          "id": "read",
+          "name": "read_file",
+          "arguments": {
+            "path": "config.json"
+          }
+        },
+        {
+          "id": "repair",
+          "name": "write_file",
+          "arguments": {
+            "path": "config.json",
+            "content": "{\"retry\": {\"attempts\": 3, \"backoff_ms\": 100}, \"telemetry\": false}\n"
+          }
+        }
+      ]
+    }
+  ]
+}

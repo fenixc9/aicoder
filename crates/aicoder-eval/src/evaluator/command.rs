@@ -1,8 +1,8 @@
 use std::{ffi::OsString, time::Duration};
 
+use aicoder_runtime::tools::ShellStopReason;
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::{process::Command, time::timeout};
 
 use crate::{EvalFinding, EvalSeverity, EvaluationContext, EvaluationResult, Evaluator};
 
@@ -15,6 +15,7 @@ pub struct CommandEvaluator {
     arguments: Vec<OsString>,
     timeout: Duration,
     output_limit: usize,
+    excluded: Vec<String>,
 }
 
 impl CommandEvaluator {
@@ -25,6 +26,7 @@ impl CommandEvaluator {
             arguments: Vec::new(),
             timeout: Duration::from_secs(120),
             output_limit: DEFAULT_OUTPUT_LIMIT,
+            excluded: Vec::new(),
         }
     }
 
@@ -47,6 +49,10 @@ impl CommandEvaluator {
         self
     }
 
+    pub fn excluding_environment(mut self, variables: Vec<String>) -> Self {
+        self.excluded = variables;
+        self
+    }
     pub fn output_limit(mut self, bytes: usize) -> Self {
         self.output_limit = bytes;
         self
@@ -60,29 +66,41 @@ impl Evaluator for CommandEvaluator {
     }
 
     async fn evaluate(&self, context: &EvaluationContext<'_>) -> Result<EvaluationResult> {
-        let mut command = Command::new(&self.program);
-        command
-            .args(&self.arguments)
-            .current_dir(context.workspace)
-            .kill_on_drop(true);
-        let output = match timeout(self.timeout, command.output()).await {
-            Ok(output) => output?,
-            Err(_) => {
-                return Ok(EvaluationResult::failed(
-                    self.name.clone(),
-                    vec![EvalFinding::new(
-                        EvalSeverity::Error,
-                        "command_timeout",
-                        format!(
-                            "Evaluation command exceeded {:.3} seconds",
-                            self.timeout.as_secs_f64()
-                        ),
-                    )],
-                ));
-            }
-        };
-        let evidence = command_evidence(&output.stdout, &output.stderr, self.output_limit);
-        if output.status.success() {
+        let output = crate::command::capture(
+            &self.program,
+            &self.arguments,
+            context.workspace,
+            self.timeout,
+            self.output_limit,
+            &self.excluded,
+        )
+        .await?;
+        if matches!(
+            output.stop_reason,
+            ShellStopReason::Timeout | ShellStopReason::ToolTimeout
+        ) {
+            return Ok(EvaluationResult::failed(self.name.clone(),vec![EvalFinding::new(EvalSeverity::Error,"command_timeout","Evaluation command exceeded its deadline; process-group cleanup was requested")
+                .with_evidence(format!("reaped={}, cleanup_ok={}",output.reaped,output.cleanup_ok))]));
+        }
+        if !output.cleanup_ok
+            || !output.reaped
+            || !output.output_complete
+            || !matches!(output.stop_reason, ShellStopReason::Exit)
+        {
+            return Ok(EvaluationResult::evaluator_error(
+                self.name.clone(),
+                format!(
+                    "Grader capture/cleanup incomplete: {}",
+                    output.stop_reason.name()
+                ),
+            ));
+        }
+        let evidence = command_evidence(
+            output.stdout.as_bytes(),
+            output.stderr.as_bytes(),
+            self.output_limit.min(65536),
+        );
+        if output.exit_code == Some(0) {
             let mut result = EvaluationResult::passed(self.name.clone());
             if !evidence.is_empty() {
                 result.findings.push(
@@ -102,7 +120,10 @@ impl Evaluator for CommandEvaluator {
                     EvalFinding::new(
                         EvalSeverity::Error,
                         "command_failed",
-                        format!("Evaluation command exited with {}", output.status),
+                        format!(
+                            "Evaluation command exited with {:?}, signal {:?}",
+                            output.exit_code, output.signal
+                        ),
                     )
                     .with_evidence(evidence),
                 ],

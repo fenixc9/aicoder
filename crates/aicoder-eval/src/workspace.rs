@@ -5,14 +5,80 @@ use std::{
     process::{Command, Output},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 use crate::WorkspaceFixture;
 
+/// Hard admission limits for filesystem capture/copy; exhaustion is an error, never a partial diff.
+#[derive(Debug, Clone, Copy)]
+pub struct WorkspaceLimits {
+    pub max_entries: usize,
+    pub max_file_bytes: usize,
+    pub max_total_bytes: usize,
+    pub max_depth: usize,
+}
+impl Default for WorkspaceLimits {
+    fn default() -> Self {
+        Self {
+            max_entries: 20_000,
+            max_file_bytes: 16 * 1024 * 1024,
+            max_total_bytes: 128 * 1024 * 1024,
+            max_depth: 64,
+        }
+    }
+}
+struct Budget {
+    limits: WorkspaceLimits,
+    entries: usize,
+    bytes: usize,
+}
+impl Budget {
+    fn new(limits: WorkspaceLimits) -> Result<Self> {
+        ensure!(
+            (1..=100_000).contains(&limits.max_entries)
+                && (1..=64 * 1024 * 1024).contains(&limits.max_file_bytes)
+                && (1..=512 * 1024 * 1024).contains(&limits.max_total_bytes)
+                && (1..=128).contains(&limits.max_depth),
+            "invalid workspace capture limits"
+        );
+        Ok(Self {
+            limits,
+            entries: 0,
+            bytes: 0,
+        })
+    }
+    fn entry(&mut self) -> Result<()> {
+        self.entries += 1;
+        ensure!(
+            self.entries <= self.limits.max_entries,
+            "workspace entry budget exhausted"
+        );
+        Ok(())
+    }
+    fn read(&mut self, path: &Path) -> Result<Vec<u8>> {
+        let limit = self
+            .limits
+            .max_file_bytes
+            .min(self.limits.max_total_bytes.saturating_sub(self.bytes));
+        let bytes = crate::bounds::read(path, limit)?;
+        self.bytes += bytes.len();
+        Ok(bytes)
+    }
+}
+#[cfg(unix)]
+fn executable(meta: &fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o111 != 0
+}
+#[cfg(not(unix))]
+fn executable(_: &fs::Metadata) -> bool {
+    false
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SnapshotEntry {
-    File(Vec<u8>),
+    File { bytes: Vec<u8>, executable: bool },
     Symlink(PathBuf),
 }
 
@@ -24,10 +90,104 @@ pub struct WorkspaceSnapshot {
 
 impl WorkspaceSnapshot {
     pub fn capture(root: impl AsRef<Path>) -> Result<Self> {
-        let root = root.as_ref();
+        Self::capture_with_limits(root, WorkspaceLimits::default())
+    }
+    pub fn capture_with_limits(root: impl AsRef<Path>, limits: WorkspaceLimits) -> Result<Self> {
         let mut entries = BTreeMap::new();
-        capture_directory(root, root, &mut entries)?;
+        capture_directory(
+            root.as_ref(),
+            root.as_ref(),
+            &mut entries,
+            &mut Budget::new(limits)?,
+            0,
+        )?;
         Ok(Self { entries })
+    }
+    /// Exact content/type/executable-bit identity. Ignores .git/target as declared by capture.
+    pub fn fingerprint(&self) -> String {
+        let mut digest = ring::digest::Context::new(&ring::digest::SHA256);
+        for (path, entry) in &self.entries {
+            let path = path.as_os_str().as_encoded_bytes();
+            digest.update(&(path.len() as u64).to_le_bytes());
+            digest.update(path);
+            match entry {
+                SnapshotEntry::File { bytes, executable } => {
+                    digest.update(&[0, u8::from(*executable)]);
+                    digest.update(&(bytes.len() as u64).to_le_bytes());
+                    digest.update(bytes);
+                }
+                SnapshotEntry::Symlink(target) => {
+                    digest.update(&[1]);
+                    let bytes = target.as_os_str().as_encoded_bytes();
+                    digest.update(&(bytes.len() as u64).to_le_bytes());
+                    digest.update(bytes);
+                }
+            }
+        }
+        digest
+            .finish()
+            .as_ref()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect()
+    }
+
+    /// Bounded applicable UTF-8 diff for non-Git fixtures. Binary/non-UTF-8 paths return None.
+    pub fn unified_patch(&self, after: &Self) -> Result<Option<String>> {
+        use std::io::Write;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(250);
+        let mut writer = crate::bounds::LimitedWriter {
+            inner: Vec::new(),
+            remaining: 8 * 1024 * 1024,
+        };
+        let diff = WorkspaceDiff::between(self, after);
+        for name in diff.changed_paths() {
+            ensure!(
+                std::time::Instant::now() < deadline,
+                "workspace diff computation budget exhausted"
+            );
+            if name.chars().any(char::is_control) {
+                return Ok(None);
+            }
+            let before = self.entries.get(Path::new(name));
+            let next = after.entries.get(Path::new(name));
+            fn content(entry: Option<&SnapshotEntry>) -> Option<(&str, &'static str)> {
+                match entry {
+                    None => Some(("", "000000")),
+                    Some(SnapshotEntry::File { bytes, executable }) => Some((
+                        std::str::from_utf8(bytes).ok()?,
+                        if *executable { "100755" } else { "100644" },
+                    )),
+                    Some(SnapshotEntry::Symlink(target)) => Some((target.to_str()?, "120000")),
+                }
+            }
+            let Some((old, old_mode)) = content(before) else {
+                return Ok(None);
+            };
+            let Some((new, new_mode)) = content(next) else {
+                return Ok(None);
+            };
+            let a = serde_json::to_string(&format!("a/{name}"))?;
+            let b = serde_json::to_string(&format!("b/{name}"))?;
+            writeln!(writer, "diff --git {a} {b}")?;
+            if before.is_none() {
+                writeln!(writer, "new file mode {new_mode}")?;
+            } else if next.is_none() {
+                writeln!(writer, "deleted file mode {old_mode}")?;
+            } else if old_mode != new_mode {
+                writeln!(writer, "old mode {old_mode}\nnew mode {new_mode}")?;
+            }
+            let diff = similar::TextDiff::configure()
+                .deadline(deadline)
+                .diff_lines(old, new);
+            diff.unified_diff()
+                .header(
+                    if before.is_none() { "/dev/null" } else { &a },
+                    if next.is_none() { "/dev/null" } else { &b },
+                )
+                .to_writer(&mut writer)?;
+        }
+        Ok(Some(String::from_utf8(writer.inner)?))
     }
 
     pub fn paths(&self) -> impl Iterator<Item = &Path> {
@@ -40,7 +200,7 @@ impl WorkspaceSnapshot {
 
     pub fn file_content(&self, relative_path: impl AsRef<Path>) -> Option<&[u8]> {
         match self.entries.get(relative_path.as_ref()) {
-            Some(SnapshotEntry::File(content)) => Some(content),
+            Some(SnapshotEntry::File { bytes, .. }) => Some(bytes),
             _ => None,
         }
     }
@@ -97,7 +257,12 @@ pub(crate) fn prepare_fixture(fixture: &WorkspaceFixture, destination: &Path) ->
             let source = source
                 .canonicalize()
                 .with_context(|| format!("Failed to resolve fixture {}", source.display()))?;
-            copy_directory(&source, destination)
+            copy_directory(
+                &source,
+                destination,
+                &mut Budget::new(WorkspaceLimits::default())?,
+                0,
+            )
         }
         WorkspaceFixture::GitCheckout {
             repository,
@@ -179,11 +344,18 @@ fn capture_directory(
     root: &Path,
     directory: &Path,
     entries: &mut BTreeMap<PathBuf, SnapshotEntry>,
+    budget: &mut Budget,
+    depth: usize,
 ) -> Result<()> {
+    ensure!(
+        depth <= budget.limits.max_depth,
+        "workspace snapshot depth budget exhausted"
+    );
     for item in fs::read_dir(directory)
         .with_context(|| format!("Failed to read workspace directory {}", directory.display()))?
     {
         let item = item.context("Failed to read workspace directory entry")?;
+        budget.entry()?;
         let path = item.path();
         let relative = path
             .strip_prefix(root)
@@ -195,14 +367,14 @@ fn capture_directory(
             if ignored_directory(relative) {
                 continue;
             }
-            capture_directory(root, &path, entries)?;
+            capture_directory(root, &path, entries, budget, depth + 1)?;
         } else if file_type.is_file() {
             entries.insert(
                 relative.to_path_buf(),
-                SnapshotEntry::File(
-                    fs::read(&path)
-                        .with_context(|| format!("Failed to snapshot {}", path.display()))?,
-                ),
+                SnapshotEntry::File {
+                    bytes: budget.read(&path)?,
+                    executable: executable(&fs::symlink_metadata(&path)?),
+                },
             );
         } else if file_type.is_symlink() {
             entries.insert(
@@ -212,12 +384,23 @@ fn capture_directory(
                         .with_context(|| format!("Failed to read symlink {}", path.display()))?,
                 ),
             );
+        } else {
+            anyhow::bail!("special files are unsupported in workspace snapshots");
         }
     }
     Ok(())
 }
 
-fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
+fn copy_directory(
+    source: &Path,
+    destination: &Path,
+    budget: &mut Budget,
+    depth: usize,
+) -> Result<()> {
+    ensure!(
+        depth <= budget.limits.max_depth,
+        "fixture copy depth budget exhausted"
+    );
     fs::create_dir_all(destination).with_context(|| {
         format!(
             "Failed to create evaluation workspace {}",
@@ -228,6 +411,7 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
         .with_context(|| format!("Failed to read fixture directory {}", source.display()))?
     {
         let item = item.context("Failed to read fixture directory entry")?;
+        budget.entry()?;
         let source_path = item.path();
         let destination_path = destination.join(item.file_name());
         let file_type = item
@@ -237,17 +421,15 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
             if item.file_name() == "target" {
                 continue;
             }
-            copy_directory(&source_path, &destination_path)?;
+            copy_directory(&source_path, &destination_path, budget, depth + 1)?;
         } else if file_type.is_file() {
-            fs::copy(&source_path, &destination_path).with_context(|| {
-                format!(
-                    "Failed to copy fixture file {} to {}",
-                    source_path.display(),
-                    destination_path.display()
-                )
-            })?;
+            let bytes = budget.read(&source_path)?;
+            fs::write(&destination_path, bytes)?;
+            fs::set_permissions(&destination_path, fs::metadata(&source_path)?.permissions())?;
         } else if file_type.is_symlink() {
             copy_symlink(&source_path, &destination_path)?;
+        } else {
+            anyhow::bail!("special files are unsupported in fixture copies");
         }
     }
     Ok(())

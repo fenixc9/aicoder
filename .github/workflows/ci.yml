@@ -26,6 +26,17 @@ jobs:
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
       - name: Test
         run: cargo test --locked --workspace
+      - name: Offline coding benchmarks, archived failures and loopback adapter
+        run: |
+          cargo build --locked -p aicoder-eval --bin aicoder-bench
+          python3 scripts/check_benchmark.py --output "$RUNNER_TEMP/aicoder-bench"
+      - name: Preserve offline benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: offline-coding-benchmark
+          path: ${{ runner.temp }}/aicoder-bench
+          if-no-files-found: ignore
       - name: Offline smoke
         run: cargo run --locked -p aicoder-runtime --example offline_smoke
       - name: In-memory model provider example

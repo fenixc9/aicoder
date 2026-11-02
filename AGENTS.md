@@ -28,7 +28,11 @@
 - `crates/aicoder-cli` and `crates/aicoder-tui` are frontends over core/runtime;
   do not duplicate agent execution logic in either frontend.
 - `crates/aicoder-eval` owns evaluation and SWE-bench integration. Do not
-  leak evaluation fixtures or grading answers into agent prompts.
+  leak evaluation fixtures or grading answers into agent prompts. Pin observed execution
+  inputs and keep every selected failure in benchmark denominators. Bounded capture failures
+  retain progress and explicit uncertainty; artifact failure never retries completed work.
+  Replay is observation only. Unknown usage/prices and sampled process RSS are not exact cost
+  or isolated agent peak memory.
 - Keep canonical recorded history separate from provider projections. Recovery repairs
   and pruning must not become historical facts; journal indices follow canonical input.
   Preserve declared runtime prefixes and branch provenance when constructing model views.

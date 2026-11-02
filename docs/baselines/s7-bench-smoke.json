@@ -1,0 +1,666 @@
+{
+  "schema_version": 1,
+  "phase": "S7 coding archive pipeline",
+  "classification": "scripted contracts and loopback adapter only; no real-model success-rate claim",
+  "check": {
+    "cases_per_offline_run": 4,
+    "scripted_repetitions": 2,
+    "failure_variants_in_denominator": [
+      "noop",
+      "provider-error",
+      "limit"
+    ],
+    "verified_archives": 6,
+    "replay_observation_only": true,
+    "same_inputs_comparison": true,
+    "default_model_network_requests": 0,
+    "explicit_loopback_model_requests": 3
+  },
+  "archives": [
+    {
+      "name": "left",
+      "mode": "scripted_contract",
+      "source": {
+        "revision": "7ac8a53ab76e6886db7bb7890399a7133997348b",
+        "dirty": true,
+        "source_sha256": "7054839f25e9b8fb005e0dfa195220ab859b1d3c8c0e23441303b7c1550ab885",
+        "file_count": 288,
+        "scope": "Rust, Cargo/toolchain manifests and embedded JS/JSON/HTML/CSS; includes untracked sources",
+        "executable_sha256": "857a2144e52d10ce64282b3f07660431ee01c53e5c16d063c79a11adb7aa2019",
+        "grader_rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+        "platform": "linux/x86_64"
+      },
+      "suite": "coding_v1",
+      "suite_sha256": "0f3790b7bd4bee64304363d900db126edd2edbfe702f5b5526ad9a53d0339ef2",
+      "repetitions": 1,
+      "selection": [
+        "inclusive_range",
+        "checked_clamp",
+        "unicode_suffix",
+        "retry_config"
+      ],
+      "summary": {
+        "selected": 4,
+        "passed": 4,
+        "failed": 0,
+        "inconclusive": 0,
+        "evaluator_errors": 0,
+        "completed": 4,
+        "incomplete": 0,
+        "run_failures": 0,
+        "infrastructure_errors": 0,
+        "not_run": 0,
+        "pass_rate": 1.0,
+        "total_tokens": 60,
+        "total_tool_calls": 8,
+        "total_tool_errors": 0,
+        "median_case_ms": 145,
+        "p95_case_ms": 149,
+        "sampled_process_rss_kib": 27012,
+        "cost": null
+      },
+      "cases": [
+        {
+          "id": "inclusive_range",
+          "status": "completed",
+          "verdict": "passed",
+          "outcome": "completed",
+          "input_sha256": "72ca68190eee14613f11858b29dfd43dc4d12371d512e2b1e795f3022c88b0b6",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 12,
+            "completion_tokens": 3,
+            "total_tokens": 15,
+            "cached_tokens": null
+          },
+          "tool_calls": 2,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "checked_clamp",
+          "status": "completed",
+          "verdict": "passed",
+          "outcome": "completed",
+          "input_sha256": "f2c081d44d02ca329b93bbf6e25d60cad250ef2d66d93f622eb8172874e2fed7",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 12,
+            "completion_tokens": 3,
+            "total_tokens": 15,
+            "cached_tokens": null
+          },
+          "tool_calls": 2,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "unicode_suffix",
+          "status": "completed",
+          "verdict": "passed",
+          "outcome": "completed",
+          "input_sha256": "a38fdce41c0374ae2aefb16a87495d168e4d78830ac342295d10ee31fb94a382",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 12,
+            "completion_tokens": 3,
+            "total_tokens": 15,
+            "cached_tokens": null
+          },
+          "tool_calls": 2,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "retry_config",
+          "status": "completed",
+          "verdict": "passed",
+          "outcome": "completed",
+          "input_sha256": "e47e177a7ab8b02adeacb80994f611354b8b9ab1aba8b044f4da950131b972ae",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 12,
+            "completion_tokens": 3,
+            "total_tokens": 15,
+            "cached_tokens": null
+          },
+          "tool_calls": 2,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        }
+      ]
+    },
+    {
+      "name": "right",
+      "mode": "scripted_contract",
+      "source": {
+        "revision": "7ac8a53ab76e6886db7bb7890399a7133997348b",
+        "dirty": true,
+        "source_sha256": "7054839f25e9b8fb005e0dfa195220ab859b1d3c8c0e23441303b7c1550ab885",
+        "file_count": 288,
+        "scope": "Rust, Cargo/toolchain manifests and embedded JS/JSON/HTML/CSS; includes untracked sources",
+        "executable_sha256": "857a2144e52d10ce64282b3f07660431ee01c53e5c16d063c79a11adb7aa2019",
+        "grader_rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+        "platform": "linux/x86_64"
+      },
+      "suite": "coding_v1",
+      "suite_sha256": "0f3790b7bd4bee64304363d900db126edd2edbfe702f5b5526ad9a53d0339ef2",
+      "repetitions": 1,
+      "selection": [
+        "inclusive_range",
+        "checked_clamp",
+        "unicode_suffix",
+        "retry_config"
+      ],
+      "summary": {
+        "selected": 4,
+        "passed": 4,
+        "failed": 0,
+        "inconclusive": 0,
+        "evaluator_errors": 0,
+        "completed": 4,
+        "incomplete": 0,
+        "run_failures": 0,
+        "infrastructure_errors": 0,
+        "not_run": 0,
+        "pass_rate": 1.0,
+        "total_tokens": 60,
+        "total_tool_calls": 8,
+        "total_tool_errors": 0,
+        "median_case_ms": 144,
+        "p95_case_ms": 154,
+        "sampled_process_rss_kib": 27012,
+        "cost": null
+      },
+      "cases": [
+        {
+          "id": "inclusive_range",
+          "status": "completed",
+          "verdict": "passed",
+          "outcome": "completed",
+          "input_sha256": "72ca68190eee14613f11858b29dfd43dc4d12371d512e2b1e795f3022c88b0b6",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 12,
+            "completion_tokens": 3,
+            "total_tokens": 15,
+            "cached_tokens": null
+          },
+          "tool_calls": 2,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "checked_clamp",
+          "status": "completed",
+          "verdict": "passed",
+          "outcome": "completed",
+          "input_sha256": "f2c081d44d02ca329b93bbf6e25d60cad250ef2d66d93f622eb8172874e2fed7",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 12,
+            "completion_tokens": 3,
+            "total_tokens": 15,
+            "cached_tokens": null
+          },
+          "tool_calls": 2,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "unicode_suffix",
+          "status": "completed",
+          "verdict": "passed",
+          "outcome": "completed",
+          "input_sha256": "a38fdce41c0374ae2aefb16a87495d168e4d78830ac342295d10ee31fb94a382",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 12,
+            "completion_tokens": 3,
+            "total_tokens": 15,
+            "cached_tokens": null
+          },
+          "tool_calls": 2,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "retry_config",
+          "status": "completed",
+          "verdict": "passed",
+          "outcome": "completed",
+          "input_sha256": "e47e177a7ab8b02adeacb80994f611354b8b9ab1aba8b044f4da950131b972ae",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 12,
+            "completion_tokens": 3,
+            "total_tokens": 15,
+            "cached_tokens": null
+          },
+          "tool_calls": 2,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        }
+      ]
+    },
+    {
+      "name": "noop",
+      "mode": "scripted_contract",
+      "source": {
+        "revision": "7ac8a53ab76e6886db7bb7890399a7133997348b",
+        "dirty": true,
+        "source_sha256": "7054839f25e9b8fb005e0dfa195220ab859b1d3c8c0e23441303b7c1550ab885",
+        "file_count": 288,
+        "scope": "Rust, Cargo/toolchain manifests and embedded JS/JSON/HTML/CSS; includes untracked sources",
+        "executable_sha256": "857a2144e52d10ce64282b3f07660431ee01c53e5c16d063c79a11adb7aa2019",
+        "grader_rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+        "platform": "linux/x86_64"
+      },
+      "suite": "coding_v1",
+      "suite_sha256": "0f3790b7bd4bee64304363d900db126edd2edbfe702f5b5526ad9a53d0339ef2",
+      "repetitions": 1,
+      "selection": [
+        "inclusive_range",
+        "checked_clamp",
+        "unicode_suffix",
+        "retry_config"
+      ],
+      "summary": {
+        "selected": 4,
+        "passed": 0,
+        "failed": 4,
+        "inconclusive": 0,
+        "evaluator_errors": 0,
+        "completed": 4,
+        "incomplete": 0,
+        "run_failures": 0,
+        "infrastructure_errors": 0,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "total_tokens": 20,
+        "total_tool_calls": 0,
+        "total_tool_errors": 0,
+        "median_case_ms": 129,
+        "p95_case_ms": 148,
+        "sampled_process_rss_kib": 26184,
+        "cost": null
+      },
+      "cases": [
+        {
+          "id": "inclusive_range",
+          "status": "completed",
+          "verdict": "failed",
+          "outcome": "completed",
+          "input_sha256": "f16017c2bce5086046d98d66f4708595f2768c5f9b8df40349cf8989e6fc70eb",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 4,
+            "completion_tokens": 1,
+            "total_tokens": 5,
+            "cached_tokens": null
+          },
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "checked_clamp",
+          "status": "completed",
+          "verdict": "failed",
+          "outcome": "completed",
+          "input_sha256": "743ba5f45bffe04793afacfa62e82192c3d4ee3fb9e40d1a77a9253337c55f15",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 4,
+            "completion_tokens": 1,
+            "total_tokens": 5,
+            "cached_tokens": null
+          },
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "unicode_suffix",
+          "status": "completed",
+          "verdict": "failed",
+          "outcome": "completed",
+          "input_sha256": "d947655602bf6fd771c0ed63e36fba849c0f4a6340f0ade1722a6f1dadbbc160",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 4,
+            "completion_tokens": 1,
+            "total_tokens": 5,
+            "cached_tokens": null
+          },
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "retry_config",
+          "status": "completed",
+          "verdict": "failed",
+          "outcome": "completed",
+          "input_sha256": "47c8bfea3c97df315e83f82e9a0391a3f0f92b18ed5cd0c39a5207c90b1bb8cd",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 4,
+            "completion_tokens": 1,
+            "total_tokens": 5,
+            "cached_tokens": null
+          },
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        }
+      ]
+    },
+    {
+      "name": "provider-error",
+      "mode": "scripted_contract",
+      "source": {
+        "revision": "7ac8a53ab76e6886db7bb7890399a7133997348b",
+        "dirty": true,
+        "source_sha256": "7054839f25e9b8fb005e0dfa195220ab859b1d3c8c0e23441303b7c1550ab885",
+        "file_count": 288,
+        "scope": "Rust, Cargo/toolchain manifests and embedded JS/JSON/HTML/CSS; includes untracked sources",
+        "executable_sha256": "857a2144e52d10ce64282b3f07660431ee01c53e5c16d063c79a11adb7aa2019",
+        "grader_rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+        "platform": "linux/x86_64"
+      },
+      "suite": "coding_v1",
+      "suite_sha256": "0f3790b7bd4bee64304363d900db126edd2edbfe702f5b5526ad9a53d0339ef2",
+      "repetitions": 1,
+      "selection": [
+        "inclusive_range",
+        "checked_clamp",
+        "unicode_suffix",
+        "retry_config"
+      ],
+      "summary": {
+        "selected": 4,
+        "passed": 0,
+        "failed": 4,
+        "inconclusive": 0,
+        "evaluator_errors": 0,
+        "completed": 0,
+        "incomplete": 0,
+        "run_failures": 4,
+        "infrastructure_errors": 0,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "total_tokens": null,
+        "total_tool_calls": 0,
+        "total_tool_errors": 0,
+        "median_case_ms": 129,
+        "p95_case_ms": 151,
+        "sampled_process_rss_kib": 26300,
+        "cost": null
+      },
+      "cases": [
+        {
+          "id": "inclusive_range",
+          "status": "failed",
+          "verdict": "failed",
+          "outcome": "failed",
+          "input_sha256": "4b936a50109ae965c55abe239e7f0f1cc5ff9d732fbaba51e597da9bc92d1332",
+          "usage": {
+            "provider_reported": false,
+            "prompt_tokens": null,
+            "completion_tokens": null,
+            "total_tokens": null,
+            "cached_tokens": null
+          },
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "checked_clamp",
+          "status": "failed",
+          "verdict": "failed",
+          "outcome": "failed",
+          "input_sha256": "b9b33d40592530dd967cc55a5b6eb58ed83ed80e8c2318a03131dda3eb288c5f",
+          "usage": {
+            "provider_reported": false,
+            "prompt_tokens": null,
+            "completion_tokens": null,
+            "total_tokens": null,
+            "cached_tokens": null
+          },
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "unicode_suffix",
+          "status": "failed",
+          "verdict": "failed",
+          "outcome": "failed",
+          "input_sha256": "7b629a7d0c7ab37841ba4100d59473af63f94b216546760dfc1b6d33feeb5904",
+          "usage": {
+            "provider_reported": false,
+            "prompt_tokens": null,
+            "completion_tokens": null,
+            "total_tokens": null,
+            "cached_tokens": null
+          },
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "retry_config",
+          "status": "failed",
+          "verdict": "failed",
+          "outcome": "failed",
+          "input_sha256": "d21aeb03652690a52494e928764e31647da39ca2dc1d86db34365f74920966fb",
+          "usage": {
+            "provider_reported": false,
+            "prompt_tokens": null,
+            "completion_tokens": null,
+            "total_tokens": null,
+            "cached_tokens": null
+          },
+          "tool_calls": 0,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        }
+      ]
+    },
+    {
+      "name": "limit",
+      "mode": "scripted_contract",
+      "source": {
+        "revision": "7ac8a53ab76e6886db7bb7890399a7133997348b",
+        "dirty": true,
+        "source_sha256": "7054839f25e9b8fb005e0dfa195220ab859b1d3c8c0e23441303b7c1550ab885",
+        "file_count": 288,
+        "scope": "Rust, Cargo/toolchain manifests and embedded JS/JSON/HTML/CSS; includes untracked sources",
+        "executable_sha256": "857a2144e52d10ce64282b3f07660431ee01c53e5c16d063c79a11adb7aa2019",
+        "grader_rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+        "platform": "linux/x86_64"
+      },
+      "suite": "coding_v1",
+      "suite_sha256": "0f3790b7bd4bee64304363d900db126edd2edbfe702f5b5526ad9a53d0339ef2",
+      "repetitions": 1,
+      "selection": [
+        "inclusive_range",
+        "checked_clamp",
+        "unicode_suffix",
+        "retry_config"
+      ],
+      "summary": {
+        "selected": 4,
+        "passed": 0,
+        "failed": 4,
+        "inconclusive": 0,
+        "evaluator_errors": 0,
+        "completed": 0,
+        "incomplete": 4,
+        "run_failures": 0,
+        "infrastructure_errors": 0,
+        "not_run": 0,
+        "pass_rate": 0.0,
+        "total_tokens": 160,
+        "total_tool_calls": 32,
+        "total_tool_errors": 32,
+        "median_case_ms": 136,
+        "p95_case_ms": 149,
+        "sampled_process_rss_kib": 26280,
+        "cost": null
+      },
+      "cases": [
+        {
+          "id": "inclusive_range",
+          "status": "incomplete",
+          "verdict": "failed",
+          "outcome": "incomplete",
+          "input_sha256": "c1db61f7bd3bde13e1b870137a66145d067f36b5cc556d01799a5f2c037eaf75",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 32,
+            "completion_tokens": 8,
+            "total_tokens": 40,
+            "cached_tokens": null
+          },
+          "tool_calls": 8,
+          "tool_errors": 8,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "checked_clamp",
+          "status": "incomplete",
+          "verdict": "failed",
+          "outcome": "incomplete",
+          "input_sha256": "b581f3880b991ea85309649bb450cc2d566743866a75348c73d933f95e0ac37e",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 32,
+            "completion_tokens": 8,
+            "total_tokens": 40,
+            "cached_tokens": null
+          },
+          "tool_calls": 8,
+          "tool_errors": 8,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "unicode_suffix",
+          "status": "incomplete",
+          "verdict": "failed",
+          "outcome": "incomplete",
+          "input_sha256": "601505c94ef3624c4d860106928253c527fe113ce2744402188fbf64fab09a31",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 32,
+            "completion_tokens": 8,
+            "total_tokens": 40,
+            "cached_tokens": null
+          },
+          "tool_calls": 8,
+          "tool_errors": 8,
+          "trace_valid": true,
+          "artifact_count": 4
+        },
+        {
+          "id": "retry_config",
+          "status": "incomplete",
+          "verdict": "failed",
+          "outcome": "incomplete",
+          "input_sha256": "6145539c7582009fd08ec6bbb12459d195d3d4eb43842296fa6507b2c9f247c6",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 32,
+            "completion_tokens": 8,
+            "total_tokens": 40,
+            "cached_tokens": null
+          },
+          "tool_calls": 8,
+          "tool_errors": 8,
+          "trace_valid": true,
+          "artifact_count": 4
+        }
+      ]
+    },
+    {
+      "name": "loopback",
+      "mode": "live_provider",
+      "source": {
+        "revision": "7ac8a53ab76e6886db7bb7890399a7133997348b",
+        "dirty": true,
+        "source_sha256": "7054839f25e9b8fb005e0dfa195220ab859b1d3c8c0e23441303b7c1550ab885",
+        "file_count": 288,
+        "scope": "Rust, Cargo/toolchain manifests and embedded JS/JSON/HTML/CSS; includes untracked sources",
+        "executable_sha256": "857a2144e52d10ce64282b3f07660431ee01c53e5c16d063c79a11adb7aa2019",
+        "grader_rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+        "platform": "linux/x86_64"
+      },
+      "suite": "coding_v1",
+      "suite_sha256": "0f3790b7bd4bee64304363d900db126edd2edbfe702f5b5526ad9a53d0339ef2",
+      "repetitions": 1,
+      "selection": [
+        "retry_config"
+      ],
+      "summary": {
+        "selected": 1,
+        "passed": 1,
+        "failed": 0,
+        "inconclusive": 0,
+        "evaluator_errors": 0,
+        "completed": 1,
+        "incomplete": 0,
+        "run_failures": 0,
+        "infrastructure_errors": 0,
+        "not_run": 0,
+        "pass_rate": 1.0,
+        "total_tokens": 15,
+        "total_tool_calls": 2,
+        "total_tool_errors": 0,
+        "median_case_ms": 27,
+        "p95_case_ms": 27,
+        "sampled_process_rss_kib": 32108,
+        "cost": null
+      },
+      "cases": [
+        {
+          "id": "retry_config",
+          "status": "completed",
+          "verdict": "passed",
+          "outcome": "completed",
+          "input_sha256": "49e27f231c20bddfc5b431d2e4ef0242d5ad3e713e0ea5194dd43fdfce541a85",
+          "usage": {
+            "provider_reported": true,
+            "prompt_tokens": 12,
+            "completion_tokens": 3,
+            "total_tokens": 15,
+            "cached_tokens": null
+          },
+          "tool_calls": 2,
+          "tool_errors": 0,
+          "trace_valid": true,
+          "artifact_count": 4
+        }
+      ]
+    }
+  ]
+}

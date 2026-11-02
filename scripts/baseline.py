@@ -31,8 +31,8 @@ def measured(command):
 
 def source_digest():
     paths = [ROOT / "Cargo.toml", ROOT / "Cargo.lock", ROOT / "rust-toolchain.toml"]
-    # Embedded Web assets affect release binaries just like Rust sources.
-    for pattern in ("*.rs", "*.html", "*.js", "*.css"):
+    # Embedded Web assets and benchmark JSON fixtures affect binaries like Rust sources.
+    for pattern in ("*.rs", "*.html", "*.js", "*.css", "*.json"):
         paths += list((ROOT / "crates").rglob(pattern))
     paths += list((ROOT / "crates").rglob("Cargo.toml"))
     digest = hashlib.sha256()

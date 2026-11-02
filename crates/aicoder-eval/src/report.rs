@@ -60,6 +60,13 @@ pub struct EvalRunSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EvalReport {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<crate::EvalProvenance>,
+    #[serde(default)]
+    pub trace_capture: crate::TraceCapture,
+    /// False makes diff/patch unavailable; empty paths must not be interpreted as unchanged.
+    #[serde(default)]
+    pub workspace_capture_complete: bool,
     pub progress: aicoder_core::RunProgress,
     pub case: EvalCaseMetadata,
     pub run: EvalRunSummary,

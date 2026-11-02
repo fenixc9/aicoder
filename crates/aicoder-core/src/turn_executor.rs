@@ -22,7 +22,7 @@ use crate::{
     tools::{ApprovalHandler, DenyAllApproval, DispatcherConfig, ToolDispatcher, ToolRegistry},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TurnExecutionConfig {
     pub max_rounds: usize,
     pub stream: bool,
@@ -108,6 +108,22 @@ impl TurnExecutor {
     /// The installed tool snapshot, including explicit native contributions.
     pub fn tool_registry(&self) -> &ToolRegistry {
         self.dispatcher.registry().as_ref()
+    }
+
+    /// Actual immutable execution settings, for host diagnostics and reproducible evaluation.
+    pub fn execution_config(&self) -> &TurnExecutionConfig {
+        &self.config
+    }
+    pub fn dispatcher_config(&self) -> &DispatcherConfig {
+        self.dispatcher.configuration()
+    }
+    pub fn extension_catalog(&self) -> Option<crate::extensions::ExtensionCatalog> {
+        self.extensions
+            .as_ref()
+            .map(|extensions| extensions.catalog())
+    }
+    pub fn context_policy_name(&self) -> &'static str {
+        self.context_policy.name()
     }
 
     pub fn workspace_root(&self) -> &std::path::Path {

@@ -778,3 +778,29 @@ Session-v3 storage needs no migration: real leaf facts and public branch state a
 records. Provider projection still contains the original outer assistant/tool pair only.
 A composition interrupted after an external effect does not roll that effect back or retry it.
 See [Code Mode](code-mode.md) for output, branch, cleanup and accounting semantics.
+
+
+## S7: benchmark observations and grading semantics
+
+TurnExecutionConfig and DispatcherConfig gain serde support. TurnExecutor exposes immutable
+execution_config, dispatcher_config, extension_catalog and context_policy_name observations;
+these methods grant no execution authority. Existing builders and application flows are unchanged.
+
+EvalReport adds optional provenance, trace_capture and workspace_capture_complete (legacy JSON
+without them loads as unavailable). A completed run without graders is now Inconclusive;
+runtime failure or incomplete observation cannot produce Passed. Consumers must check
+workspace_capture_complete before interpreting an empty diff as unchanged. Bounded post-run
+snapshot failure retains core progress/usage/trace and yields an evaluator error.
+
+AgentTraceRecorder defaults to a contiguous 100,000-event / 32 MiB prefix. Inspect capture_status
+and never infer a complete run after overflow. AgentTrace::read_json validates bounded recorded
+observations and performs no execution. WorkspaceSnapshot gains content/type/executable-bit
+fingerprints, bounded capture and optional complete UTF-8 patches for non-Git fixtures.
+Copy/capture exhaustion is an error rather than partial data. CommandEvaluator reuses runtime's
+bounded Bash process owner; arguments must be UTF-8 and deadlines are at most 600 seconds.
+
+Existing session/event/SWE-bench prediction formats do not change. Old SWE-bench generation
+checkpoints retain their historical grading fields; this new benchmark archive format does
+not import them or claim their old Passed flag is an official resolved test. Benchmark
+manifest-v1 archives are exclusive, have no implicit resume, and verify their own input and
+artifact identities. See [coding benchmarks](coding-benchmarks.md) for scope and Linux support.

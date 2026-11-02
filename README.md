@@ -152,6 +152,11 @@ cargo run --locked -p aicoder-runtime --example offline_smoke
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --no-deps
 ~~~
 
+[Coding benchmark archives](docs/coding-benchmarks.md) run a pinned Rust/JSON task suite directly
+through core/runtime, with hidden post-run grading, verifiable events/diffs and input-checked
+comparisons. `aicoder-bench run` defaults to offline scripted contracts; service runs require
+explicit `--live`. Contract pass rates are separate from real-model coding success.
+
 See [the evaluation README](crates/aicoder-eval/README.md) for evaluation and
 SWE-bench usage.
 See [the development baseline](docs/development-baseline.md) for toolchain and

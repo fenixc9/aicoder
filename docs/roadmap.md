@@ -1,6 +1,6 @@
 # aicoder 路线图
 
-状态：S0–S6 已完成当前 Linux 范围实现；下一阶段 S7 最终验收与 Pi 对照。本文替代旧 TODO 的排期。
+状态：S0–S6 已完成当前 Linux 范围实现；S7 正在推进评测、最终验收与 Pi 对照。本文替代旧 TODO 的排期。
 基线和验证依据见 [S0 开发基线](development-baseline.md)。
 S1 的统一模型契约已贯穿执行器、工具、会话、CLI/TUI 和 bench，wire types 已移至
 providers；部分结果、任务预算和 provider 配置均已接通。S1 验收见 [验收记录](s1-acceptance.md)。见 [迁移说明](migrations.md) 和 [模型 API](model-api.md)。
@@ -260,11 +260,13 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 ### S7：持续 bench、功能验收与发布
 
 - [ ] 每阶段运行离线契约及小型编码任务集；真实模型 smoke 手动触发并固定参数。
-- [ ] bench 直接使用 core/runtime，不解析终端文本；固化 commit、配置、模型、
+  离线编码任务集与显式 --live 入口已就绪；真实 provider 任务成绩仍未采集，本机模拟服务不作为真实模型证据。
+- [x] bench 直接使用 core/runtime，不解析终端文本；固化 commit、配置、模型、
   指令/资源版本、扩展集合、case、工作区、seed（若支持）和产物。
-- [ ] 记录成功率、停止原因、工具失败、usage、延迟、内存和成本（价格未知则不估算）。
+  aicoder-bench 提供实际执行快照、输入指纹和独立归档；见 [契约](coding-benchmarks.md) 与 [验收](s7-bench-acceptance.md)。
+- [x] 记录成功率、停止原因、工具失败、usage、延迟、内存和成本（价格未知则不估算）。
   网络/provider 的非确定性作为实验限制记录。
-- [ ] 保存事件与工作区 diff；可重放 scripted provider/tool 验证回归。
+- [x] 保存事件与工作区 diff；可重放 scripted provider/tool 验证回归。
   事件回放仅验证记录与展示，不宣称能还原外部命令或精确复现模型输出。
 - [ ] SWE-bench 保持生成与官方 grading 隔离；失败样本计入总体结果。
 - [ ] 在相同任务、模型和资源预算下对比 Pi；分别报告功能覆盖与编码成功率。
