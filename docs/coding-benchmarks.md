@@ -156,5 +156,8 @@ legacy checkout operations or replace official grading. The currently verified a
 requires Linux /proc/self/fd; other platforms return an explicit unsupported error.
 
 The executable tests and acceptance evidence are in [S7 benchmark acceptance](s7-bench-acceptance.md).
-Real-provider coding success, the identical-budget Pi run, full feature-matrix audit and release
-acceptance remain open. Neither these contract scores nor one manual smoke replaces that work.
+[The first Spark/Pi smoke](pi-comparison.md) now records four same-task runs per agent, including
+the incomplete aicoder case. It is exploratory: non-sandboxed shared /tmp writes and incomplete
+Pi package pinning prevent final comparison acceptance. Expanded real-provider coding results,
+the full feature-matrix audit and release acceptance remain open. Contract scores and one
+manual smoke cannot replace those requirements.

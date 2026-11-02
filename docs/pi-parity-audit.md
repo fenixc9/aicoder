@@ -69,9 +69,11 @@ when an actual host integration demonstrates the same requested capability.
 
 The [coding archive](s7-bench-acceptance.md) and
 [pinned official SWE bridge](s7-swe-acceptance.md) establish contracts, artifact identity and
-full failure denominators. They do not supply real-service coding results. No same-task/model/
-budget Pi comparison has been collected. The original final score/release requirements stay
-open; source availability, tests and local scripted scores cannot substitute for them.
+full failure denominators. [The first real Spark/Pi smoke](pi-comparison.md) supplies four
+same-task/model cases per agent with shared request/tool/output limits: aicoder completed and
+passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /tmp effects and
+incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
+original score/release requirements stay open; local scripted scores cannot substitute for them.
 
 The next implementation order is package activation/remote acquisition, typed tool
 media, then remaining Code Mode/interception coverage. The final audit must rerun the matrix

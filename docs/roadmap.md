@@ -260,7 +260,7 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
 ### S7：持续 bench、功能验收与发布
 
 - [ ] 每阶段运行离线契约及小型编码任务集；真实模型 smoke 手动触发并固定参数。
-  离线编码任务集与显式 --live 入口已就绪；真实 provider 任务成绩仍未采集，本机模拟服务不作为真实模型证据。
+  离线编码任务集与显式 --live 入口已就绪；[首轮 Spark/Pi smoke](pi-comparison.md) 已采集四题，完整评测仍待隔离执行与扩大样本。本机模拟服务不作为真实模型证据。
 - [x] bench 直接使用 core/runtime，不解析终端文本；固化 commit、配置、模型、
   指令/资源版本、扩展集合、case、工作区、seed（若支持）和产物。
   aicoder-bench 提供实际执行快照、输入指纹和独立归档；见 [契约](coding-benchmarks.md) 与 [验收](s7-bench-acceptance.md)。
@@ -270,8 +270,10 @@ S3 已整体通过当前 Linux 验收，见 [授权与阶段验收](s3-approvals
   事件回放仅验证记录与展示，不宣称能还原外部命令或精确复现模型输出。
 - [x] SWE-bench 保持生成与官方 grading 隔离；失败样本计入总体结果。
   schema 4 续跑绑定全量输入与产物，官方 5.0.2 / 本地 Docker 夹具已互通；见 [契约](swebench-contract.md) 与 [验收](s7-swe-acceptance.md)。
-  夹具比例不作为实际 SWE-bench 编码成绩；真实模型与 Pi 对照仍待采集。
+  夹具比例不作为实际 SWE-bench 编码成绩；真实 SWE-bench 与最终 Pi 对照仍待完成。
 - [ ] 在相同任务、模型和资源预算下对比 Pi；分别报告功能覆盖与编码成功率。
+  首轮 Spark / DeepSeek-V4.1-Flash-1017 同题 smoke：aicoder 完成并通过 3/4，Pi 4/4；修复测试均 4/4。
+  保留未完成结果；非沙箱 /tmp 副作用与 Pi 完整执行 pin 尚未满足最终验收，下一步先隔离再扩大成对样本。
 - [ ] 对照第 4 节逐项验收，完成公开 API 文档、迁移说明、运行示例及发布说明。
   [进行中的功能矩阵](pi-parity-audit.md)已列出包激活、远端包、工具图片及 Code Mode 辅助模型等实际差异；stock 进程/MCP 激活已补齐，不能以 S6 清单替代完整 Pi 对齐。
 
