@@ -7,6 +7,7 @@ Linux PTY and /proc checks require no browser, model credentials or remote acces
 """
 import argparse
 import fcntl
+import hashlib
 import http.client
 import http.server
 import json
@@ -25,9 +26,13 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--bin-dir", type=Path, default=ROOT / "target/debug")
+parser.add_argument("--packages", action="store_true", help="Install trusted fixture packages and activate their executables")
 args = parser.parse_args()
 BINS = args.bin_dir.resolve()
 TOKEN = "fixture-host-token-0123456789abcdef"
+NAMESPACE = "hostpack_" + hashlib.sha256(b"host-package/peer").hexdigest()[:12] if args.packages else "host"
+WRITE = NAMESPACE + "__write"
+READ = NAMESPACE + "__read"
 requests = []
 failures = []
 
@@ -38,11 +43,11 @@ class Provider(http.server.BaseHTTPRequestHandler):
             value = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(value)
             names = {t["function"]["name"] for t in value["tools"]}
-            assert "host__write" in names and "host__read" in names, names
+            assert WRITE in names and READ in names, names
             assert "DO_NOT_MAKE_THIS_A_SYSTEM_PROMPT" not in json.dumps(value)
             call = value["messages"][-1]["role"] != "tool"
             message = {"role": "assistant", "content": None, "tool_calls": [{
-                "id": "host-write", "type": "function", "function": {"name": "host__write",
+                "id": "host-write", "type": "function", "function": {"name": WRITE,
                 "arguments": json.dumps({"path": "result.txt", "content": "host approved"})}}]} if call else {
                 "role": "assistant", "content": "host done"}
             body = json.dumps({"id": "fixture", "object": "chat.completion", "created": 1,
@@ -97,6 +102,32 @@ def reaped(root):
     until(lambda: not Path(f"/proc/{pid}").exists(), "MCP child reap")
 
 
+def configure(root, env, kind, mode):
+    program = BINS / ("aicoder-mcp-fixture" if kind == "mcp_stdio" else "aicoder-process-fixture")
+    launch = root / "launch.json"
+    if args.packages:
+        source = root / "package-source"
+        source.mkdir()
+        (source / "aicoder-package.json").write_text(json.dumps({
+            "schema_version": 1, "id": "host-package", "version": "1", "files": [],
+            "resources": {}, "permissions": {"execution": True},
+            "programs": [{"name": "fixture", "version": "1"}],
+            "executables": [{"id": "peer", "protocol": "mcp" if kind == "mcp_stdio" else "process",
+                "program": {"kind": "dependency", "name": "fixture"},
+                "arguments": [mode, "{workspace}/mcp.pid"]}]}))
+        count = len(requests)
+        subprocess.run([str(BINS / "aicoder"), "--no-config", "--no-resources", "--workspace", str(root),
+            "packages", "install", str(source), "--allow-execution"], env=env,
+            stdout=subprocess.DEVNULL, check=True, timeout=10)
+        assert len(requests) == count and not (root / "mcp.pid").exists(), "installation must not execute"
+        launch.write_text(json.dumps({"schema_version": 1, "profiles": {"fixture": {
+            "program": str(program), "version": "1", "environment_references": {}}}}))
+        return ["--activate-packages", "--package-programs", str(launch)]
+    launch.write_text(json.dumps({"schema_version": 1, "entries": [{"id": "host",
+        "kind": kind, "program": str(program), "arguments": [mode, str(root / "mcp.pid")]}]}))
+    return ["--extension-config", str(launch)]
+
+
 server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Provider)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 try:
@@ -104,17 +135,13 @@ try:
         for frontend in ["cli_json", "rpc", "web", "tui"]:
             root = Path(folder) / frontend
             root.mkdir()
-            launch = root / "launch.json"
-            launch.write_text(json.dumps({"schema_version": 1, "entries": [{"id": "host",
-                "kind": "mcp_stdio", "program": str(BINS / "aicoder-mcp-fixture"),
-                "arguments": ["modern", str(root / "mcp.pid")]}]}))
             env = {"PATH": os.environ.get("PATH", ""), "TERM": "xterm-256color",
                 "AICODER_HOME": str(root / "state"), "OPENAI_API_KEY": "fixture-key",
                 "AICODER_API_BASE": f"http://127.0.0.1:{server.server_address[1]}/v1",
                 "AICODER_MODEL": "test", "AICODER_STREAM": "false",
                 "AICODER_PROXY": "disabled", "AICODER_MAX_RETRIES": "0", "AICODER_WEB_TOKEN": TOKEN}
             common = ["--no-config", "--no-resources", "--workspace", str(root),
-                "--extension-config", str(launch)]
+                *configure(root, env, "mcp_stdio", "modern")]
             if frontend == "cli_json":
                 output = subprocess.check_output([str(BINS / "aicoder"), *common,
                     "--no-session", "--yes", "--json", "--prompt", "host fixture"], env=env, timeout=15)
@@ -147,7 +174,7 @@ try:
                         if frame["type"] == "run_finished":
                             assert frame["result"]["status"] == "completed", frame
                             break
-                    assert approvals == ["host__write"], approvals
+                    assert approvals == [WRITE], approvals
                     send({"type": "shutdown"})
                     while json.loads(line(child.stdout)).get("id") != sequence:
                         pass
@@ -179,7 +206,7 @@ try:
                     state = until(lambda: (s if (s := api("GET", path))["approvals"] else None), "Web approval")
                     assert not (root / "result.txt").exists()
                     question = state["approvals"][0]
-                    assert question["invocation"]["name"] == "host__write"
+                    assert question["invocation"]["name"] == WRITE
                     api("POST", path + "/approval", {"approval_id": question["id"], "decision": "allow_once"})
                     state = until(lambda: (s if (s := api("GET", path))["result"] else None), "Web completion")
                     assert state["result"]["status"] == "completed", state
@@ -221,7 +248,7 @@ try:
                 try:
                     until(lambda: marker("Sessions"), "TUI startup")
                     os.write(master, b"host fixture\r")
-                    until(lambda: marker("host__write") and marker("Approval"), "TUI approval")
+                    until(lambda: marker(WRITE) and marker("Approval"), "TUI approval")
                     assert not (root / "result.txt").exists()
                     os.write(master, b"y")
                     until(recorded_completion, "TUI canonical completion")
@@ -242,16 +269,14 @@ try:
         ]:
             root = Path(folder) / (binary + "-startup")
             root.mkdir()
-            launch = root / "launch.json"
-            launch.write_text(json.dumps({"schema_version": 1, "entries": [{"id": "slow",
-                "kind": "process", "program": str(BINS / "aicoder-process-fixture"),
-                "arguments": ["init_slow", str(root / "mcp.pid")]}]}))
             env["AICODER_HOME"] = str(root / "state")
             common = ["--no-config", "--no-resources", "--workspace", str(root),
-                "--extension-config", str(launch)]
+                *configure(root, env, "process", "init_slow")]
             if binary in ["aicoder", "aicoder-tui"]:
-                subprocess.run([str(BINS / binary), *common, "--show-config"], env=env,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10, check=False)
+                command = "config" if binary == "aicoder" else "--show-config"
+                metadata = subprocess.run([str(BINS / binary), *common, command], env=env,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=10, check=False)
+                assert metadata.returncode == (1 if binary == "aicoder" else 0), metadata.stderr
                 assert not (root / "mcp.pid").exists(), "metadata must never launch children"
             child = subprocess.Popen([str(BINS / binary), *common, *extra], env=env,
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -264,6 +289,7 @@ try:
                 stop(child)
         assert len(requests) == 8 and not failures, (len(requests), failures)
         print(json.dumps({"frontends": ["cli_json", "rpc", "web", "tui_pty"],
+            "package_executables": args.packages, "installation_does_not_launch": args.packages,
             "real_mcp_child": True, "explicit_approvals": ["rpc", "web", "tui"],
             "all_children_reaped": True, "startup_cancellation": ["cli", "tui", "web"],
             "metadata_does_not_launch": True, "loopback_model_requests": len(requests)}))

@@ -120,8 +120,14 @@ preflights every entry, starts existing process/MCP adapters, and returns a `Pac
 Pass its `extensions()` to the existing executor builder; retain the activation owner and await
 `shutdown()` at the idle lifecycle boundary. The `mcp-stdio` feature is needed for MCP entries.
 Partial activation failure awaits all new owners. Existing executors remain the host's choice
-until a successful replacement is installed. CLI/TUI install/reload never automatically start
-package executables; stock UI integration is subsequent S6 work.
+until a successful replacement is installed. Stock CLI/RPC/TUI/Web use the explicit
+[--activate-packages host path](host-extensions.md); installation/resource reload still do
+not start package code. The optional --package-programs file supplies host-owned dependency
+profiles. Direct/package owners preflight together and publish one complete catalog.
+Dropping a PackageActivation invalidates retained tools and signals its owned processes;
+await shutdown to confirm cleanup. Catalog versions retain the package content digest even
+when resource reload selects a newer text generation. This digest identifies package bytes,
+not an automatic identity proof for host-attested external program dependencies.
 
 Bundled executables must be allowlisted regular files with executable mode. Dependency entries
 must name a declared program requirement. Arguments are literal strings with only `{package}`

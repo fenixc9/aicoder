@@ -752,6 +752,14 @@ mod process_activation {
             .await
             .unwrap();
         let extensions = activation.extensions();
+        assert!(
+            extensions.catalog().extensions[0]
+                .version
+                .starts_with(&format!(
+                    "package-sha256:{}@",
+                    snapshot.get("demo").unwrap().pin.sha256
+                ))
+        );
         let tool = extensions
             .catalog()
             .registrations
@@ -796,6 +804,321 @@ mod process_activation {
             !Path::new(&format!("/proc/{}/stat", pid.trim())).exists(),
             "child owner must be reaped"
         );
+    }
+    #[tokio::test]
+    async fn dropped_package_owner_invalidates_retained_tools_without_cancelling_host_context() {
+        assert_dropped_package_owner(
+            env!("CARGO_BIN_EXE_aicoder-process-fixture"),
+            "process",
+            "normal",
+        )
+        .await;
+    }
+    #[cfg(feature = "mcp-fixtures")]
+    #[tokio::test]
+    async fn dropped_mcp_package_owner_invalidates_retained_tools() {
+        assert_dropped_package_owner(env!("CARGO_BIN_EXE_aicoder-mcp-fixture"), "mcp", "modern")
+            .await;
+    }
+    async fn assert_dropped_package_owner(program: &str, protocol: &str, mode: &str) {
+        let source = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let mut value = executable_manifest(source.path());
+        value["executables"][0]["protocol"] = json!(protocol);
+        value["executables"][0]["arguments"][0] = json!(mode);
+        save(source.path(), &value);
+        let store = PackageStore::open(home.path()).unwrap();
+        install_code(&store, source.path());
+        let snapshot = store.snapshot(None, None).unwrap();
+        let context = TurnExecutionContext::new();
+        let mut programs = PackagePrograms::new(Arc::new(BTreeMap::<String, String>::new()));
+        programs
+            .register("fixture", HostProgram::new(program, "1"))
+            .unwrap();
+        let activation = snapshot
+            .activate(&store, &programs, workspace.path(), context.clone())
+            .await
+            .unwrap();
+        let extensions = activation.extensions();
+        let tool = extensions
+            .catalog()
+            .registrations
+            .into_iter()
+            .find(|r| r.name.ends_with("__write"))
+            .unwrap()
+            .name;
+        let pid = fs::read_to_string(workspace.path().join("peer.pid")).unwrap();
+        drop(activation);
+        for _ in 0..300 {
+            if !Path::new(&format!("/proc/{}/stat", pid.trim())).exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_dead(&workspace.path().join("peer.pid"));
+        assert!(!context.is_cancelled());
+        let agent = Agent::new(
+            TurnExecutor::builder(Provider { tool })
+                .workspace(workspace.path())
+                .extensions(extensions)
+                .approval(AllowAllApproval)
+                .build()
+                .unwrap(),
+            AgentConfig::new("offline"),
+        );
+        let result = agent
+            .run("write after owner drop", Arc::new(()))
+            .await
+            .unwrap();
+        assert_eq!(
+            result
+                .execution_result
+                .progress
+                .messages
+                .iter()
+                .flat_map(|m| &m.content)
+                .filter(|b| matches!(b, ContentBlock::ToolResult { is_error: true, .. }))
+                .count(),
+            1
+        );
+        assert!(!workspace.path().join("note.txt").exists());
+    }
+    #[tokio::test]
+    async fn combined_host_preflights_package_profiles_before_any_direct_process() {
+        use aicoder_runtime::host_extensions::*;
+        let source = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let runtime = runtime(workspace.path(), home.path());
+        executable_manifest(source.path());
+        install_code(&runtime.package_store().unwrap(), source.path());
+        let manifest = HostExtensionManifest {
+            schema_version: 1,
+            entries: vec![HostExtensionEntry {
+                id: "direct".into(),
+                kind: HostExtensionKind::Process,
+                program: env!("CARGO_BIN_EXE_aicoder-process-fixture").into(),
+                arguments: vec![
+                    "normal".into(),
+                    workspace.path().join("direct.pid").to_string_lossy().into(),
+                ],
+                environment_references: BTreeMap::new(),
+                aliases: BTreeMap::new(),
+                capabilities: BTreeMap::new(),
+            }],
+        };
+        let programs = HostProgramManifest::default();
+        assert!(
+            runtime
+                .activate_host_extensions(&manifest, Some(&programs), TurnExecutionContext::new())
+                .await
+                .is_err()
+        );
+        assert!(!workspace.path().join("direct.pid").exists());
+        assert!(!workspace.path().join("peer.pid").exists());
+        assert!(runtime.extensions().is_none());
+    }
+    #[tokio::test]
+    async fn package_startup_failure_awaits_direct_owner_and_publishes_no_snapshot() {
+        use aicoder_runtime::host_extensions::*;
+        let source = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let runtime = runtime(workspace.path(), home.path());
+        let mut value = executable_manifest(source.path());
+        value["executables"][0]["arguments"][0] = json!("bad_json");
+        save(source.path(), &value);
+        install_code(&runtime.package_store().unwrap(), source.path());
+        let manifest = HostExtensionManifest {
+            schema_version: 1,
+            entries: vec![HostExtensionEntry {
+                id: "direct".into(),
+                kind: HostExtensionKind::Process,
+                program: env!("CARGO_BIN_EXE_aicoder-process-fixture").into(),
+                arguments: vec![
+                    "normal".into(),
+                    workspace.path().join("direct.pid").to_string_lossy().into(),
+                ],
+                environment_references: BTreeMap::new(),
+                aliases: BTreeMap::new(),
+                capabilities: BTreeMap::new(),
+            }],
+        };
+        let programs = HostProgramManifest {
+            schema_version: 1,
+            profiles: BTreeMap::from([(
+                "fixture".into(),
+                HostProgramProfile {
+                    program: env!("CARGO_BIN_EXE_aicoder-process-fixture").into(),
+                    version: "1".into(),
+                    environment_references: BTreeMap::new(),
+                },
+            )]),
+        };
+        assert!(
+            runtime
+                .activate_host_extensions(&manifest, Some(&programs), TurnExecutionContext::new())
+                .await
+                .is_err()
+        );
+        assert_dead(&workspace.path().join("direct.pid"));
+        assert_dead(&workspace.path().join("peer.pid"));
+        assert!(runtime.extensions().is_none());
+    }
+    #[tokio::test]
+    async fn combined_executable_budget_rejects_before_starting_any_owner() {
+        use aicoder_runtime::host_extensions::*;
+        let source = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let runtime = runtime(workspace.path(), home.path());
+        executable_manifest(source.path());
+        install_code(&runtime.package_store().unwrap(), source.path());
+        let programs = HostProgramManifest {
+            schema_version: 1,
+            profiles: BTreeMap::from([(
+                "fixture".into(),
+                HostProgramProfile {
+                    program: env!("CARGO_BIN_EXE_aicoder-process-fixture").into(),
+                    version: "1".into(),
+                    environment_references: BTreeMap::new(),
+                },
+            )]),
+        };
+        let manifest = HostExtensionManifest {
+            schema_version: 1,
+            entries: (0..32)
+                .map(|i| HostExtensionEntry {
+                    id: format!("direct{i}"),
+                    kind: HostExtensionKind::Process,
+                    program: env!("CARGO_BIN_EXE_aicoder-process-fixture").into(),
+                    arguments: vec![
+                        "normal".into(),
+                        workspace
+                            .path()
+                            .join(format!("direct{i}.pid"))
+                            .to_string_lossy()
+                            .into(),
+                    ],
+                    environment_references: BTreeMap::new(),
+                    aliases: BTreeMap::new(),
+                    capabilities: BTreeMap::new(),
+                })
+                .collect(),
+        };
+        let error = runtime
+            .activate_host_extensions(&manifest, Some(&programs), TurnExecutionContext::new())
+            .await
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("count budget"));
+        assert_eq!(fs::read_dir(workspace.path()).unwrap().count(), 0);
+    }
+    #[tokio::test]
+    async fn resource_reload_retains_executable_generation_and_exact_package_content_identity() {
+        use aicoder_runtime::host_extensions::*;
+        let source = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let runtime = runtime(workspace.path(), home.path());
+        let mut value = executable_manifest(source.path());
+        let store = runtime.package_store().unwrap();
+        install_code(&store, source.path());
+        let programs = HostProgramManifest {
+            schema_version: 1,
+            profiles: BTreeMap::from([(
+                "fixture".into(),
+                HostProgramProfile {
+                    program: env!("CARGO_BIN_EXE_aicoder-process-fixture").into(),
+                    version: "1".into(),
+                    environment_references: BTreeMap::new(),
+                },
+            )]),
+        };
+        let active = runtime
+            .activate_host_extensions(
+                &HostExtensionManifest::default(),
+                Some(&programs),
+                TurnExecutionContext::new(),
+            )
+            .await
+            .unwrap();
+        let old_pin = runtime
+            .package_snapshot()
+            .unwrap()
+            .get("demo")
+            .unwrap()
+            .pin
+            .clone();
+        let old_revision = active.extensions().catalog().extensions[0].version.clone();
+        let runtime = runtime.with_extensions(active.extensions()).unwrap();
+        value["version"] = json!("2");
+        value["executables"][0]["arguments"][1] = json!("{workspace}/new.pid");
+        save(source.path(), &value);
+        install_code(&store, source.path());
+        let next = runtime.reload_resources().unwrap();
+        assert_eq!(
+            next.package_snapshot()
+                .unwrap()
+                .get("demo")
+                .unwrap()
+                .pin
+                .version,
+            "2"
+        );
+        assert_eq!(
+            next.extensions().unwrap().catalog().extensions[0].version,
+            old_revision
+        );
+        assert!(old_revision.starts_with(&format!("package-sha256:{}@", old_pin.sha256)));
+        assert!(!workspace.path().join("new.pid").exists());
+        let pid = fs::read_to_string(workspace.path().join("peer.pid")).unwrap();
+        assert!(Path::new(&format!("/proc/{}/stat", pid.trim())).exists());
+        drop(active);
+        for _ in 0..300 {
+            if !Path::new(&format!("/proc/{}/stat", pid.trim())).exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_dead(&workspace.path().join("peer.pid"));
+    }
+    #[tokio::test]
+    async fn startup_opt_in_does_not_restore_revoked_package_trust() {
+        use aicoder_runtime::host_extensions::*;
+        let source = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let runtime = runtime(workspace.path(), home.path());
+        executable_manifest(source.path());
+        let store = runtime.package_store().unwrap();
+        install_code(&store, source.path());
+        assert_eq!(runtime.package_snapshot().unwrap().packages().len(), 1);
+        store.uninstall("demo").unwrap();
+        let programs = HostProgramManifest {
+            schema_version: 1,
+            profiles: BTreeMap::from([(
+                "fixture".into(),
+                HostProgramProfile {
+                    program: env!("CARGO_BIN_EXE_aicoder-process-fixture").into(),
+                    version: "1".into(),
+                    environment_references: BTreeMap::new(),
+                },
+            )]),
+        };
+        assert!(
+            runtime
+                .activate_host_extensions(
+                    &HostExtensionManifest::default(),
+                    Some(&programs),
+                    TurnExecutionContext::new()
+                )
+                .await
+                .is_err()
+        );
+        assert!(!workspace.path().join("peer.pid").exists());
+        assert!(runtime.extensions().is_none());
     }
     #[tokio::test]
     async fn failed_partial_activation_reaps_started_owners_and_keeps_old_snapshot() {

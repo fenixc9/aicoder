@@ -1,5 +1,20 @@
 # API migrations
 
+## S7: explicit package executable owners
+
+CLI/RPC/TUI/Web opt into installed package executables with --activate-packages and an
+optional --package-programs host file. Runtime::activate_host_extensions preflights selected
+package trust/profiles with direct stdio settings and returns one owner/catalog. Existing
+activate_extensions and PackageSnapshot::activate APIs remain available. Installation and
+resource reload do not start code; executable changes require an explicit new generation.
+
+PackageActivation drop now invalidates retained tool clones and signals cleanup independently
+of Tokio. Await shutdown for its cleanup report. Package extension catalog versions now have
+the opaque form package-sha256:DIGEST@PEER_STAMP; tool names/wire protocols are unchanged.
+They identify package content and observed peer metadata, not automatic host binary identity.
+ActivatedExtensions::finish preserves a run error together with cleanup uncertainty. No
+persisted session/package format changed and execution grants are not restored from history.
+
 ## S7: source observations for isolated benchmarks
 
 `SourceStamp::load_observation` accepts a bounded explicit host observation only when current

@@ -1,4 +1,5 @@
 //! Explicit host launch files, never project-discovered executable configuration or restored grants.
+mod programs;
 use crate::Runtime;
 use aicoder_core::{
     TurnExecutionContext,
@@ -7,6 +8,7 @@ use aicoder_core::{
 };
 use anyhow::{Result, ensure};
 use async_trait::async_trait;
+pub use programs::{HostProgramManifest, HostProgramProfile};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -19,6 +21,14 @@ use std::{
 pub struct HostExtensionManifest {
     pub schema_version: u32,
     pub entries: Vec<HostExtensionEntry>,
+}
+impl Default for HostExtensionManifest {
+    fn default() -> Self {
+        Self {
+            schema_version: 1,
+            entries: Vec::new(),
+        }
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -90,7 +100,8 @@ impl HostExtensionManifest {
                 identifier(&entry.id)
                     && ids.insert(&entry.id)
                     && entry.program.is_absolute()
-                    && entry.program.as_os_str().as_encoded_bytes().len() <= 4096,
+                    && entry.program.as_os_str().as_encoded_bytes().len() <= 4096
+                    && !entry.program.as_os_str().as_encoded_bytes().contains(&0),
                 "invalid host extension identity/program"
             );
             ensure!(
@@ -162,6 +173,19 @@ pub struct ActivatedExtensions {
     scope: TurnExecutionContext,
 }
 impl ActivatedExtensions {
+    fn empty(scope: TurnExecutionContext) -> Self {
+        Self {
+            extensions: Arc::new(ExtensionSet::default()),
+            owners: Vec::new(),
+            scope,
+        }
+    }
+    fn abort(&self) {
+        self.scope.cancel("host extension owner dropped");
+        for owner in &self.owners {
+            owner.close();
+        }
+    }
     /// Registrations only: cloning this handle does not extend executable authority.
     pub fn extensions(&self) -> Arc<ExtensionSet> {
         self.extensions.clone()
@@ -179,16 +203,116 @@ impl ActivatedExtensions {
         );
         Ok(())
     }
-}
-impl Drop for ActivatedExtensions {
-    fn drop(&mut self) {
-        self.scope.cancel("host extension owner dropped");
-        for owner in &self.owners {
-            owner.close();
+    /// Await cleanup after the run owner has ended, retaining both errors when cleanup fails.
+    pub async fn finish<T>(self, outcome: Result<T>) -> Result<T> {
+        match (outcome, self.shutdown().await) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), Ok(())) => Err(error),
+            (Ok(_), Err(cleanup)) => Err(cleanup),
+            (Err(error), Err(cleanup)) => {
+                Err(error.context(format!("host extension cleanup also failed: {cleanup:#}")))
+            }
         }
     }
 }
+
+impl Drop for ActivatedExtensions {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+#[async_trait]
+impl Owner for ActivatedExtensions {
+    fn close(&self) {
+        self.abort();
+    }
+    async fn shutdown(&self) -> bool {
+        ActivatedExtensions::shutdown(self).await.is_ok()
+    }
+}
+#[cfg(feature = "process-extensions")]
+struct PackageOwner(crate::packages::PackageActivation);
+#[cfg(feature = "process-extensions")]
+#[async_trait]
+impl Owner for PackageOwner {
+    fn close(&self) {
+        self.0.abort();
+    }
+    async fn shutdown(&self) -> bool {
+        self.0.shutdown().await.is_ok()
+    }
+}
 impl Runtime {
+    /// Preflight package trust/profiles before starting direct stdio or package owners.
+    /// A package manifest opts into the currently host-selected, installed package snapshot.
+    /// No installation, execution consent or tool approval is inferred from package selection.
+    pub async fn activate_host_extensions(
+        &self,
+        manifest: &HostExtensionManifest,
+        package_programs: Option<&HostProgramManifest>,
+        context: TurnExecutionContext,
+    ) -> Result<ActivatedExtensions> {
+        let Some(programs) = package_programs else {
+            return self.activate_extensions(manifest, context).await;
+        };
+        manifest.validate()?;
+        programs.validate()?;
+        ensure!(
+            cfg!(feature = "process-extensions"),
+            "package activation requires host-extensions"
+        );
+        ensure!(
+            self.config.packages.enabled,
+            "package activation is disabled by the host"
+        );
+        #[cfg(not(feature = "process-extensions"))]
+        {
+            let _ = context;
+            unreachable!("transport capability checked before preparation");
+        }
+        #[cfg(feature = "process-extensions")]
+        {
+            let profiles = programs.resolve(self.environment.clone())?;
+            let snapshot = self.package_snapshot()?;
+            let prepared = snapshot.prepare_activation(
+                &self.package_store()?,
+                &profiles,
+                &self.config.workspace,
+            )?;
+            ensure!(
+                manifest.entries.len() + prepared.len() <= 32,
+                "host executable count budget exceeded"
+            );
+            let scope = context.child();
+            let mut active = ActivatedExtensions::empty(scope.clone());
+            let result = async {
+                let direct = self.activate_extensions(manifest, scope.child()).await?;
+                let direct_extensions = direct.extensions();
+                active.owners.push(Box::new(direct));
+                let packages = prepared.activate(scope.child()).await?;
+                let package_extensions = packages.extensions();
+                active.owners.push(Box::new(PackageOwner(packages)));
+                let combined = Arc::new(direct_extensions.combine(&package_extensions)?);
+                combined.validate_tools(&self.default_registry()?)?;
+                if let Some(current) = &self.extension_snapshot {
+                    current.combine(&combined)?;
+                }
+                ensure!(!scope.is_cancelled(), "host package activation cancelled");
+                active.extensions = combined;
+                Ok::<_, anyhow::Error>(())
+            }
+            .await;
+            if let Err(error) = result {
+                let cleanup = active.shutdown().await;
+                return Err(error.context(if cleanup.is_ok() {
+                    "host package activation failed; started owners stopped"
+                } else {
+                    "host package activation failed; cleanup incomplete"
+                }));
+            }
+            Ok(active)
+        }
+    }
     /// Resolve all launch settings, then connect and validate one complete immutable catalog.
     ///
     /// Failure publishes no snapshot and awaits started owners. Adoption remains explicit via
@@ -200,11 +324,7 @@ impl Runtime {
     ) -> Result<ActivatedExtensions> {
         manifest.validate()?;
         let scope = context.child();
-        let mut activation = ActivatedExtensions {
-            extensions: Arc::new(ExtensionSet::default()),
-            owners: Vec::new(),
-            scope: scope.clone(),
-        };
+        let mut activation = ActivatedExtensions::empty(scope.clone());
         #[cfg(feature = "process-extensions")]
         let configs = manifest
             .entries
@@ -221,9 +341,15 @@ impl Runtime {
                     .map(|arg| arg.replace("{workspace}", &self.config.workspace.to_string_lossy()))
                     .collect();
                 for (name, reference) in &entry.environment_references {
-                    let value = self.environment.value(reference)?.ok_or_else(|| {
-                        anyhow::anyhow!("host extension credential reference is unavailable")
-                    })?;
+                    let value = self
+                        .environment
+                        .value(reference)
+                        .map_err(|_| {
+                            anyhow::anyhow!("host extension credential reference lookup failed")
+                        })?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("host extension credential reference is unavailable")
+                        })?;
                     config.environment.insert(name.clone(), value);
                 }
                 if entry.kind == HostExtensionKind::Process {
@@ -303,5 +429,30 @@ impl Runtime {
             }));
         }
         Ok(activation)
+    }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    struct IncompleteCleanup;
+    #[async_trait]
+    impl Owner for IncompleteCleanup {
+        fn close(&self) {}
+        async fn shutdown(&self) -> bool {
+            false
+        }
+    }
+    #[tokio::test]
+    async fn incomplete_cleanup_does_not_hide_the_original_run_failure() {
+        let mut active = ActivatedExtensions::empty(TurnExecutionContext::new());
+        active.owners.push(Box::new(IncompleteCleanup));
+        let error = active
+            .finish::<()>(Err(anyhow::anyhow!("original run failure")))
+            .await
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("original run failure"));
+        assert!(message.contains("cleanup incomplete"));
     }
 }

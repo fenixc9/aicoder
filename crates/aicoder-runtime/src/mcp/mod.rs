@@ -251,12 +251,20 @@ impl McpExtension {
             .collect()
     }
     pub fn extension(&self) -> anyhow::Result<Extension> {
-        let version = format!(
+        self.build_extension(&self.peer_revision())
+    }
+    fn peer_revision(&self) -> String {
+        format!(
             "mcp:{}:{:016x}",
             self.protocol_version(),
             config::fingerprint(&(self.server(), &self.snapshot.tools))
-        );
-        let mut extension = Extension::new(&self.snapshot.connection.options.namespace, version)?;
+        )
+    }
+    pub(crate) fn extension_at_revision(&self, revision: &str) -> anyhow::Result<Extension> {
+        self.build_extension(&format!("{revision}@{}", self.peer_revision()))
+    }
+    fn build_extension(&self, revision: &str) -> anyhow::Result<Extension> {
+        let mut extension = Extension::new(&self.snapshot.connection.options.namespace, revision)?;
         for tool in self.tools() {
             extension.tool(tool)?;
         }

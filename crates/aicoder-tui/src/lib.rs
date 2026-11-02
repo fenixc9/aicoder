@@ -72,6 +72,11 @@ struct Cli {
     /// Explicit trusted stdio launch file (requires host-extensions for transports).
     #[arg(long)]
     extension_config: Option<PathBuf>,
+    /// Activate installed, selected package executables after exact host trust validation.
+    #[arg(long)]
+    activate_packages: bool,
+    #[arg(long, requires = "activate_packages")]
+    package_programs: Option<PathBuf>,
     #[arg(long)]
     no_parent_context: bool,
     #[arg(long)]
@@ -173,10 +178,28 @@ pub async fn run_cli() -> Result<()> {
     } else {
         theme::Theme::named(cli.theme.as_deref().unwrap_or("dark"))?
     };
-    let activation = if let Some(path) = &cli.extension_config {
-        let manifest = aicoder_runtime::host_extensions::HostExtensionManifest::read(path)?;
+    let activation = if cli.extension_config.is_some() || cli.activate_packages {
+        use aicoder_runtime::host_extensions::{HostExtensionManifest, HostProgramManifest};
+        let manifest = cli
+            .extension_config
+            .as_ref()
+            .map(HostExtensionManifest::read)
+            .transpose()?
+            .unwrap_or_default();
+        let programs = if cli.activate_packages {
+            Some(
+                cli.package_programs
+                    .as_ref()
+                    .map(HostProgramManifest::read)
+                    .transpose()?
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        };
         let context = aicoder_core::TurnExecutionContext::new();
-        let work = application.activate_extensions(&manifest, context.clone());
+        let work =
+            application.activate_host_extensions(&manifest, programs.as_ref(), context.clone());
         tokio::pin!(work);
         let result = loop {
             tokio::select! {biased;
@@ -228,14 +251,9 @@ pub async fn run_cli() -> Result<()> {
         run(&mut terminal, app, runtime, &model).await
     }
     .await;
-    let cleanup = if let Some(active) = activation {
-        active.shutdown().await
-    } else {
-        Ok(())
-    };
-    match (outcome, cleanup) {
-        (Err(error), _) => Err(error),
-        (Ok(()), result) => result,
+    match activation {
+        Some(active) => active.finish(outcome).await,
+        None => outcome,
     }
 }
 

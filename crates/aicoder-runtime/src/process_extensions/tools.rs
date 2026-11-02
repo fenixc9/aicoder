@@ -177,7 +177,15 @@ impl ProcessExtension {
     }
     /// Each installed native snapshot receives normal fresh registry authority.
     pub fn extension(&self) -> anyhow::Result<Extension> {
-        let mut extension = Extension::new(&self.namespace, &self.server.version)?;
+        self.build_extension(&self.server.version)
+    }
+    pub(crate) fn extension_at_revision(&self, revision: &str) -> anyhow::Result<Extension> {
+        Extension::new(&self.namespace, &self.server.version)?;
+        let peer = crate::resources::reader::sha256(self.server.version.as_bytes());
+        self.build_extension(&format!("{revision}@{}", &peer[..32]))
+    }
+    fn build_extension(&self, revision: &str) -> anyhow::Result<Extension> {
+        let mut extension = Extension::new(&self.namespace, revision)?;
         for tool in &self.tools {
             extension.tool(tool.clone())?;
         }

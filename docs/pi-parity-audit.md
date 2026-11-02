@@ -3,8 +3,8 @@
 This audit uses Pi v1.4.0 / `4a080252f06caf63a525d7873c5d94d3c23887e0`, the existing roadmap
 comparison pin. The locally installed Pi package reports 1.4.0; Node is 22.19.0. This confirms
 an available comparison executable, not its task performance or every build input. aicoder's
-current evidence includes 630 default / 697 all-feature tests and the explicit acceptance
-records below. A green row is limited to the named roadmap capability and verified Linux path.
+current evidence comes from the acceptance records below, each with its frozen source and
+exact checks. A green row is limited to the named roadmap capability and verified Linux path.
 It does not certify all Pi convenience features or arbitrary third-party extensions.
 
 ## Roadmap section 4
@@ -20,8 +20,8 @@ It does not certify all Pi convenience features or arbitrary third-party extensi
 | Tree sessions, branches/labels/recovery | Canonical v3 branches, bounded archive windows, navigation leases, opaque checkpoints; [sessions](sessions.md) | Verified within named scope |
 | Steer and queued follow-up | Root controls/approvals, queue limits, current mutation ownership and skipped remaining calls; run_control and terminal tests | Verified within named scope |
 | Interactive, print/JSON, RPC, SDK | Shared core/runtime with real PTY/browser and normalized SDK/CLI/RPC/Web case; [S5 acceptance](s5-images-acceptance.md) | Verified basic flows; no shortcut/ABI equivalence claim |
-| Extension tools/hooks/commands/UI | Immutable native registration; process/MCP tool adapters; [explicit stock launch](host-extensions.md); TUI/Web native UI examples; [S6 acceptance](s6-ui-acceptance.md) | Partial: stock process/MCP activation verified; package activation and hook breadth remain |
-| Resource package discovery/install/pins/reload | Content-addressed local imports, locks/trust/dependencies and public branch state; [packages](packages.md) | Partial: local acquisition only; stock executable/theme activation is not complete |
+| Extension tools/hooks/commands/UI | Immutable native registration; process/MCP tool adapters; [explicit stock launch](host-extensions.md); TUI/Web native UI examples; [S6 acceptance](s6-ui-acceptance.md) | Partial: stock process/MCP/package activation verified; hook breadth remains |
+| Resource package discovery/install/pins/reload | Content-addressed local imports, locks/trust/dependencies and public branch state; [packages](packages.md) | Partial: local acquisition only; packaged theme selection remains manual |
 | Themes, export/share | TUI themes and inert canonical JSON/HTML exports, explicit publication adapter; [exports](session-exports.md) | Verified scoped local/custom-host path; no third-party hosted sharing deployment |
 | MCP and Code Mode | Actual modern/legacy stdio, [stock stdio hosts](host-extensions.md), real JS composition with leaf approvals/budgets/journal, CLI opt-in; [Code Mode](code-mode.md), [MCP](mcp.md) | Partial: stock MCP works; additional Code Mode capabilities remain |
 | Multimodal | Immutable bounded local CLI/TUI image input and compatible adapter; [image acceptance](s5-images-acceptance.md) | Partial: user image input works; tool/MCP image artifacts are not delivered as visible model image content |
@@ -32,11 +32,12 @@ The following are functional differences, not implementations hidden behind an u
 They remain work toward the original goal; the S0–S6 implementation checklist is not evidence
 that full product parity has already been achieved.
 
-1. **Package activation in stock hosts.** Runtime and stock CLI/TUI/Web now adopt explicitly
-   configured process/MCP owners, with actual frontends, approvals and startup cleanup checked.
-   PackageActivation exists, while stock CLI/TUI startup/reload does not adopt it.
-   Relevant code: runtime Settings, Runtime::executor_builder_with_extensions,
-   packages::PackageSnapshot::activate, CLI/TUI application assembly.
+1. **Packaged theme selection.** Runtime and stock CLI/RPC/TUI/Web now adopt direct and
+   installed package process/MCP owners through explicit host flags. Actual frontends,
+   approvals, trust preflight and startup/drop cleanup are checked. Resource reload retains
+   the executable generation; restarting explicitly adopts package code changes. Package
+   theme assets still need explicit extraction/path selection instead of a stock package
+   theme selector. See [host activation](host-extensions.md).
 2. **Remote package acquisition.** PackageStore exposes install_local, not bounded Git/npm
    acquisition. Installed resources are pinned correctly; remote distribution is absent.
    Pi's pinned [package contract](https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/docs/packages.md)
@@ -75,6 +76,6 @@ passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /
 incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
 original score/release requirements stay open; local scripted scores cannot substitute for them.
 
-The next implementation order is package activation/remote acquisition, typed tool
+The next implementation order is packaged themes/remote acquisition, typed tool
 media, then remaining Code Mode/interception coverage. The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.

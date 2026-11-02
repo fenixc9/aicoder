@@ -135,6 +135,7 @@ jobs:
         run: |
           cargo build --locked -p aicoder-cli -p aicoder-tui -p aicoder-web -p aicoder-runtime --features server,host-extensions,mcp-fixtures --bins
           python3 scripts/check_host_extensions.py
+          python3 scripts/check_host_extensions.py --packages
       - name: Optional Web documentation
         env:
           RUSTDOCFLAGS: -D warnings

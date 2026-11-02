@@ -45,6 +45,7 @@ fn host_launch_files_reject_relative_programs_duplicates_and_unbounded_metadata(
     let path = root.path().join("host.json");
     for value in [
         serde_json::json!({"schema_version":1,"entries":[{"id":"one","kind":"process","program":"relative"}]}),
+        serde_json::json!({"schema_version":1,"entries":[{"id":"one","kind":"process","program":"/invalid\0program"}]}),
         serde_json::json!({"schema_version":2,"entries":[]}),
         serde_json::json!({"schema_version":1,"entries":[],"api_key":"private-must-not-be-in-error"}),
     ] {
@@ -86,6 +87,47 @@ fn combined_native_sets_validate_collisions_without_publishing_partial_changes()
     assert!(a.combine(&a).is_err());
     assert_eq!(a.catalog().extensions.len(), 1);
     a.validate_tools(&ToolRegistry::default()).unwrap();
+}
+#[test]
+fn host_package_profiles_are_explicit_bounded_and_do_not_echo_private_fields() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("programs.json");
+    for value in [
+        serde_json::json!({"schema_version":2,"profiles":{}}),
+        serde_json::json!({"schema_version":1,"profiles":{"one":{"program":"relative","version":"1"}}}),
+        serde_json::json!({"schema_version":1,"profiles":{"one":{"program":"/program","version":"1","environment_references":{"BAD=NAME":"TOKEN"}}}}),
+        serde_json::json!({"schema_version":1,"profiles":{"one":{"program":"/program","version":"1","environment":{"TOKEN":"private-must-not-appear"}}}}),
+    ] {
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let error = HostProgramManifest::read(&path).unwrap_err();
+        assert!(!format!("{error:#}").contains("private-must-not-appear"));
+    }
+    std::fs::write(&path, vec![b' '; 256 * 1024 + 1]).unwrap();
+    assert!(HostProgramManifest::read(&path).is_err());
+    let manifest = HostProgramManifest::default();
+    manifest.validate().unwrap();
+    let profile = HostProgramProfile {
+        program: "/private-program".into(),
+        version: "private-version".into(),
+        environment_references: BTreeMap::new(),
+    };
+    assert!(!format!("{profile:?}").contains("private"));
+}
+#[cfg(not(feature = "process-extensions"))]
+#[tokio::test]
+async fn package_activation_without_transport_support_fails_before_storage_or_launch() {
+    let root = tempfile::tempdir().unwrap();
+    let error = runtime(root.path())
+        .activate_host_extensions(
+            &HostExtensionManifest::default(),
+            Some(&HostProgramManifest::default()),
+            TurnExecutionContext::new(),
+        )
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("requires host-extensions"));
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
 }
 #[cfg(not(feature = "process-extensions"))]
 #[test]
@@ -354,5 +396,44 @@ mod fixtures {
             .await;
         assert!(result.is_err());
         assert!(!root.path().join("first.pid").exists());
+    }
+    #[tokio::test]
+    async fn host_reference_lookup_errors_do_not_echo_private_environment_values() {
+        struct BrokenEnvironment;
+        impl Environment for BrokenEnvironment {
+            fn value(&self, name: &str) -> anyhow::Result<Option<String>> {
+                if name == "PRIVATE_ERROR" {
+                    anyhow::bail!("private-environment-lookup-value")
+                }
+                Ok(None)
+            }
+        }
+        let root = tempfile::tempdir().unwrap();
+        let runtime = Runtime::load_with_environment(
+            root.path(),
+            RuntimeOverrides::default(),
+            ConfigDiscovery {
+                enabled: false,
+                ..Default::default()
+            },
+            Arc::new(BrokenEnvironment),
+        )
+        .unwrap();
+        let mut config = entry(root.path(), "proc", HostExtensionKind::Process, "normal");
+        config
+            .environment_references
+            .insert("TOKEN".into(), "PRIVATE_ERROR".into());
+        let result = runtime
+            .activate_extensions(
+                &HostExtensionManifest {
+                    schema_version: 1,
+                    entries: vec![config],
+                },
+                TurnExecutionContext::new(),
+            )
+            .await;
+        let error = result.err().unwrap();
+        assert!(!format!("{error:#}").contains("private-environment-lookup-value"));
+        assert!(!root.path().join("proc.pid").exists());
     }
 }

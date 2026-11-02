@@ -68,6 +68,13 @@ enum Owner {
     Mcp(crate::mcp::McpExtension),
 }
 impl Owner {
+    fn abort(&self) {
+        match self {
+            Self::Process(p) => p.abort(),
+            #[cfg(feature = "mcp-stdio")]
+            Self::Mcp(p) => p.abort(),
+        }
+    }
     async fn shutdown(&self) -> crate::process_extensions::ProcessDiagnostics {
         match self {
             Self::Process(p) => p.shutdown().await,
@@ -79,12 +86,14 @@ impl Owner {
 pub struct PackageActivation {
     extensions: Arc<ExtensionSet>,
     owners: Vec<Owner>,
+    scope: TurnExecutionContext,
 }
 impl PackageActivation {
     pub fn extensions(&self) -> Arc<ExtensionSet> {
         self.extensions.clone()
     }
     pub async fn shutdown(&self) -> Result<()> {
+        self.scope.cancel("package activation shutting down");
         let mut complete = true;
         for owner in &self.owners {
             let report = owner.shutdown().await;
@@ -92,6 +101,30 @@ impl PackageActivation {
         }
         ensure!(complete, "package process cleanup incomplete");
         Ok(())
+    }
+    pub(crate) fn abort(&self) {
+        self.scope.cancel("package activation owner dropped");
+        for owner in &self.owners {
+            owner.abort();
+        }
+    }
+}
+impl Drop for PackageActivation {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+/// Owned read-only preparation; private launch settings never enter domain history.
+pub(crate) struct PreparedPackageActivation {
+    configs: Vec<(
+        PackageProtocol,
+        crate::process_extensions::ProcessConfig,
+        String,
+    )>,
+}
+impl PreparedPackageActivation {
+    pub(crate) fn len(&self) -> usize {
+        self.configs.len()
     }
 }
 impl PackageSnapshot {
@@ -102,6 +135,16 @@ impl PackageSnapshot {
         workspace: &Path,
         context: TurnExecutionContext,
     ) -> Result<PackageActivation> {
+        self.prepare_activation(store, programs, workspace)?
+            .activate(context)
+            .await
+    }
+    pub(crate) fn prepare_activation(
+        &self,
+        store: &PackageStore,
+        programs: &PackagePrograms,
+        workspace: &Path,
+    ) -> Result<PreparedPackageActivation> {
         self.validate_trust(store)?;
         let workspace = workspace.canonicalize()?;
         ensure!(
@@ -190,25 +233,39 @@ impl PackageSnapshot {
                     !matches!(entry.protocol, PackageProtocol::Mcp),
                     "MCP package activation requires the mcp-stdio feature"
                 );
-                configs.push((entry.protocol, config));
+                configs.push((
+                    entry.protocol,
+                    config,
+                    format!("package-sha256:{}", package.pin.sha256),
+                ));
             }
         }
-        let mut owners = Vec::new();
+        Ok(PreparedPackageActivation { configs })
+    }
+}
+impl PreparedPackageActivation {
+    pub(crate) async fn activate(self, context: TurnExecutionContext) -> Result<PackageActivation> {
+        let scope = context.child();
+        let mut activation = PackageActivation {
+            extensions: Arc::new(ExtensionSet::default()),
+            owners: Vec::new(),
+            scope: scope.clone(),
+        };
         let work = async {
             let mut registry = ExtensionRegistry::new();
-            for (protocol, config) in configs {
-                if context.is_cancelled() {
-                    return Err(context.error().into());
+            for (protocol, config, revision) in self.configs {
+                if scope.is_cancelled() {
+                    return Err(scope.error().into());
                 }
                 match protocol {
                     PackageProtocol::Process => {
                         let process = crate::process_extensions::ProcessExtension::connect(
                             config,
-                            context.clone(),
+                            scope.child(),
                         )
                         .await?;
-                        let contribution = process.extension();
-                        owners.push(Owner::Process(process));
+                        let contribution = process.extension_at_revision(&revision);
+                        activation.owners.push(Owner::Process(process));
                         registry.install(contribution?)?;
                     }
                     PackageProtocol::Mcp => {
@@ -216,11 +273,11 @@ impl PackageSnapshot {
                         {
                             let mcp = crate::mcp::McpExtension::connect(
                                 crate::mcp::McpConfig::new(config),
-                                context.clone(),
+                                scope.child(),
                             )
                             .await?;
-                            let contribution = mcp.extension();
-                            owners.push(Owner::Mcp(mcp));
+                            let contribution = mcp.extension_at_revision(&revision);
+                            activation.owners.push(Owner::Mcp(mcp));
                             registry.install(contribution?)?;
                         }
                         #[cfg(not(feature = "mcp-stdio"))]
@@ -228,18 +285,17 @@ impl PackageSnapshot {
                     }
                 }
             }
+            ensure!(!scope.is_cancelled(), "package activation cancelled");
             Ok::<_, anyhow::Error>(Arc::new(registry.finish()))
         }
         .await;
         match work {
-            Ok(extensions) => Ok(PackageActivation { extensions, owners }),
+            Ok(extensions) => {
+                activation.extensions = extensions;
+                Ok(activation)
+            }
             Err(error) => {
-                let mut complete = true;
-                for owner in &owners {
-                    let report = owner.shutdown().await;
-                    complete &= report.reaped && report.worker_done && !report.cleanup_pending;
-                }
-                if complete {
+                if activation.shutdown().await.is_ok() {
                     Err(error)
                 } else {
                     Err(error

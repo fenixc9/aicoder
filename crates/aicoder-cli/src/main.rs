@@ -112,6 +112,12 @@ struct Cli {
     /// Explicit trusted host stdio launch file; never discovered from project settings.
     #[arg(long)]
     extension_config: Option<PathBuf>,
+    /// Start executable entries from the currently selected, explicitly trusted packages.
+    #[arg(long, conflicts_with = "no_packages")]
+    activate_packages: bool,
+    /// Explicit host program profiles for package dependencies; never project-discovered.
+    #[arg(long, requires = "activate_packages")]
+    package_programs: Option<PathBuf>,
     /// Disable installed package selection for this invocation.
     #[arg(long, conflicts_with = "package_lock")]
     no_packages: bool,
@@ -650,6 +656,7 @@ async fn application() -> Result<()> {
                 || cli.json
                 || cli.rpc
                 || cli.extension_config.is_some()
+                || cli.activate_packages
                 || cli.input.is_some()
                 || !cli.images.is_empty()),
         "execution input/output flags cannot be combined with metadata commands"
@@ -864,12 +871,29 @@ async fn application() -> Result<()> {
             return Ok(());
         }
     }
-    let activation = if let Some(path) = &cli.extension_config {
-        let manifest = aicoder_runtime::host_extensions::HostExtensionManifest::read(path)?;
+    let activation = if cli.extension_config.is_some() || cli.activate_packages {
+        use aicoder_runtime::host_extensions::{HostExtensionManifest, HostProgramManifest};
+        let manifest = cli
+            .extension_config
+            .as_ref()
+            .map(HostExtensionManifest::read)
+            .transpose()?
+            .unwrap_or_default();
+        let programs = if cli.activate_packages {
+            Some(
+                cli.package_programs
+                    .as_ref()
+                    .map(HostProgramManifest::read)
+                    .transpose()?
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        };
         let context = aicoder_core::TurnExecutionContext::new();
         let active = execution::cancellable(
             context.clone(),
-            runtime.activate_extensions(&manifest, context.clone()),
+            runtime.activate_host_extensions(&manifest, programs.as_ref(), context.clone()),
         )
         .await??;
         Some(active)
@@ -886,14 +910,9 @@ async fn application() -> Result<()> {
     } else {
         execution::run(&cli, explicit_prompt, &runtime).await
     };
-    let cleanup = if let Some(active) = activation {
-        active.shutdown().await
-    } else {
-        Ok(())
-    };
-    match (outcome, cleanup) {
-        (Err(error), _) => Err(error),
-        (Ok(()), result) => result,
+    match activation {
+        Some(active) => active.finish(outcome).await,
+        None => outcome,
     }
 }
 

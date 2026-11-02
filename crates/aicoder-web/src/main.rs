@@ -25,6 +25,10 @@ struct Cli {
     #[arg(long)]
     extension_config: Option<PathBuf>,
     #[arg(long)]
+    activate_packages: bool,
+    #[arg(long, requires = "activate_packages")]
+    package_programs: Option<PathBuf>,
+    #[arg(long)]
     profile: Option<String>,
     #[arg(long)]
     model: Option<String>,
@@ -96,10 +100,27 @@ async fn main() -> Result<()> {
         environment_file(cli.env_file.as_deref())?,
     )?;
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let activation = if let Some(path) = &cli.extension_config {
-        let manifest = aicoder_runtime::host_extensions::HostExtensionManifest::read(path)?;
+    let activation = if cli.extension_config.is_some() || cli.activate_packages {
+        use aicoder_runtime::host_extensions::{HostExtensionManifest, HostProgramManifest};
+        let manifest = cli
+            .extension_config
+            .as_ref()
+            .map(HostExtensionManifest::read)
+            .transpose()?
+            .unwrap_or_default();
+        let programs = if cli.activate_packages {
+            Some(
+                cli.package_programs
+                    .as_ref()
+                    .map(HostProgramManifest::read)
+                    .transpose()?
+                    .unwrap_or_default(),
+            )
+        } else {
+            None
+        };
         let context = aicoder_core::TurnExecutionContext::new();
-        let work = runtime.activate_extensions(&manifest, context.clone());
+        let work = runtime.activate_host_extensions(&manifest, programs.as_ref(), context.clone());
         tokio::pin!(work);
         let result = loop {
             tokio::select! {biased;
@@ -146,12 +167,8 @@ async fn main() -> Result<()> {
 
     Ok::<_,anyhow::Error>(())
     }.await;
-    let extension_cleanup = if let Some(active) = &activation {
-        active.shutdown().await
-    } else {
-        Ok(())
-    };
-    outcome?;
-    extension_cleanup?;
-    Ok(())
+    match activation {
+        Some(active) => active.finish(outcome).await,
+        None => outcome,
+    }
 }

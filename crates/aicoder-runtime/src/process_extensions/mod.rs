@@ -71,7 +71,9 @@ impl ProcessConfig {
         self.limits.valid()
             && self.program.is_absolute()
             && self.program.as_os_str().as_encoded_bytes().len() <= 4096
+            && !self.program.as_os_str().as_encoded_bytes().contains(&0)
             && self.workspace.as_os_str().as_encoded_bytes().len() <= 4096
+            && !self.workspace.as_os_str().as_encoded_bytes().contains(&0)
             && valid_name(&self.namespace)
             && self.namespace.len() <= 24
             && self.arguments.len() <= 128
