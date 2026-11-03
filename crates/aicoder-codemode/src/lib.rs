@@ -10,9 +10,12 @@ use std::{
     sync::{Arc, atomic::AtomicUsize},
     time::Duration,
 };
+pub const IMAGE_OUTPUT_TOOL: &str = "image_output";
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct CodeModeConfig {
+    /// Explicit host registration used by image(); the program allowlist still applies.
+    pub image_tool: Option<String>,
     pub memory_bytes: usize,
     pub stack_bytes: usize,
     pub interrupt_checks: usize,
@@ -25,6 +28,7 @@ pub struct CodeModeConfig {
 impl Default for CodeModeConfig {
     fn default() -> Self {
         Self {
+            image_tool: Some(IMAGE_OUTPUT_TOOL.into()),
             memory_bytes: 8 * 1024 * 1024,
             stack_bytes: 256 * 1024,
             interrupt_checks: 100000,
@@ -38,6 +42,12 @@ impl Default for CodeModeConfig {
 }
 impl CodeModeConfig {
     fn validate(&self) -> Result<()> {
+        if let Some(name) = &self.image_tool {
+            ensure!(
+                !name.is_empty() && name.len() <= 128 && !name.chars().any(char::is_control),
+                "invalid image output tool identity"
+            );
+        }
         ensure!(
             (1024 * 1024..=64 * 1024 * 1024).contains(&self.memory_bytes)
                 && (64 * 1024..=1024 * 1024).contains(&self.stack_bytes)
@@ -137,7 +147,7 @@ impl ExecutableTool for CodeModeTool {
         Some(self)
     }
     fn definition(&self) -> ToolDefinition {
-        ToolDefinition {name:"codemode".into(),description:Some("Run bounded JavaScript as an async function body. Use await tools.NAME(args), Promise.allSettled, loops and JSON filtering. text(value), console.log, return, exit, ALL_TOOLS, searchTools, describeTool, describeNamespace, store/load are available. Only explicit output reaches the next model request. Tool permission and budgets remain separate; unawaited calls are cancelled when the script ends. No filesystem, network, Node, timers, imports or credential access is provided. Result: program {status,items,console} plus core composition metadata; failures retain bounded partial output.".into()),parameters:json!({"type":"object","properties":{"code":{"type":"string","maxLength":65536}},"required":["code"],"additionalProperties":false})}
+        ToolDefinition {name:"codemode".into(),description:Some("Run bounded JavaScript as an async function body. Use await tools.NAME(args), Promise.allSettled, loops and JSON filtering. text(value), await image(source), console.log, return, exit, ALL_TOOLS, searchTools, describeTool, describeNamespace, store/load are available. Use tools.NAME.result(args) for the host envelope/artifacts; await image(envelope) selects its images. image also accepts {artifact_id} or {data,mimeType}. Only explicit output reaches the next model request. Tool permission and budgets remain separate; unawaited calls are cancelled when the script ends. No filesystem, network, Node, timers, imports or credential access is provided. Result: program {status,items,console} plus core composition metadata; failures retain bounded partial output.".into()),parameters:json!({"type":"object","properties":{"code":{"type":"string","maxLength":65536}},"required":["code"],"additionalProperties":false})}
     }
     fn capability(&self) -> ToolCapability {
         ToolCapability::Command

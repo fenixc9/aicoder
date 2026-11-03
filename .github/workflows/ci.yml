@@ -141,6 +141,10 @@ jobs:
           python3 scripts/check_host_extensions.py --images
           python3 scripts/check_host_extensions.py --images --mime-alias
           python3 scripts/check_file_images.py
+      - name: Explicit Code Mode images across stock hosts
+        run: |
+          cargo build --locked -p aicoder-cli -p aicoder-tui -p aicoder-web --features server,images,code-mode --bins
+          python3 scripts/check_file_images.py --code-mode
       - name: Optional Web documentation
         env:
           RUSTDOCFLAGS: -D warnings

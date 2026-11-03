@@ -3,6 +3,10 @@ mod bash;
 mod edit_file;
 mod grep;
 mod image_file;
+#[cfg(feature = "code-mode")]
+mod image_output;
+#[cfg(feature = "code-mode")]
+pub use image_output::ImageOutputTool;
 mod io;
 mod list;
 mod read_file;

@@ -65,6 +65,9 @@ pub struct ProgramOutput {
 }
 pub enum ProgramEvent {
     Call(ProgramCall),
+    /// Dispatch one allowlisted read-only tool and explicitly expose its single image artifact.
+    /// Admission, guards, execution and accounting are identical to ordinary leaf calls.
+    ImageCall(ProgramCall),
     Finished(ProgramOutput),
     Failed(ToolFailure),
 }

@@ -335,6 +335,7 @@ impl Runtime {
         }
         #[cfg(feature = "code-mode")]
         if self.config.code_mode.enabled {
+            registry.register(tools::ImageOutputTool)?;
             let mut config = aicoder_codemode::CodeModeConfig::default();
             config.limits.duration =
                 std::time::Duration::from_millis(self.config.execution.tool_timeout_ms)

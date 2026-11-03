@@ -1,5 +1,21 @@
 # API migrations
 
+## S7: explicit Code Mode image output
+
+ProgramEvent gains ImageCall; external exhaustive Rust matches must handle it as a scoped
+allowlisted read-only dispatch with explicit single-image output. Composition records/session
+v3 remain unchanged. Image recovery references no longer auto-attach to new outer results;
+canonical leaf records retain them. Existing historical image blocks are not rewritten.
+
+CodeModeConfig adds an optional host-owned image_tool (default image_output). Runtime opt-in
+registers that reserved tool; extension name collisions reject. Explicit Code Mode allowlists
+must include it for image(). Normal tools.NAME(args) returns the same output; the additive
+tools.NAME.result(args) returns a complete program-view envelope with _image_artifacts.
+Await image() to select returned references or capture bounded inline data. It uses existing
+leaf guards/budgets and explicit host storage. Reused base64 is added only to the optional
+runtime code-mode feature; no dependency/default-feature or persisted schema changes. See
+[Code Mode images](code-mode.md#explicit-images).
+
 ## S7: image MIME views
 
 Core adds `media::image_media_type` and ArtifactRef::is_image. Image declarations now share

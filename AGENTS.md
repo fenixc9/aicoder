@@ -122,6 +122,8 @@
   ordinary and composed calls atomically. Keep JS dependencies outside default builds, record
   leaf facts separately from provider projection, and never retry completed effects on failure.
   Branch stores contain public JSON only; cancellation/steering must not commit late state.
+  Image output uses explicit read-only leaf intents; recovery references must not expose
+  filtered images. Revalidate references in current host storage, never from script state.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

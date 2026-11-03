@@ -25,7 +25,7 @@ charges the parent run. Unawaited calls are cancelled when a script ends; comple
 are not undone. Cancellation/timeout/steering closes the program, expires its intents and
 awaits bounded engine cleanup. Dropping a future still signals stop independently of Tokio.
 
-The VM exposes tools, text/console/return, discovery and bounded store/load. It has no Node,
+The VM exposes tools, text/console/return, explicit image output, discovery and bounded store/load. It has no Node,
 filesystem, network, timers, module loader, credential lookup or direct model-service client.
 Memory, stack, interrupt checks, wall time, calls, queues, JSON and output have explicit limits.
 Store data is branch-local public JSON committed only on script success; it cannot restore
@@ -89,13 +89,63 @@ descriptions, `describeTool(name)` supplies its schema and `describeNamespace(pr
 or console entries. Output is buffered until completion/error. `exit()` ends the script successfully. Exceptions preserve bounded
 partial output in the outer tool error. These explicit outputs and normal outer
 composition/recovery metadata enter the next provider projection, while canonical leaf records
-remain available to storage/export/bench. Current generic recovery also retains leaf image
-references on the outer result, so vision hosts can receive their previews despite text
-filtering. A dedicated image output/selection path remains open in the [Pi audit](pi-parity-audit.md);
-text filtering alone currently does not select image exposure. Do not use the public store for credentials.
+remain available to storage/export/bench. Image recovery references stay with canonical leaf
+facts; only explicit image output is attached to the outer result. Non-image recovery archives
+retain their existing outer references. Do not use the public store for credentials.
 `store(key, value)` saves a JSON copy; an omitted/undefined value deletes a key; `load` returns
 a fresh copy or undefined. The store follows the selected branch and survives cold JSONL
 reopen. Transient runs without a repository have no durable store.
+
+## Explicit images
+
+Use the complete tool envelope when selecting media. Normal tool promises still resolve to
+unchanged output values; `.result(args)` executes the same leaf once and resolves its complete
+host envelope, including artifact references. Errors still reject ToolError. The program-only
+`_image_artifacts` field identifies image candidates without changing the canonical envelope.
+
+```js
+const capture = await tools.read_file.result({path: "screenshot.png"});
+await image(capture);
+text("Selected screenshot");
+```
+
+`await image(value)` accepts a full result envelope, an ArtifactRef, a MCP image block with
+an `artifact`, `{artifact_id}`, an array of sources, or inline `{data, mimeType}` / `{data,
+media_type}` base64. Every single-image output becomes a core ImageCall to the configured
+host tool. Runtime registers read-only `image_output` when Code Mode is enabled; SDK hosts
+can install `aicoder_runtime::tools::ImageOutputTool` or configure a different immutable
+`CodeModeConfig.image_tool`. Core installs no implicit tools and a missing/omitted host entry
+fails before execution. Explicit tools subsets must include image_output to use image().
+
+Image calls use the same frozen allowlist, guards, dispatcher, parent budgets and cancellation
+as ordinary leaves. The image marker rejects tools whose host capability is not ReadOnly;
+it cannot smuggle a mutation through an image operation. An image result must provide exactly
+one valid host image reference. Up to four image intents per program are admitted; their
+references retain intent order even when read-only operations complete concurrently. Completed
+selected images survive a later script exception as partial output. Unfinished calls remain
+abandoned/cancelled, and failed capture does not repeat completed effects or commit late state.
+
+Inline data is archived as immutable raw bytes; an artifact ID is looked up only in the
+current explicitly installed store. Supplied metadata/history/state cannot choose a store,
+route or path, restore execution grants or fetch URLs. Reference selection requests a bounded
+page to revalidate current host metadata; backend integrity checks retain their existing
+storage bounds. ArtifactRef.complete describes source capture, separately from selection and
+model preview delivery. Runtime image normalization retains the [tool image contract](tool-images.md).
+Non-vision models and codec-free hosts receive explicit preview omission. No-session retains
+its existing storage-disabled behavior; custom SDK hosts can explicitly choose a memory store.
+
+An image call consumes a leaf slot and the parent tool-call quota. The default 64 KiB argument
+limit applies to inline base64 too (about 48 KiB raw before JSON overhead); larger media should
+use already captured artifact IDs. The host image output operation also admits at most 8 MiB
+raw bytes, bounded by storage, and uses a 250 ms storage sub-deadline. Root program output and
+resolved image previews retain separate existing budgets. Calls must be awaited for reliable
+completion; merely calling an async image helper does not guarantee completed delivery.
+
+Reading an image alone no longer sends its pixels to the next model. Canonical leaf results
+retain the raw image reference; explicit image intents select outer image blocks. This applies
+to new executions. Existing historical outer image blocks remain canonical data and are not
+rewritten. Raw literals intentionally embedded in JS/arguments remain code/input text; binary
+image artifacts and normalized previews are not counted as base64 text tokens.
 
 ## Bounds and accounting
 
@@ -120,7 +170,7 @@ model input cannot raise them. Parent tool-call accounting includes the outer ca
 admitted leaf. Parent output accounting includes leaf results even when the script filters
 them away; filtering saves subsequent model context, not execution budget. Provider usage
 continues to charge actual model requests. Composition creates no model request or fresh run
-budget. The existing calls-per-round setting bounds the provider's outer batch and also caps
+budget. The image helper emits provided/captured media through existing tools. The existing calls-per-round setting bounds the provider's outer batch and also caps
 parallel leaf execution; sequential leaf totals use the separate program/root call limits.
 
 Atomic admission covers ordinary siblings in the same batch: a program cannot spend the
@@ -142,7 +192,7 @@ these unknown extension records without projecting their payload as model instru
 
 This covers the S6 bounded JavaScript composition item: actual promises, loops, parallel
 reads, filtering, discovery, explicit output and branch state over existing tools. The pinned
-Pi contract also describes image/classifier helpers and provider-specific conveniences;
+Pi contract also describes classifier/image-model helpers and provider-specific conveniences;
 those helpers, Pi's source pragma/options syntax and TypeScript extension ABI are not
 implemented here. Call available media tools through their normal result/artifact contracts.
 This is functional coverage, not evidence of equal coding success or performance. S7 retains

@@ -33,3 +33,25 @@
   globalThis.console=Object.freeze({log,info:log,warn:log,error:log,debug:log});
   // No module/file/network/timer APIs are installed by this embedding.
 }
+
+// Image output is an ordinary scoped host-tool intent, not VM filesystem/network IO.
+globalThis.image = async value => {
+  if (Array.isArray(value)) { for (const item of value) await image(item); return; }
+  if (value && Array.isArray(value._image_artifacts)) {
+    for (const ref of value._image_artifacts) await __image({artifact_id:ref.id});
+    return;
+  }
+  if (value && value.artifact && typeof value.artifact.id === "string") {
+    await __image({artifact_id:value.artifact.id}); return;
+  }
+  if (value && typeof value.id === "string" && typeof value.media_type === "string") {
+    await __image({artifact_id:value.id}); return;
+  }
+  if (value && typeof value.artifact_id === "string") {
+    await __image({artifact_id:value.artifact_id}); return;
+  }
+  if (value && typeof value.data === "string") {
+    await __image({data:value.data,media_type:value.mimeType || value.media_type}); return;
+  }
+  throw new TypeError("image() expects an image source or a tool .result() envelope with image artifacts");
+};

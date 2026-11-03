@@ -43,8 +43,8 @@ status and commands with real TUI/Web adapters and explicit headless behavior.
 [Coding extension examples](docs/coding-extension-examples.md) demonstrate planning, guarded
 prepared paths and explicitly managed read-only worker Agents over the same loop.
 [Code Mode](docs/code-mode.md) optionally composes real registered tools in JavaScript,
-with discovery/filtering and branch-local state while preserving per-tool approvals and
-parent budgets. Enable the host's `code-mode` build feature and `--code-mode` setting.
+with discovery/filtering, explicit image output and branch-local state while preserving
+per-tool approvals and parent budgets. Enable the host's `code-mode` build feature and `--code-mode` setting.
 Canonical sessions support [bounded JSON/HTML exports](docs/session-exports.md), with
 explicit publication adapters and no automatic third-party sharing.
 The [provider-neutral model API](docs/model-api.md) is shared by the agent

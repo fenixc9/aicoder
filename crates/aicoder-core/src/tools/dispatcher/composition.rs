@@ -37,12 +37,37 @@ fn collect_artifacts(content: &Value, artifacts: &mut Vec<crate::artifacts::Arti
             if artifacts.len() < 32
                 && let Ok(reference) =
                     serde_json::from_value::<crate::artifacts::ArtifactRef>(value.clone())
+                && !reference.is_image()
                 && !artifacts.iter().any(|old| old.id == reference.id)
             {
                 artifacts.push(reference);
             }
         }
     }
+}
+fn image_artifact(content: &Value) -> Option<crate::artifacts::ArtifactRef> {
+    let mut images = content
+        .get("artifacts")?
+        .as_array()?
+        .iter()
+        .filter_map(|value| {
+            serde_json::from_value::<crate::artifacts::ArtifactRef>(value.clone()).ok()
+        })
+        .filter(|reference| reference.validate().is_ok() && reference.is_image());
+    let image = images.next()?;
+    images.next().is_none().then_some(image)
+}
+fn prepend_images(
+    target: &mut Vec<crate::artifacts::ArtifactRef>,
+    images: &BTreeMap<u64, crate::artifacts::ArtifactRef>,
+) {
+    let mut selected = images.values().cloned().collect::<Vec<_>>();
+    for reference in std::mem::take(target) {
+        if selected.len() < 32 && !selected.iter().any(|old| old.id == reference.id) {
+            selected.push(reference);
+        }
+    }
+    *target = selected;
 }
 impl ToolDispatcher {
     async fn composition_record(
@@ -195,6 +220,8 @@ impl ToolDispatcher {
             let mut mutation = false;
             let mut steered = false;
             let mut artifacts = Vec::new();
+            let mut image_calls = BTreeSet::new();
+            let mut images = BTreeMap::new();
             let driven: Result<Result<ProgramOutput, ToolFailure>> = async {
                 loop {
                     limits.check()?;
@@ -281,8 +308,18 @@ impl ToolDispatcher {
                             completed.insert(done.id);
                             if let Some((_, content, is_error)) = message.tool_result() {
                                 collect_artifacts(content, &mut artifacts);
+                                let mut content = content.clone();
+                                let mut is_error = is_error;
+                                if image_calls.contains(&done.id) && !is_error {
+                                    if let Some(reference) = image_artifact(&content) {
+                                        images.insert(done.id, reference);
+                                    } else {
+                                        is_error = true;
+                                        content = json!({"ok":false,"error":{"code":"composition_image_result","message":"Completed image output did not return exactly one host image reference","details":{"operation_completed":true,"delivery_complete":false}}});
+                                    }
+                                }
                                 if !steered && let Err(error) = program.respond(ProgramResponse {
-                                    id: done.id, content: content.clone(), is_error,
+                                    id: done.id, content, is_error,
                                 }) {
                                     return Ok(Err(error));
                                 }
@@ -292,7 +329,12 @@ impl ToolDispatcher {
                         Action::Event(Err(error))
                             | Action::Event(Ok(ProgramEvent::Failed(error))) => return Ok(Err(error)),
                         Action::Event(Ok(ProgramEvent::Finished(output))) => return Ok(Ok(output)),
-                        Action::Event(Ok(ProgramEvent::Call(call))) => {
+                        Action::Event(Ok(event @ (ProgramEvent::Call(_) | ProgramEvent::ImageCall(_)))) => {
+                            let (call, expose) = match event {
+                                ProgramEvent::Call(call) => (call, false),
+                                ProgramEvent::ImageCall(call) => (call, true),
+                                _ => unreachable!(),
+                            };
                             if call.id == 0 || call.id > 65536 || !seen.insert(call.id)
                                 || seen.len() > config.max_calls
                             {
@@ -301,6 +343,10 @@ impl ToolDispatcher {
                             }
                             let error = if !catalog.contains_key(&call.tool) {
                                 Some("tool_not_allowed")
+                            } else if expose && self.registry.get(&call.tool).expect("catalog tool").capability() != ToolCapability::ReadOnly {
+                                Some("image_tool_not_read_only")
+                            } else if expose && image_calls.len() >= crate::tool_images::MAX_TOOL_IMAGES {
+                                Some("composition_image_limit")
                             } else if crate::extensions::size(&call.arguments, config.max_request_bytes).is_err() {
                                 Some("arguments_too_large")
                             } else {
@@ -314,6 +360,7 @@ impl ToolDispatcher {
                                     return Ok(Err(error));
                                 }
                             } else {
+                                if expose { image_calls.insert(call.id); }
                                 pending.push_back(call);
                             }
                         }
@@ -363,6 +410,7 @@ impl ToolDispatcher {
                 let mut output = match driven {
                     Ok(output) => output,
                     Err(mut error) => {
+                        prepend_images(&mut error.artifacts, &images);
                         error.artifacts.extend(artifacts);
                         return Ok(Err(error));
                     }
@@ -374,6 +422,7 @@ impl ToolDispatcher {
                         "Program state was not committed because steering arrived during cleanup",
                     ).with_details(output.result.output);
                     error.artifacts = output.result.artifacts;
+                    prepend_images(&mut error.artifacts, &images);
                     error.artifacts.extend(artifacts);
                     return Ok(Err(error));
                 }
@@ -398,6 +447,7 @@ impl ToolDispatcher {
                     }
                 }
                 output.result.output = json!({"program":output.result.output,"composition":{"scope":id,"calls":admitted.len(),"completed":completed.len(),"abandoned":abandoned}});
+                prepend_images(&mut output.result.artifacts, &images);
                 for reference in artifacts {
                     if output.result.artifacts.len() < 32
                         && !output

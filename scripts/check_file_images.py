@@ -22,6 +22,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--bin-dir', type=Path, default=ROOT/'target/debug')
+parser.add_argument("--code-mode", action="store_true", help="Exercise explicit and filtered Code Mode image output")
 args = parser.parse_args()
 BINS = args.bin_dir.resolve()
 TOKEN = 'fixture-file-images-token-0123456789'
@@ -44,20 +45,36 @@ class Provider(http.server.BaseHTTPRequestHandler):
             requests.append(request)
             tools = [m for m in request['messages'] if m['role'] == 'tool']
             if not tools:
+                code = "try {const full=await tools.read_file.result({path:'picture.txt'}); " + ("text('filtered');" if request['model']=='filtered' else "await image(full); text('selected');") + "} catch(e) {text(e.code); throw e;}"
                 message = {'role': 'assistant', 'tool_calls': [{'id': 'native-image', 'type': 'function',
-                    'function': {'name': 'read_file', 'arguments': json.dumps({'path': 'picture.txt'})}}]}
+                    'function': {'name': 'codemode' if args.code_mode else 'read_file', 'arguments': json.dumps({'code':code} if args.code_mode else {'path':'picture.txt'})}}]}
             else:
                 assert len(tools) == 1
                 result = json.loads(tools[0]['content'])
                 if request['model'] == 'nostore':
                     assert result['is_error'] is True
-                    assert result['content']['error']['code'] == 'artifact_store_unavailable'
+                    error=result['content']['error']
+                    assert error['code'] == ('code_mode_script' if args.code_mode else 'artifact_store_unavailable')
+                    if args.code_mode:
+                        assert 'artifact_store_unavailable' in error['details']['items']
                 else:
-                    assert result['ok'] is True and result['output']['kind'] == 'image'
-                    assert result['output']['source_bytes'] == 62
-                    assert result['output']['media_type'] == 'image/bmp'
-                    status = result['_tool_image_projection'][0]['status']
-                    if request['model'] == 'text':
+                    assert result['ok'] is True
+                    if args.code_mode:
+                        assert result['output']['program']['items'] == (['filtered'] if request['model']=='filtered' else ['selected'])
+                        assert result['output']['composition']['calls'] == (1 if request['model']=='filtered' else 2)
+                    else:
+                        assert result['output']['kind'] == 'image'
+                        assert result['output']['source_bytes'] == 62
+                        assert result['output']['media_type'] == 'image/bmp'
+                    if request['model']=='filtered':
+                        assert not result.get('artifacts')
+                        assert request['messages'][-1]['role']=='tool'
+                        status='filtered'
+                    else:
+                        status=result['_tool_image_projection'][0]['status']
+                    if request['model'] == 'filtered':
+                        pass
+                    elif request['model'] == 'text':
                         assert status == 'model_without_vision'
                         assert request['messages'][-1]['role'] == 'tool'
                     else:
@@ -128,26 +145,26 @@ server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Provider)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 try:
     with tempfile.TemporaryDirectory(prefix='aicoder-native-images-') as folder:
-        for frontend in ['cli', 'rpc', 'web', 'tui', 'text', 'nostore']:
+        for frontend in ['cli', 'rpc', 'web', 'tui', 'text', 'nostore'] + (['filtered'] if args.code_mode else []):
             root = Path(folder)/frontend
             root.mkdir()
             (root/'picture.txt').write_bytes(bmp())
             state = root/'state'
             state.mkdir(mode=0o700)
-            model = frontend if frontend in ['text', 'nostore'] else 'vision'
+            model = frontend if frontend in ['text', 'nostore', 'filtered'] else 'vision'
             (state/'settings.json').write_text(json.dumps({'version': 1, 'profiles': {'fixture': {
                 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1',
                 'provider_id': 'fixture', 'model': model, 'api_key_env': 'FIXTURE_KEY', 'proxy': 'disabled',
                 'models': [{'provider': 'fixture', 'id': m, 'context_tokens': 65536,
-                            'capabilities': {'tools': True, 'images': m != 'text'}} for m in ['vision', 'text', 'nostore']]}},
-                'settings': {'provider_profile': 'fixture', 'execution': {'stream': False}}}))
+                            'capabilities': {'tools': True, 'images': m != 'text'}} for m in ['vision', 'text', 'nostore', 'filtered']]}},
+                'settings': {'provider_profile': 'fixture', 'execution': {'stream': False}, 'code_mode':{'enabled':args.code_mode}}}))
             env = {'PATH': os.environ.get('PATH', ''), 'TERM': 'xterm-256color',
                    'AICODER_HOME': str(state), 'FIXTURE_KEY': 'fixture-key', 'AICODER_WEB_TOKEN': TOKEN}
             common = ['--workspace', str(root), '--no-resources']
             count = len(requests)
-            if frontend in ['cli', 'text', 'nostore']:
+            if frontend in ['cli', 'text', 'nostore', 'filtered']:
                 output = subprocess.run([str(BINS/'aicoder'), *common,
-                    *(['--no-session'] if frontend == 'nostore' else []), '--json', '--prompt', 'inspect native image'],
+                    *(['--no-session'] if frontend == 'nostore' else []), *(['--yes'] if args.code_mode else []), '--json', '--prompt', 'inspect native image'],
                     env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
                 assert output.returncode == 0, output.stderr
                 events = [json.loads(raw)['event'] for raw in output.stdout.splitlines()]
@@ -157,16 +174,23 @@ try:
                 child = subprocess.Popen([str(BINS/'aicoder'), *common, '--rpc'], env=env,
                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
                 try:
+                    sequence=1
                     child.stdin.write(b'{"version":1,"id":1,"command":{"type":"prompt","text":"inspect native image"}}\n')
                     while True:
                         frame = json.loads(line(child.stdout))
                         if frame['type'] == 'event':
-                            assert frame['event']['event']['type'] != 'run_approval_requested'
+                            event=frame['event']['event']
+                            if event['type']=='run_approval_requested':
+                                assert args.code_mode
+                                question=event['request']; assert question['invocation']['name']=='codemode'
+                                sequence+=1
+                                child.stdin.write((json.dumps({'version':1,'id':sequence,'command':{'type':'approve','run_id':question['id']['run_id'],'approval_id':question['id'],'decision':'allow_once'}})+'\n').encode())
                         if frame['type'] == 'run_finished':
                             assert frame['result']['status'] == 'completed', frame
                             break
-                    child.stdin.write(b'{"version":1,"id":2,"command":{"type":"shutdown"}}\n')
-                    while json.loads(line(child.stdout)).get('id') != 2:
+                    sequence+=1
+                    child.stdin.write((json.dumps({'version':1,'id':sequence,'command':{'type':'shutdown'}})+'\n').encode())
+                    while json.loads(line(child.stdout)).get('id') != sequence:
                         pass
                     assert child.wait(timeout=8) == 0
                 finally:
@@ -193,7 +217,13 @@ try:
 
                     run = api('POST', '/api/runs', {'id': 1, 'text': 'inspect native image'})
                     path = '/api/runs/'+run['run_id']
-                    result = until(lambda: (s if (s := api('GET', path))['result'] else None), 'Web completion')
+                    def poll_run():
+                        state=api('GET',path)
+                        for question in state['approvals']:
+                            assert args.code_mode and question['invocation']['name']=='codemode'
+                            api('POST',path+'/approval',{'approval_id':question['id'],'decision':'allow_once'})
+                        return state if state['result'] else None
+                    result = until(poll_run, 'Web completion')
                     assert not result['approvals'] and result['result']['status'] == 'completed', result
                     connection.close()
                     child.terminate()
@@ -231,6 +261,9 @@ try:
                 try:
                     until(lambda: marker('Sessions'), 'TUI startup')
                     os.write(master, b'inspect native image\r')
+                    if args.code_mode:
+                        until(lambda: marker('codemode') and marker('Approval'),'TUI program approval')
+                        os.write(master,b'y')
                     until(completed, 'TUI canonical completion')
                     time.sleep(.15)
                     marker('')
@@ -245,13 +278,17 @@ try:
                 rows = entries(root)
                 messages = [e['message'] for e in rows if e.get('kind') == 'message']
                 images = [b for m in messages for b in m['content'] if b['type'] == 'image']
-                assert len(images) == 1 and images[0]['source']['type'] == 'artifact', frontend
-                assert images[0]['source']['reference']['media_type'] == 'image/bmp'
+                if frontend=='filtered':
+                    assert not images, frontend
+                    assert any(e.get('namespace')=='aicoder.composition.v1' and '"type": "image"' in json.dumps(e.get('data')) for e in rows)
+                else:
+                    assert len(images) == 1 and images[0]['source']['type'] == 'artifact', frontend
+                    assert images[0]['source']['reference']['media_type'] == 'image/bmp'
                 assert sum(m['role'] == 'tool' for m in messages) == 1
                 assert sum(m['role'] == 'user' for m in messages) == 1
                 assert '_tool_image_projection' not in json.dumps(rows)
         assert not failures, failures
-        print(json.dumps({'native_read_file': True, 'signature_not_extension': True, 'bmp': True,
+        print(json.dumps({'native_read_file': True, 'code_mode':args.code_mode, 'explicit_image_selection':args.code_mode, 'signature_not_extension': True, 'bmp': True,
             'frontends': ['cli_json', 'rpc', 'web', 'tui_pty'], 'nonvision_omission': True,
             'missing_storage_explicit': True, 'source_unchanged': True, 'raw_canonical_artifacts': True,
             'synthetic_user_history': False, 'loopback_model_requests': len(requests), 'real_model_requests': 0}))

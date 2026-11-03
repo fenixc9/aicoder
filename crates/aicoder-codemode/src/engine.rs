@@ -210,8 +210,14 @@ fn json_value<'js>(ctx: &Ctx<'js>, value: JsValue<'js>, max: usize) -> rquickjs:
     let text = string(ctx, text, max)?;
     serde_json::from_str(&text).map_err(|_| Exception::throw_type(ctx, "Value is not bounded JSON"))
 }
+struct PendingReply<'js> {
+    resolve: Function<'js>,
+    reject: Function<'js>,
+    envelope: bool,
+    image: bool,
+}
 struct Host<'js> {
-    pending: BTreeMap<u64, (Function<'js>, Function<'js>)>,
+    pending: BTreeMap<u64, PendingReply<'js>>,
     sequence: u64,
     items: Vec<Value>,
     console: Vec<String>,
@@ -361,7 +367,7 @@ fn run(
                             continue;
                         }
                         let pending = host.borrow_mut().pending.remove(&response.id);
-                        let Some((resolve, reject)) = pending else {
+                        let Some(pending) = pending else {
                             return Err(host.borrow().failed("Unknown or duplicate host result"));
                         };
                         if !fits(&response.content, config.limits.max_result_bytes + 16384) {
@@ -369,8 +375,18 @@ fn run(
                                 .borrow()
                                 .failed("Host response exceeds VM transfer budget"));
                         }
+                        let mut transfer = response.content.clone();
+                        if pending.envelope && !response.is_error {
+                            let images = transfer.get("artifacts").and_then(Value::as_array).into_iter().flatten()
+                                .filter_map(|value|serde_json::from_value::<aicoder_core::artifacts::ArtifactRef>(value.clone()).ok())
+                                .filter(|reference|reference.validate().is_ok() && reference.is_image()).collect::<Vec<_>>();
+                            if !images.is_empty() { transfer["_image_artifacts"] = json!(images); }
+                        }
+                        if !fits(&transfer, config.limits.max_result_bytes + 16384) {
+                            return Err(host.borrow().failed("Host image metadata exceeds VM transfer budget"));
+                        }
                         let value = ctx
-                            .json_parse(serde_json::to_vec(&response.content).expect("JSON value"))
+                            .json_parse(serde_json::to_vec(&transfer).expect("JSON value"))
                             .map_err(|_| {
                                 host.borrow().failed("Host response cannot be imported")
                             })?;
@@ -381,15 +397,15 @@ fn run(
                             error.set("message",response.content["error"]["message"].as_str().unwrap_or("Tool call failed")).map_err(|_|host.borrow().failed("Cannot attach tool error text"))?;
                             error.set("code",response.content["error"]["code"].as_str().unwrap_or("tool_failed")).map_err(|_|host.borrow().failed("Cannot attach tool error code"))?;
                             error.set("details",value).map_err(|_|host.borrow().failed("Cannot attach tool error"))?;
-                            reject.call::<_, ()>((error,))
-                        } else {
-                            let object = value.as_object().ok_or_else(|| {
-                                host.borrow().failed("Host tool envelope is invalid")
-                            })?;
-                            let output: JsValue = object
-                                .get("output")
-                                .map_err(|_| host.borrow().failed("Host tool output is absent"))?;
-                            resolve.call::<_, ()>((output,))
+                            pending.reject.call::<_, ()>((error,))
+                        } else if pending.image {
+                                pending.resolve.call::<_, ()>((JsValue::new_undefined(ctx.clone()),))
+                            } else if pending.envelope {
+                                pending.resolve.call::<_, ()>((value,))
+                            } else {
+                                let object = value.as_object().ok_or_else(|| host.borrow().failed("Host tool envelope is invalid"))?;
+                                let output: JsValue = object.get("output").map_err(|_| host.borrow().failed("Host tool output is absent"))?;
+                                pending.resolve.call::<_, ()>((output,))
                         };
                         if result.is_err() {
                             let message = exception(&ctx,&formatter);
@@ -450,6 +466,62 @@ fn tool_alias(name: &str) -> String {
     }
     alias
 }
+fn tool_function<'js>(
+    ctx: &Ctx<'js>,
+    name: String,
+    state: Rc<RefCell<Host<'js>>>,
+    sent: async_mpsc::Sender<ProgramEvent>,
+    envelope: bool,
+    image: bool,
+) -> rquickjs::Result<Function<'js>> {
+    Function::new(
+        ctx.clone(),
+        move |ctx: Ctx<'js>, argument: Opt<JsValue<'js>>| -> rquickjs::Result<Promise<'js>> {
+            let (promise, resolve, reject) = ctx.promise()?;
+            let mut host = state.borrow_mut();
+            host.sequence += 1;
+            if host.sequence > host.config.limits.max_calls as u64 || host.pending.len() >= 64 {
+                return Err(Exception::throw_message(&ctx, "Tool call budget exceeded"));
+            }
+            let id = host.sequence;
+            let limit = host.config.limits.max_request_bytes;
+            drop(host);
+            let argument = match argument.0 {
+                Some(value) => value,
+                None => Object::new(ctx.clone())?.into_value(),
+            };
+            let args = json_value(&ctx, argument, limit)?;
+            let mut host = state.borrow_mut();
+            host.pending.insert(
+                id,
+                PendingReply {
+                    resolve,
+                    reject,
+                    envelope,
+                    image,
+                },
+            );
+            let call = ProgramCall {
+                id,
+                tool: name.clone(),
+                arguments: args,
+            };
+            let event = if image {
+                ProgramEvent::ImageCall(call)
+            } else {
+                ProgramEvent::Call(call)
+            };
+            if sent.try_send(event).is_err() {
+                host.pending.remove(&id);
+                return Err(Exception::throw_message(
+                    &ctx,
+                    "Tool intent queue is full or closed",
+                ));
+            }
+            Ok(promise)
+        },
+    )
+}
 fn install<'js>(
     ctx: Ctx<'js>,
     tools: &[ToolDefinition],
@@ -476,44 +548,24 @@ fn install<'js>(
         }
     }
     for tool in tools {
-        let name = tool.name.clone();
-        let state = host.clone();
-        let sent = events.clone();
-        let function = Function::new(
-            ctx.clone(),
-            move |ctx: Ctx<'js>, argument: Opt<JsValue<'js>>| -> rquickjs::Result<Promise<'js>> {
-                let (promise, resolve, reject) = ctx.promise()?;
-                let mut host = state.borrow_mut();
-                host.sequence += 1;
-                if host.sequence > host.config.limits.max_calls as u64 || host.pending.len() >= 64 {
-                    return Err(Exception::throw_message(&ctx, "Tool call budget exceeded"));
-                }
-                let id = host.sequence;
-                let limit = host.config.limits.max_request_bytes;
-                drop(host);
-                let argument = match argument.0 {
-                    Some(value) => value,
-                    None => Object::new(ctx.clone())?.into_value(),
-                };
-                let args = json_value(&ctx, argument, limit)?;
-                let mut host = state.borrow_mut();
-                host.pending.insert(id, (resolve, reject));
-                if sent
-                    .try_send(ProgramEvent::Call(ProgramCall {
-                        id,
-                        tool: name.clone(),
-                        arguments: args,
-                    }))
-                    .is_err()
-                {
-                    host.pending.remove(&id);
-                    return Err(Exception::throw_message(
-                        &ctx,
-                        "Tool intent queue is full or closed",
-                    ));
-                }
-                Ok(promise)
-            },
+        let function = tool_function(
+            &ctx,
+            tool.name.clone(),
+            host.clone(),
+            events.clone(),
+            false,
+            false,
+        )?;
+        function.set(
+            "result",
+            tool_function(
+                &ctx,
+                tool.name.clone(),
+                host.clone(),
+                events.clone(),
+                true,
+                false,
+            )?,
         )?;
         let alias = tool_alias(&tool.name);
         if alias != tool.name {
@@ -522,6 +574,29 @@ fn install<'js>(
         methods.set(tool.name.as_str(), function)?;
     }
     globals.set("tools", methods)?;
+    let image_tool = host
+        .borrow()
+        .config
+        .image_tool
+        .clone()
+        .filter(|name| names.contains(name.as_str()));
+    if let Some(name) = image_tool {
+        globals.set(
+            "__image",
+            tool_function(&ctx, name, host.clone(), events.clone(), false, true)?,
+        )?;
+    } else {
+        globals.set(
+            "__image",
+            Function::new(ctx.clone(), |ctx: Ctx<'js>| -> rquickjs::Result<()> {
+                Err(Exception::throw_message(
+                    &ctx,
+                    "Image output tool is not in the host program catalog",
+                ))
+            })?,
+        )?;
+    }
+
     let output = host.clone();
     globals.set(
         "text",

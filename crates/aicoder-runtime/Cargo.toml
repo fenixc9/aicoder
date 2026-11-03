@@ -43,7 +43,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 package-downloads = ["dep:reqwest", "dep:flate2", "dep:tar", "dep:base64"]
-code-mode = ["dep:aicoder-codemode"]
+code-mode = ["dep:aicoder-codemode", "dep:base64"]
 mcp-stdio = ["process-extensions", "dep:base64"]
 mcp-fixtures = ["mcp-stdio", "process-extension-fixtures"]
 process-extensions = []
