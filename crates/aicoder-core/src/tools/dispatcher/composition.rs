@@ -257,6 +257,7 @@ impl ToolDispatcher {
                             let child_context = &child_context;
                             running.push(Box::pin(async move {
                                 let result = dispatcher.execute_call(&tool_call, events, CallScope {
+                                    offered_tools: None,
                                     context: Some(child_context), limits: Some(limits),
                                     journal: Some(journal), nested: true, admitted: true,
                                 }).await;

@@ -18,6 +18,10 @@ pub struct EvalProvenance {
     pub execution: aicoder_core::TurnExecutionConfig,
     pub dispatcher: aicoder_core::tools::DispatcherConfig,
     pub tools: Vec<ToolDefinition>,
+    /// Requested effective root declarations when narrower than the installed leaf registry.
+    /// Observation only; replay never restores tool authority from this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_tools: Option<Vec<ToolDefinition>>,
     pub tool_capabilities: BTreeMap<String, aicoder_core::tools::ToolCapability>,
     pub extensions: Value,
     pub context_policy: String,
@@ -45,6 +49,14 @@ impl EvalProvenance {
             execution: executor.execution_config().clone(),
             dispatcher: executor.dispatcher_config().clone(),
             tools: executor.tool_registry().definitions(),
+            model_tools: {
+                let offered = if request.tools.is_empty() {
+                    executor.model_tool_definitions()
+                } else {
+                    request.tools.clone()
+                };
+                (offered != executor.tool_registry().definitions()).then_some(offered)
+            },
             tool_capabilities: executor
                 .tool_registry()
                 .definitions()
@@ -143,5 +155,71 @@ impl RunJournal for EvaluationJournal {
     }
     async fn finish(&self, _: &RunOutcome) -> Result<()> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tool_catalog_tests {
+    use super::*;
+    use aicoder_core::{ModelProvider, TurnExecutionContext, tools::*};
+    use std::sync::Arc;
+    struct Provider;
+    #[async_trait]
+    impl ModelProvider for Provider {
+        fn model_spec(&self, model: &str) -> Result<ModelSpec, ProviderError> {
+            let mut spec = ModelSpec::new("fixture", model);
+            spec.capabilities.tools = true;
+            Ok(spec)
+        }
+        async fn generate(
+            &self,
+            _: ModelRequest,
+            _: Arc<dyn ModelEventSink>,
+            _: TurnExecutionContext,
+        ) -> Result<ModelResponse, ProviderError> {
+            panic!("capture does not invoke models")
+        }
+    }
+    struct Tool(&'static str);
+    #[async_trait]
+    impl ExecutableTool for Tool {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: self.0.into(),
+                description: None,
+                parameters: json!({"type":"object"}),
+            }
+        }
+        fn capability(&self) -> ToolCapability {
+            ToolCapability::ReadOnly
+        }
+        async fn execute(&self, _: &ToolContext, _: Value) -> Result<ToolSuccess, ToolFailure> {
+            panic!("capture does not execute tools")
+        }
+    }
+    #[test]
+    fn provenance_records_root_exposure_and_accepts_old_observations_without_restoring_authority() {
+        let root = tempfile::tempdir().unwrap();
+        let mut registry = ToolRegistry::default();
+        registry.register(Tool("outer")).unwrap();
+        registry.register(Tool("leaf")).unwrap();
+        let executor = TurnExecutor::builder(Provider)
+            .workspace(root.path())
+            .registry(registry)
+            .model_tools(vec!["outer".into()])
+            .build()
+            .unwrap();
+        let request = ModelRequest::new("fixture", vec![Message::text(MessageRole::User, "input")]);
+        let observed = EvalProvenance::capture(&executor, &request, "workspace".into()).unwrap();
+        assert_eq!(observed.tools.len(), 2);
+        assert_eq!(observed.model_tools.as_ref().unwrap()[0].name, "outer");
+        let mut old = serde_json::to_value(observed).unwrap();
+        old.as_object_mut().unwrap().remove("model_tools");
+        assert!(
+            serde_json::from_value::<EvalProvenance>(old)
+                .unwrap()
+                .model_tools
+                .is_none()
+        );
     }
 }

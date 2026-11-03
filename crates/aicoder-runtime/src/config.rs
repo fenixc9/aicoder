@@ -914,6 +914,14 @@ pub(crate) fn resolve(
     };
     packages.validate()?;
     let code_mode = crate::code_mode::CodeModePolicy {
+        only: required(
+            "code_mode.only",
+            pick!("code_mode.only", code_mode.only, || env_setting::<bool>(
+                env.as_ref(),
+                "AICODER_CODE_MODE_ONLY"
+            )),
+            false,
+        )?,
         enabled: required(
             "code_mode.enabled",
             pick!(

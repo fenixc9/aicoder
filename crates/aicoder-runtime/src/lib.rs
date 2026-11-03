@@ -411,6 +411,9 @@ impl Runtime {
         if let Some(extensions) = &self.extension_snapshot {
             builder = builder.extensions(extensions.clone());
         }
+        if self.config.code_mode.only {
+            builder = builder.model_tools(vec!["codemode".into()]);
+        }
         builder = builder.token_counter(tokenizers::counter(self.config.context.tokenizer));
         if let Some(store) = self.artifact_store_for(workspace)? {
             #[cfg(feature = "images")]

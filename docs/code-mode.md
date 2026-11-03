@@ -51,9 +51,9 @@ A settings-v1 file can contain:
 
 Choose actual names in the installed registry. Omit `tools` (or set it to null) to offer all
 non-composite tools in the frozen registry, including explicit native/process/MCP extensions.
-An empty list offers none. This selects the program catalog only: ordinary root tools remain
-visible/callable under their existing policies; Code Mode does not hide their schemas from the
-outer model or turn this setting into an Agent-wide read-only profile.
+An empty list offers none. This selects the program catalog only. In normal mode, ordinary
+root tools remain declared under their existing policies. Root exposure is selected separately
+with the only setting below; neither setting grants leaf permissions or a read-only profile.
 Absent tools, recursive composites, duplicate names and alias
 collisions fail closed before a program starts. `AICODER_CODE_MODE=true` and
 `AICODER_CODE_MODE_TOOLS='["read_file"]'` provide environment equivalents; normal field-level
@@ -65,6 +65,43 @@ using the crate's `engine` feature, optionally calling `only_tools` first. Other
 engines can implement core's `ToolCompositionFactory` / `ToolProgram` without depending on
 QuickJS. A composite cannot also supply an owned PreparedTool: the dispatcher rejects that
 combination before approval rather than discarding an approved operation.
+
+## Only mode and root declarations
+
+`--code-mode-only` on CLI/TUI/Web enables Code Mode and declares only codemode to the outer
+model. It conflicts with --code-mode, which explicitly selects normal exposure. RPC inherits
+its CLI host setting. The same settings-v1 configuration is:
+
+```json
+{"version":1,"settings":{"code_mode":{"enabled":true,"only":true,"tools":["read_file","image_output"]}}}
+```
+
+Environment equivalents are `AICODER_CODE_MODE=true` and `AICODER_CODE_MODE_ONLY=true`.
+Each field uses normal settings precedence. only requires enabled; a contradictory configuration
+rejects before model IO. Default only is false. Script discovery/calls still use the separate
+frozen leaf subset, including extensions and explicit images, with all guards/approvals/budgets.
+
+Core SDK hosts can choose any bounded root catalog with
+`TurnExecutorBuilder::model_tools(Vec<String>)`. None offers all registered tools; an empty
+selection offers none. Names must be unique installed entries (at most 256, bounded lengths),
+validated after extension installation. model_tool_definitions() reports the selected catalog;
+tool_registry() still reports the full host registry. Explicit request subsets must match that
+host selection. Preparation, model selection, context/token measurement and manual compaction
+use the same declarations before journal mutation. Old canonical calls/results remain history,
+not newly granted ability to invoke their names.
+
+Fresh model calls to a registered but undeclared root tool return a paired tool_not_exposed
+error with operation_completed false, before guards, preparation or approval-cache lookup.
+Unknown names retain unknown_tool. Attempts still use normal parent budgets and canonical
+journaling. Composed leaves use their factory's separate catalog and dispatcher path; root
+exposure does not secretly remove them. A model ignoring the advertised schema cannot bypass
+only by returning a direct write_file call. This strengthens explicit request subsets in normal
+mode too. ToolChoice restrictions remain independently enforced.
+
+Benchmark provenance keeps the installed tools and optionally records narrower model_tools.
+This describes requested effective root declarations; it is observation data, never a rule
+restored into replay execution. Old observations deserialize with the optional field absent.
+See [only-mode acceptance](s7-code-only-acceptance.md).
 
 The model calls `codemode` with one JSON field, `code`, containing an async function body:
 

@@ -72,6 +72,9 @@ struct Cli {
     /// Enable bounded JavaScript tool composition (requires the code-mode build feature).
     #[arg(long)]
     code_mode: bool,
+    /// Offer only Code Mode to the model; leaf tools retain their host policies.
+    #[arg(long, conflicts_with = "code_mode")]
+    code_mode_only: bool,
     /// Explicit trusted stdio launch file (requires host-extensions for transports).
     #[arg(long)]
     extension_config: Option<PathBuf>,
@@ -127,7 +130,14 @@ pub async fn run_cli() -> Result<()> {
                     ..Default::default()
                 },
                 code_mode: aicoder_runtime::code_mode::CodeModeSettings {
-                    enabled: if cli.code_mode {
+                    only: if cli.code_mode_only {
+                        Setting::Value(true)
+                    } else if cli.code_mode {
+                        Setting::Value(false)
+                    } else {
+                        Setting::Inherit
+                    },
+                    enabled: if cli.code_mode || cli.code_mode_only {
                         Setting::Value(true)
                     } else {
                         Setting::Inherit

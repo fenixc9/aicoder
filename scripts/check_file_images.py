@@ -23,7 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--bin-dir', type=Path, default=ROOT/'target/debug')
 parser.add_argument("--code-mode", action="store_true", help="Exercise explicit and filtered Code Mode image output")
+parser.add_argument("--only", action="store_true", help="Exercise Code Mode only root exposure and direct-call rejection")
 args = parser.parse_args()
+args.code_mode = args.code_mode or args.only
 BINS = args.bin_dir.resolve()
 TOKEN = 'fixture-file-images-token-0123456789'
 requests = []
@@ -43,15 +45,23 @@ class Provider(http.server.BaseHTTPRequestHandler):
             assert size < 2*1024*1024
             request = json.loads(self.rfile.read(size))
             requests.append(request)
+            if args.only:
+                assert [t['function']['name'] for t in request['tools']] == ['codemode']
             tools = [m for m in request['messages'] if m['role'] == 'tool']
             if not tools:
                 code = "try {const full=await tools.read_file.result({path:'picture.txt'}); " + ("text('filtered');" if request['model']=='filtered' else "await image(full); text('selected');") + "} catch(e) {text(e.code); throw e;}"
                 message = {'role': 'assistant', 'tool_calls': [{'id': 'native-image', 'type': 'function',
                     'function': {'name': 'codemode' if args.code_mode else 'read_file', 'arguments': json.dumps({'code':code} if args.code_mode else {'path':'picture.txt'})}}]}
+                if request['model']=='bypass':
+                    message['tool_calls'][0]['function']={'name':'write_file','arguments':json.dumps({'path':'forbidden.txt','content':'must not execute'})}
             else:
                 assert len(tools) == 1
                 result = json.loads(tools[0]['content'])
-                if request['model'] == 'nostore':
+                if request['model']=='bypass':
+                    assert result['is_error'] is True
+                    assert result['content']['error']['code']=='tool_not_exposed'
+                    assert result['content']['error']['details']['operation_completed'] is False
+                elif request['model'] == 'nostore':
                     assert result['is_error'] is True
                     error=result['content']['error']
                     assert error['code'] == ('code_mode_script' if args.code_mode else 'artifact_store_unavailable')
@@ -145,24 +155,26 @@ server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Provider)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 try:
     with tempfile.TemporaryDirectory(prefix='aicoder-native-images-') as folder:
-        for frontend in ['cli', 'rpc', 'web', 'tui', 'text', 'nostore'] + (['filtered'] if args.code_mode else []):
+        for frontend in ['cli', 'rpc', 'web', 'tui', 'text', 'nostore'] + (['filtered'] if args.code_mode else []) + (['bypass'] if args.only else []):
             root = Path(folder)/frontend
             root.mkdir()
             (root/'picture.txt').write_bytes(bmp())
             state = root/'state'
             state.mkdir(mode=0o700)
-            model = frontend if frontend in ['text', 'nostore', 'filtered'] else 'vision'
+            model = frontend if frontend in ['text', 'nostore', 'filtered', 'bypass'] else 'vision'
             (state/'settings.json').write_text(json.dumps({'version': 1, 'profiles': {'fixture': {
                 'base_url': f'http://127.0.0.1:{server.server_address[1]}/v1',
                 'provider_id': 'fixture', 'model': model, 'api_key_env': 'FIXTURE_KEY', 'proxy': 'disabled',
                 'models': [{'provider': 'fixture', 'id': m, 'context_tokens': 65536,
-                            'capabilities': {'tools': True, 'images': m != 'text'}} for m in ['vision', 'text', 'nostore', 'filtered']]}},
+                            'capabilities': {'tools': True, 'images': m != 'text'}} for m in ['vision', 'text', 'nostore', 'filtered', 'bypass']]}},
                 'settings': {'provider_profile': 'fixture', 'execution': {'stream': False}, 'code_mode':{'enabled':args.code_mode}}}))
             env = {'PATH': os.environ.get('PATH', ''), 'TERM': 'xterm-256color',
                    'AICODER_HOME': str(state), 'FIXTURE_KEY': 'fixture-key', 'AICODER_WEB_TOKEN': TOKEN}
             common = ['--workspace', str(root), '--no-resources']
+            if args.only:
+                common += ['--code-mode-only']
             count = len(requests)
-            if frontend in ['cli', 'text', 'nostore', 'filtered']:
+            if frontend in ['cli', 'text', 'nostore', 'filtered', 'bypass']:
                 output = subprocess.run([str(BINS/'aicoder'), *common,
                     *(['--no-session'] if frontend == 'nostore' else []), *(['--yes'] if args.code_mode else []), '--json', '--prompt', 'inspect native image'],
                     env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=20)
@@ -274,11 +286,14 @@ try:
                     os.close(master)
             assert len(requests) == count+2, (frontend, len(requests)-count, failures)
             assert (root/'picture.txt').read_bytes() == bmp()
+            assert not (root/'forbidden.txt').exists()
             if frontend != 'nostore':
                 rows = entries(root)
                 messages = [e['message'] for e in rows if e.get('kind') == 'message']
                 images = [b for m in messages for b in m['content'] if b['type'] == 'image']
-                if frontend=='filtered':
+                if frontend=='bypass':
+                    assert not images, frontend
+                elif frontend=='filtered':
                     assert not images, frontend
                     assert any(e.get('namespace')=='aicoder.composition.v1' and '"type": "image"' in json.dumps(e.get('data')) for e in rows)
                 else:
@@ -288,7 +303,7 @@ try:
                 assert sum(m['role'] == 'user' for m in messages) == 1
                 assert '_tool_image_projection' not in json.dumps(rows)
         assert not failures, failures
-        print(json.dumps({'native_read_file': True, 'code_mode':args.code_mode, 'explicit_image_selection':args.code_mode, 'signature_not_extension': True, 'bmp': True,
+        print(json.dumps({'native_read_file': True, 'code_mode':args.code_mode, 'only_mode':args.only, 'direct_hidden_call_rejected':args.only, 'explicit_image_selection':args.code_mode, 'signature_not_extension': True, 'bmp': True,
             'frontends': ['cli_json', 'rpc', 'web', 'tui_pty'], 'nonvision_omission': True,
             'missing_storage_explicit': True, 'source_unchanged': True, 'raw_canonical_artifacts': True,
             'synthetic_user_history': False, 'loopback_model_requests': len(requests), 'real_model_requests': 0}))

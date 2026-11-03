@@ -84,6 +84,7 @@ async fn main() -> anyhow::Result<()> {
                 code_mode: CodeModeSettings {
                     enabled: Setting::Value(true),
                     tools: Setting::Value(vec!["read_file".into()]),
+                    ..Default::default()
                 },
                 resources: ResourceSettings {
                     enabled: Setting::Value(false),

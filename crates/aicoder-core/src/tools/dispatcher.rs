@@ -2,6 +2,7 @@ use crate::run::{RunFailure, RunLimiter, RunStage};
 mod composition;
 #[derive(Clone, Copy)]
 struct CallScope<'a> {
+    offered_tools: Option<&'a [crate::model::ToolDefinition]>,
     context: Option<&'a TurnExecutionContext>,
     limits: Option<&'a RunLimiter>,
     journal: Option<&'a dyn crate::RunJournal>,
@@ -32,6 +33,7 @@ use super::{
 
 #[derive(Clone, Copy)]
 pub(crate) struct DispatchJournal<'a> {
+    pub offered_tools: &'a [crate::model::ToolDefinition],
     pub journal: &'a dyn crate::RunJournal,
     pub base_index: usize,
 }
@@ -241,6 +243,8 @@ impl ToolDispatcher {
                 call,
                 events,
                 CallScope {
+                    offered_tools: control
+                        .and_then(|(_, _, journal)| journal.map(|journal| journal.offered_tools)),
                     context,
                     limits: control.map(|(limits, _, _)| limits.as_ref()),
                     journal: control.and_then(|(_, _, journal)| journal.map(|j| j.journal)),
@@ -368,8 +372,6 @@ impl ToolDispatcher {
             .as_ref()
             .map(|context| self.context.clone().with_ui(context.ui().named(&call.name)));
         let tool_context = scoped_context.as_ref().unwrap_or(&self.context);
-        let arguments = call.arguments.clone();
-
         let Some(tool) = self.registry.get(&call.name) else {
             return Ok(self
                 .failed_tool_message(
@@ -380,6 +382,26 @@ impl ToolDispatcher {
                 )
                 .await);
         };
+
+        if !scope.nested
+            && scope
+                .offered_tools
+                .is_some_and(|tools| !tools.iter().any(|tool| tool.name == call.name))
+        {
+            return Ok(self
+                .failed_tool_message(
+                    events,
+                    call,
+                    limits,
+                    ToolFailure::new(
+                        "tool_not_exposed",
+                        "Tool was not declared in this model request and was not executed",
+                    )
+                    .with_details(json!({"operation_completed":false})),
+                )
+                .await);
+        }
+        let arguments = call.arguments.clone();
 
         if tool.composition_factory().is_some()
             && (scope.nested || context.is_none() || limits.is_none() || scope.journal.is_none())

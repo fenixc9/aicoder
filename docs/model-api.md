@@ -118,3 +118,8 @@ core host resolves these with an explicit `ToolImageResolver`; runtime offers an
 scoped decoder. These sources are not valid user input. The compatible adapter projects
 resolved previews after the complete tool-result batch, without adding user facts to the
 journal. See [tool images](tool-images.md) and [migration](migrations.md).
+
+Host root tool catalogs can be selected with TurnExecutorBuilder::model_tools. They govern
+request declarations, preflight/context accounting and fresh direct model calls; the installed
+registry remains available to explicitly scoped compositions. Narrower per-request subsets
+also reject unadvertised registered calls before execution. See [root catalogs](code-mode.md#only-mode-and-root-declarations).

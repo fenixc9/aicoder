@@ -46,6 +46,7 @@ pub(crate) struct RunScope {
     state: AgentRunStateMachine,
 }
 pub struct TurnExecutor {
+    model_tools: Option<Vec<String>>,
     extensions: Option<Arc<crate::extensions::ExtensionSet>>,
     tool_image_resolver: Option<Arc<dyn crate::tool_images::ToolImageResolver>>,
     pub(crate) provider: Arc<dyn ModelProvider>,
@@ -94,6 +95,7 @@ impl TurnExecutor {
         config: TurnExecutionConfig,
     ) -> Self {
         Self {
+            model_tools: None,
             extensions: None,
             tool_image_resolver: None,
             provider,
@@ -110,6 +112,32 @@ impl TurnExecutor {
     /// The installed tool snapshot, including explicit native contributions.
     pub fn tool_registry(&self) -> &ToolRegistry {
         self.dispatcher.registry().as_ref()
+    }
+    /// Frozen root model catalog. Composition retains its separately allowlisted registry.
+    pub fn model_tool_definitions(&self) -> Vec<crate::model::ToolDefinition> {
+        let definitions = self.dispatcher.registry().definitions();
+        match &self.model_tools {
+            None => definitions,
+            Some(names) => names
+                .iter()
+                .filter_map(|name| definitions.iter().find(|tool| &tool.name == name).cloned())
+                .collect(),
+        }
+    }
+    pub fn model_tool_names(&self) -> Option<&[String]> {
+        self.model_tools.as_deref()
+    }
+    pub(crate) fn prepare_model_tools(&self, request: &mut ModelRequest) -> Result<()> {
+        let definitions = self.model_tool_definitions();
+        if request.tools.is_empty() {
+            request.tools = definitions;
+        } else {
+            anyhow::ensure!(
+                request.tools.iter().all(|tool| definitions.contains(tool)),
+                "request tools must match the host model catalog"
+            );
+        }
+        Ok(())
     }
 
     /// Actual immutable execution settings, for host diagnostics and reproducible evaluation.
@@ -144,7 +172,7 @@ impl TurnExecutor {
         mut template: ModelRequest,
         context: TurnExecutionContext,
     ) -> crate::summary::ManualCompactionReport {
-        template.tools = self.dispatcher.registry().definitions();
+        template.tools = self.model_tool_definitions();
         let spec = self
             .provider
             .model_spec(&template.model)
@@ -586,15 +614,7 @@ impl TurnExecutor {
         }
 
         request.stream = self.config.stream;
-        let definitions = self.dispatcher.registry().definitions();
-        if request.tools.is_empty() {
-            request.tools = definitions;
-        } else {
-            anyhow::ensure!(
-                request.tools.iter().all(|tool| definitions.contains(tool)),
-                "request tools must match registered tool definitions"
-            );
-        }
+        self.prepare_model_tools(&mut request)?;
 
         if let Some(info) = &mut progress.model_context {
             info.initial_history_messages = progress.messages.len();
@@ -1230,6 +1250,7 @@ impl TurnExecutor {
                     crate::tools::DispatchJournal {
                         journal,
                         base_index: model_index + 1,
+                        offered_tools: &request.tools,
                     },
                 )
                 .await;
@@ -1413,6 +1434,7 @@ fn ensure_valid_compaction(compaction: &ContextCompaction, target_tokens: usize)
 
 /// Host assembly for the reusable loop. An omitted registry is empty.
 pub struct TurnExecutorBuilder {
+    model_tools: Option<Vec<String>>,
     extensions: Option<Arc<crate::extensions::ExtensionSet>>,
     tool_image_resolver: Option<Arc<dyn crate::tool_images::ToolImageResolver>>,
     provider: Arc<dyn ModelProvider>,
@@ -1439,6 +1461,7 @@ impl TurnExecutorBuilder {
 
     pub fn from_shared(provider: Arc<dyn ModelProvider>) -> Self {
         Self {
+            model_tools: None,
             extensions: None,
             tool_image_resolver: None,
             provider,
@@ -1463,6 +1486,12 @@ impl TurnExecutorBuilder {
 
     pub fn registry(mut self, registry: ToolRegistry) -> Self {
         self.registry = Some(Arc::new(registry));
+        self
+    }
+    /// Restrict root model declarations and direct model calls; leaf dispatch remains scoped
+    /// by each composition factory. An empty list exposes no root tools.
+    pub fn model_tools(mut self, names: Vec<String>) -> Self {
+        self.model_tools = Some(names);
         self
     }
 
@@ -1569,6 +1598,18 @@ impl TurnExecutorBuilder {
         } else {
             registry
         };
+        if let Some(names) = &self.model_tools {
+            let mut seen = std::collections::BTreeSet::new();
+            anyhow::ensure!(
+                names.len() <= 256
+                    && names.iter().all(|name| !name.is_empty()
+                        && name.len() <= 128
+                        && !name.chars().any(char::is_control)
+                        && seen.insert(name)
+                        && registry.get(name).is_some()),
+                "model tool selection must be a bounded unique subset of the installed registry"
+            );
+        }
         let mut dispatcher = ToolDispatcher::new(
             registry,
             self.workspace,
@@ -1590,6 +1631,7 @@ impl TurnExecutorBuilder {
             self.execution_config,
         );
         executor.extensions = self.extensions;
+        executor.model_tools = self.model_tools;
         executor.tool_image_resolver = self.tool_image_resolver;
         executor.counting = self.counting;
         executor.context_policy = self.context_policy;

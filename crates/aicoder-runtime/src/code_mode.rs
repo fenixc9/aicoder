@@ -5,17 +5,24 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields)]
 pub struct CodeModeSettings {
     #[serde(skip_serializing_if = "Setting::is_inherit")]
+    pub only: Setting<bool>,
+    #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub enabled: Setting<bool>,
     #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub tools: Setting<Vec<String>>,
 }
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct CodeModePolicy {
+    pub only: bool,
     pub enabled: bool,
     pub tools: Option<Vec<String>>,
 }
 impl CodeModePolicy {
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !self.only || self.enabled,
+            "Code Mode only requires Code Mode to be enabled"
+        );
         if let Some(tools) = &self.tools {
             anyhow::ensure!(
                 tools.len() <= 256,

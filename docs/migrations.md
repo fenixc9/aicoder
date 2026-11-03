@@ -1,5 +1,22 @@
 # API migrations
 
+## S7: Code Mode only and root tool catalogs
+
+Core builders add model_tools(Vec<String>), model_tool_definitions() and model_tool_names().
+The root catalog defaults to the complete registry; explicit empty/subset selections stay
+empty/subset through preflight, counting and dispatch. Direct model calls to hidden registered
+tools now return tool_not_exposed before preparation/approval, while composed leaves retain
+their separate frozen catalog. Unknown tool names preserve unknown_tool. Callers intentionally
+using request subsets must advertise every root tool they expect a model to call.
+
+Runtime CodeModeSettings/Policy add only (default false); Rust literals should include
+..Default::default(). CLI/TUI/Web --code-mode-only enables only exposure, and --code-mode
+explicitly selects normal exposure. only requires enabled in settings/environment. No session
+or authority is loaded from a past catalog. EvalProvenance adds optional model_tools when root
+declarations differ from installed tools; older observations default to None. This field is
+observation-only, and default serialized observations keep their old shape. No persisted
+session format, dependency or default feature changes. See [contract](code-mode.md#only-mode-and-root-declarations).
+
 ## S7: explicit Code Mode image output
 
 ProgramEvent gains ImageCall; external exhaustive Rust matches must handle it as a scoped

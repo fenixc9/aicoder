@@ -28,19 +28,7 @@ impl TurnExecutor {
             return Err(context.error().into());
         }
         input.request.stream = self.config.stream;
-        let definitions = self.dispatcher.registry().definitions();
-        if input.request.tools.is_empty() {
-            input.request.tools = definitions;
-        } else {
-            ensure!(
-                input
-                    .request
-                    .tools
-                    .iter()
-                    .all(|tool| definitions.contains(tool)),
-                "request contains an unregistered tool definition"
-            );
-        }
+        self.prepare_model_tools(&mut input.request)?;
         input.started.get_or_insert_with(tokio::time::Instant::now);
         let deadline = if let Some(duration) = self.config.budget.max_duration {
             Some(
@@ -167,6 +155,15 @@ impl TurnExecutor {
             "invalid model selection identity"
         );
         let mut request = std::borrow::Cow::Borrowed(&input.request);
+        let definitions = self.model_tool_definitions();
+        if request.tools.is_empty() && !definitions.is_empty() {
+            request.to_mut().tools = definitions;
+        } else {
+            ensure!(
+                request.tools.iter().all(|tool| definitions.contains(tool)),
+                "request tools must match the host model catalog"
+            );
+        }
         let omitted = if spec.capabilities.reasoning_history {
             0
         } else {

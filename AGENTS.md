@@ -124,6 +124,8 @@
   Branch stores contain public JSON only; cancellation/steering must not commit late state.
   Image output uses explicit read-only leaf intents; recovery references must not expose
   filtered images. Revalidate references in current host storage, never from script state.
+  Root model catalogs are separate from leaf registries; reject fresh unadvertised calls
+  before preparation/approval and keep preflight, counting and bench observations consistent.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

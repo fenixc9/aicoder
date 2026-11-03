@@ -41,6 +41,7 @@ fn code_mode_configuration_obeys_precedence_and_reports_no_raw_values() {
         code_mode: CodeModeSettings {
             enabled: Setting::Value(false),
             tools: Setting::Inherit,
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -238,4 +239,83 @@ mod engine {
         );
         assert!(mcp.shutdown().await.reaped);
     }
+}
+
+#[test]
+fn only_requires_enabled_and_resolves_each_setting_layer_independently() {
+    let root = tempfile::tempdir().unwrap();
+    let env = BTreeMap::from([("AICODER_CODE_MODE_ONLY".into(), "true".into())]);
+    let result = load(root.path(), Settings::default(), env.clone());
+    assert!(result.is_err());
+    let runtime = load(
+        root.path(),
+        Settings {
+            code_mode: CodeModeSettings {
+                only: Setting::Value(false),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        env,
+    )
+    .unwrap();
+    assert!(!runtime.config().code_mode.only);
+    assert_eq!(
+        runtime.config().sources["code_mode.only"],
+        ConfigSource::Explicit
+    );
+}
+#[cfg(feature = "code-mode")]
+#[test]
+fn only_exposes_one_root_tool_while_preserving_the_leaf_registry() {
+    let root = tempfile::tempdir().unwrap();
+    let runtime = load(
+        root.path(),
+        Settings {
+            code_mode: CodeModeSettings {
+                enabled: Setting::Value(true),
+                only: Setting::Value(true),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        BTreeMap::new(),
+    )
+    .unwrap();
+    struct Provider;
+    #[async_trait::async_trait]
+    impl aicoder_core::ModelProvider for Provider {
+        fn model_spec(
+            &self,
+            model: &str,
+        ) -> Result<aicoder_core::model::ModelSpec, aicoder_core::model::ProviderError> {
+            let mut spec = aicoder_core::model::ModelSpec::new("fixture", model);
+            spec.capabilities.tools = true;
+            Ok(spec)
+        }
+        async fn generate(
+            &self,
+            _: aicoder_core::model::ModelRequest,
+            _: Arc<dyn aicoder_core::model::ModelEventSink>,
+            _: aicoder_core::TurnExecutionContext,
+        ) -> Result<aicoder_core::model::ModelResponse, aicoder_core::model::ProviderError>
+        {
+            panic!("assembly must not invoke a model")
+        }
+    }
+    let executor = runtime
+        .executor_builder(Arc::new(Provider))
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(
+        executor
+            .model_tool_definitions()
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["codemode"]
+    );
+    assert!(executor.tool_registry().get("read_file").is_some());
+    assert!(executor.tool_registry().get("image_output").is_some());
 }

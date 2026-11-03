@@ -74,6 +74,7 @@ fn runtime(root: &Path, state: &Path, tools: Option<Vec<String>>) -> Runtime {
                 },
                 code_mode: CodeModeSettings {
                     enabled: Setting::Value(true),
+                    only: Setting::Value(true),
                     tools: tools.map(Setting::Value).unwrap_or(Setting::Inherit),
                 },
                 ..Default::default()
@@ -226,6 +227,11 @@ async fn explicit_reference_and_inline_outputs_reach_model_views_and_keep_raw_le
         );
         let requests = provider.requests.lock().unwrap();
         assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.tools.len() == 1 && request.tools[0].name == "codemode")
+        );
         assert_eq!(
             count_images(&requests[1].messages),
             if vision && cfg!(feature = "images") {
