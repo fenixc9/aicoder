@@ -152,7 +152,9 @@ Cancellation/validation failure leaves the previous registry authoritative. Publ
 an exclusive registry lock, synchronized staging and atomic rename; post-visibility durability
 errors require inspection before retry. Uninstall revokes trust but retains object bytes for
 existing generations; storage budgets include retained/orphan objects. There is no automatic
-GC, dependency downloader, lifecycle hook or script engine. A sealed asset page verifies its
+GC, implicit source discovery, lifecycle hook or script engine. Explicit
+[dependency source catalogues](remote-packages.md) can fetch an exact remote closure and
+publish it as one transaction. A sealed asset page verifies its
 whole bounded file before slicing, so its scan memory can reach the per-file ceiling even
 when the returned page is small. Public state is caller-supplied domain data, never a safe
 place for secrets. Installed content can be modified by its OS owner; integrity checks detect

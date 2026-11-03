@@ -5,7 +5,10 @@ mod acquire;
 mod activation;
 mod assets;
 #[cfg(feature = "package-downloads")]
-pub use acquire::{PackageAcquireLimits, PackageAcquirer, PackageRequest};
+pub use acquire::{
+    PackageAcquireLimits, PackageAcquirer, PackageRequest, PackageSourceCatalogue,
+    PackageSourceEntry,
+};
 mod manifest;
 mod snapshot;
 mod state;

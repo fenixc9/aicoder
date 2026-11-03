@@ -156,6 +156,395 @@ fn metadata(base: &str, bytes: &[u8]) -> Vec<u8> {
     serde_json::to_vec(&json!({"name":"@scope/example","version":"1.0.0","dist":{"tarball":format!("{base}/archive"),
         "integrity":format!("sha512-{}",base64::engine::general_purpose::STANDARD.encode(ring::digest::digest(&ring::digest::SHA512,bytes).as_ref()))}})).unwrap()
 }
+#[derive(Clone)]
+struct Bundle {
+    pin: PackagePin,
+    bytes: Vec<u8>,
+    manifest: Vec<u8>,
+    content: String,
+}
+fn bundle(
+    reference: &PackageStore,
+    id: &str,
+    dependencies: Vec<PackagePin>,
+    content: &str,
+) -> Bundle {
+    let manifest=serde_json::to_vec(&json!({"schema_version":1,"id":id,"version":"1.0.0","files":["rules.md"],
+        "permissions":{"instructions":true},"resources":{"instructions":["rules.md"]},"dependencies":dependencies})).unwrap();
+    let package =
+        serde_json::to_vec(&json!({"name":format!("@scope/{id}"),"version":"1.0.0"})).unwrap();
+    let bytes = archive(&[
+        ("package/aicoder-package.json", &manifest),
+        ("package/package.json", &package),
+        ("package/rules.md", content.as_bytes()),
+    ]);
+    let source = tempfile::tempdir().unwrap();
+    std::fs::write(source.path().join(MANIFEST_FILE), &manifest).unwrap();
+    std::fs::write(source.path().join("rules.md"), content).unwrap();
+    let pin = reference
+        .install_local(
+            source.path(),
+            InstallOptions {
+                enable: false,
+                allow_execution: false,
+            },
+            &TurnExecutionContext::new(),
+        )
+        .unwrap()
+        .pin;
+    Bundle {
+        pin,
+        bytes,
+        manifest,
+        content: content.into(),
+    }
+}
+fn bundle_server(bundles: Vec<Bundle>) -> Server {
+    Server::new(move |base, request| bundle_response(base, request, &bundles))
+}
+fn bundle_response(base: &str, request: Request, bundles: &[Bundle]) -> Response {
+    for bundle in bundles {
+        if request.path == format!("/archive/{}", bundle.pin.id) {
+            return Response::ok(bundle.bytes.clone());
+        }
+        if request.path.contains(&format!("%2F{}", bundle.pin.id)) {
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&metadata(base, &bundle.bytes)).unwrap();
+            value["name"] = json!(format!("@scope/{}", bundle.pin.id));
+            value["dist"]["tarball"] = json!(format!("{base}/archive/{}", bundle.pin.id));
+            return Response::ok(serde_json::to_vec(&value).unwrap());
+        }
+    }
+    Response {
+        code: 404,
+        body: Vec::new(),
+        headers: Vec::new(),
+        delay: Duration::ZERO,
+    }
+}
+fn install_bundle(store: &PackageStore, bundle: &Bundle) {
+    let source = tempfile::tempdir().unwrap();
+    std::fs::write(source.path().join(MANIFEST_FILE), &bundle.manifest).unwrap();
+    std::fs::write(source.path().join("rules.md"), &bundle.content).unwrap();
+    store
+        .install_local(
+            source.path(),
+            InstallOptions {
+                enable: false,
+                allow_execution: false,
+            },
+            &TurnExecutionContext::new(),
+        )
+        .unwrap();
+}
+fn request(server: &Server, id: &str) -> PackageRequest {
+    PackageRequest::Npm {
+        registry: server.url.clone(),
+        package: format!("@scope/{id}"),
+        version: None,
+    }
+}
+fn catalogue(server: &Server, bundles: &[Bundle]) -> PackageSourceCatalogue {
+    PackageSourceCatalogue {
+        schema_version: 1,
+        entries: bundles
+            .iter()
+            .map(|b| PackageSourceEntry {
+                pin: b.pin.clone(),
+                request: request(server, &b.pin.id),
+            })
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn transitive_sources_publish_one_complete_graph_without_enabling_dependency_roots() {
+    let reference = tempfile::tempdir().unwrap();
+    let reference = PackageStore::open(reference.path()).unwrap();
+    let leaf = bundle(&reference, "leaf", vec![], "leaf");
+    let middle = bundle(&reference, "middle", vec![leaf.pin.clone()], "middle");
+    let root = bundle(&reference, "root", vec![middle.pin.clone()], "root");
+    let server = bundle_server(vec![leaf.clone(), middle.clone(), root.clone()]);
+    let home = tempfile::tempdir().unwrap();
+    let store = PackageStore::open(home.path()).unwrap();
+    let record = client()
+        .install_with_sources(
+            &store,
+            &request(&server, "root"),
+            &catalogue(&server, &[middle, leaf]),
+            InstallOptions::default(),
+            TurnExecutionContext::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(record.pin, root.pin);
+    let index = store.index().unwrap();
+    assert_eq!(index.revision, 1);
+    assert_eq!(index.installed.len(), 3);
+    assert_eq!(
+        index.enabled.iter().cloned().collect::<Vec<_>>(),
+        vec!["root"]
+    );
+    assert_eq!(
+        store
+            .snapshot(None, None)
+            .unwrap()
+            .packages()
+            .iter()
+            .map(|p| p.pin.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["leaf", "middle", "root"]
+    );
+    assert_eq!(server.requests.lock().unwrap().len(), 6);
+    assert_eq!(
+        std::fs::read_dir(home.path().join("staging"))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn mismatched_or_missing_dependency_sources_never_publish_a_partial_graph() {
+    for missing in [false, true] {
+        let reference = tempfile::tempdir().unwrap();
+        let reference = PackageStore::open(reference.path()).unwrap();
+        let leaf = bundle(&reference, "leaf", vec![], "expected");
+        let root = bundle(&reference, "root", vec![leaf.pin.clone()], "root");
+        let wrong = bundle(&reference, "leaf", vec![], "different content");
+        let server = bundle_server(vec![wrong, root]);
+        let home = tempfile::tempdir().unwrap();
+        let store = PackageStore::open(home.path()).unwrap();
+        let sources = if missing {
+            PackageSourceCatalogue::default()
+        } else {
+            catalogue(&server, &[leaf])
+        };
+        assert!(
+            client()
+                .install_with_sources(
+                    &store,
+                    &request(&server, "root"),
+                    &sources,
+                    InstallOptions::default(),
+                    TurnExecutionContext::new()
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(store.index().unwrap().revision, 0);
+        assert!(store.index().unwrap().installed.is_empty());
+        assert_eq!(
+            std::fs::read_dir(home.path().join("staging"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+}
+
+#[tokio::test]
+async fn aggregate_graph_budget_rejects_before_publication() {
+    let reference = tempfile::tempdir().unwrap();
+    let reference = PackageStore::open(reference.path()).unwrap();
+    let leaf = bundle(&reference, "leaf", vec![], "leaf");
+    let root = bundle(&reference, "root", vec![leaf.pin.clone()], "root");
+    let server = bundle_server(vec![leaf.clone(), root]);
+    let home = tempfile::tempdir().unwrap();
+    let store = PackageStore::open(home.path()).unwrap();
+    let mut limits = PackageAcquireLimits::default();
+    limits.max_graph_bytes = 6000;
+    let acquirer = PackageAcquirer::new(limits)
+        .unwrap()
+        .with_loopback_http(true);
+    assert!(
+        acquirer
+            .install_with_sources(
+                &store,
+                &request(&server, "root"),
+                &catalogue(&server, &[leaf]),
+                InstallOptions::default(),
+                TurnExecutionContext::new()
+            )
+            .await
+            .is_err()
+    );
+    assert!(store.index().unwrap().installed.is_empty());
+    assert_eq!(store.index().unwrap().revision, 0);
+}
+#[tokio::test]
+async fn concurrent_registry_edits_reject_prepared_graph_without_rolling_back_the_other_owner() {
+    let reference = tempfile::tempdir().unwrap();
+    let reference = PackageStore::open(reference.path()).unwrap();
+    let stable = bundle(&reference, "stable", vec![], "stable");
+    let root = bundle(&reference, "root", vec![], "root");
+    let home = tempfile::tempdir().unwrap();
+    let store = Arc::new(PackageStore::open(home.path()).unwrap());
+    install_bundle(&store, &stable);
+    let writer = store.clone();
+    let changed = AtomicBool::new(false);
+    let server = Server::new(move |base, request| {
+        if !changed.swap(true, Ordering::SeqCst) {
+            writer.enable("stable", false).unwrap();
+        }
+        bundle_response(base, request, std::slice::from_ref(&root))
+    });
+    let before = store.index().unwrap().revision;
+    let error = client()
+        .install(
+            &store,
+            &request(&server, "root"),
+            InstallOptions::default(),
+            TurnExecutionContext::new(),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("registry changed"));
+    assert_eq!(store.index().unwrap().revision, before + 1);
+    assert_eq!(store.index().unwrap().installed.len(), 1);
+    assert_eq!(
+        store
+            .snapshot(Some(&["stable".into()]), None)
+            .unwrap()
+            .get("stable")
+            .unwrap()
+            .pin,
+        stable.pin
+    );
+    assert_eq!(
+        std::fs::read_dir(home.path().join("staging"))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+#[tokio::test]
+async fn source_catalogue_cannot_route_credentials_or_admit_unbounded_or_duplicate_pins() {
+    let root = tempfile::tempdir().unwrap();
+    let reference = PackageStore::open(root.path().join("reference")).unwrap();
+    let leaf = bundle(&reference, "leaf", vec![], "leaf");
+    let server = bundle_server(vec![leaf.clone()]);
+    let mut sources = catalogue(&server, std::slice::from_ref(&leaf));
+    sources.entries.push(sources.entries[0].clone());
+    let home = tempfile::tempdir().unwrap();
+    let store = PackageStore::open(home.path()).unwrap();
+    assert!(
+        client()
+            .install_with_sources(
+                &store,
+                &request(&server, "leaf"),
+                &sources,
+                InstallOptions::default(),
+                TurnExecutionContext::new()
+            )
+            .await
+            .is_err()
+    );
+    assert!(server.requests.lock().unwrap().is_empty());
+    let path = root.path().join("sources.json");
+    let mut value = serde_json::to_value(catalogue(&server, &[leaf])).unwrap();
+    value["entries"][0]["token_env"] = json!("MUST_NOT_ROUTE");
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(PackageSourceCatalogue::read(&path).is_err());
+    std::fs::write(&path, vec![b' '; 256 * 1024 + 1]).unwrap();
+    assert!(PackageSourceCatalogue::read(&path).is_err());
+}
+#[tokio::test]
+async fn cancellation_after_root_preparation_discards_the_whole_dependency_transaction() {
+    let reference = tempfile::tempdir().unwrap();
+    let reference = PackageStore::open(reference.path()).unwrap();
+    let leaf = bundle(&reference, "leaf", vec![], "leaf");
+    let root = bundle(&reference, "root", vec![leaf.pin.clone()], "root");
+    let server = Server::new(move |base, request| {
+        let delay = request.path.contains("%2Fleaf");
+        let mut response = bundle_response(base, request, &[leaf.clone(), root.clone()]);
+        if delay {
+            response.delay = Duration::from_millis(300);
+        }
+        response
+    });
+    let leaf = reference
+        .snapshot(Some(&["leaf".into()]), None)
+        .unwrap()
+        .get("leaf")
+        .unwrap()
+        .pin
+        .clone();
+    let sources = PackageSourceCatalogue {
+        schema_version: 1,
+        entries: vec![PackageSourceEntry {
+            pin: leaf,
+            request: request(&server, "leaf"),
+        }],
+    };
+    let home = tempfile::tempdir().unwrap();
+    let store = PackageStore::open(home.path()).unwrap();
+    let context = TurnExecutionContext::new();
+    let cancel = context.clone();
+    let requests = server.requests.clone();
+    let watcher = tokio::spawn(async move {
+        for _ in 0..200 {
+            if requests
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|p| p.contains("%2Fleaf"))
+            {
+                cancel.cancel("cancel dependency");
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        panic!("dependency did not start");
+    });
+    assert!(
+        client()
+            .install_with_sources(
+                &store,
+                &request(&server, "root"),
+                &sources,
+                InstallOptions::default(),
+                context
+            )
+            .await
+            .is_err()
+    );
+    watcher.await.unwrap();
+    assert!(store.index().unwrap().installed.is_empty());
+    assert_eq!(
+        std::fs::read_dir(home.path().join("staging"))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn reused_dependency_does_not_upgrade_global_active_selection_or_fetch_again() {
+    let home = tempfile::tempdir().unwrap();
+    let store = PackageStore::open(home.path()).unwrap();
+    let old = bundle(&store, "leaf", vec![], "old");
+    let newer = bundle(&store, "leaf", vec![], "new");
+    let root = bundle(&store, "root", vec![old.pin.clone()], "root");
+    // Keep the root source out of installed state so this is a real root acquisition.
+    store.uninstall("root").unwrap();
+    let server = bundle_server(vec![root]);
+    client()
+        .install(
+            &store,
+            &request(&server, "root"),
+            InstallOptions::default(),
+            TurnExecutionContext::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.index().unwrap().active["leaf"], newer.pin.sha256);
+    assert_eq!(
+        store.snapshot(None, None).unwrap().get("leaf").unwrap().pin,
+        old.pin
+    );
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
+}
 fn client() -> PackageAcquirer {
     PackageAcquirer::new(PackageAcquireLimits::default())
         .unwrap()

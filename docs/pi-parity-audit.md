@@ -21,7 +21,7 @@ It does not certify all Pi convenience features or arbitrary third-party extensi
 | Steer and queued follow-up | Root controls/approvals, queue limits, current mutation ownership and skipped remaining calls; run_control and terminal tests | Verified within named scope |
 | Interactive, print/JSON, RPC, SDK | Shared core/runtime with real PTY/browser and normalized SDK/CLI/RPC/Web case; [S5 acceptance](s5-images-acceptance.md) | Verified basic flows; no shortcut/ABI equivalence claim |
 | Extension tools/hooks/commands/UI | Immutable native registration; process/MCP tool adapters; [explicit stock launch](host-extensions.md); TUI/Web native UI examples; [S6 acceptance](s6-ui-acceptance.md) | Partial: stock process/MCP/package activation verified; hook breadth remains |
-| Resource package discovery/install/pins/reload | Content-addressed local imports, locks/trust/dependencies and public branch state; [packages](packages.md) | Partial: Git HTTPS/npm root acquisition and activation verified; automatic dependency-source acquisition remains |
+| Resource package discovery/install/pins/reload | Content-addressed local imports, locks/trust/dependencies and public branch state; [packages](packages.md) | Verified scoped Git HTTPS/npm native closures and activation; no JS/TS ABI claim |
 | Themes, export/share | TUI themes and inert canonical JSON/HTML exports, explicit publication adapter; [exports](session-exports.md) | Verified scoped local/custom-host path; no third-party hosted sharing deployment |
 | MCP and Code Mode | Actual modern/legacy stdio, [stock stdio hosts](host-extensions.md), real JS composition with leaf approvals/budgets/journal, CLI opt-in; [Code Mode](code-mode.md), [MCP](mcp.md) | Partial: stock MCP works; additional Code Mode capabilities remain |
 | Multimodal | Immutable bounded local CLI/TUI image input and compatible adapter; [image acceptance](s5-images-acceptance.md) | Partial: user image input works; tool/MCP image artifacts are not delivered as visible model image content |
@@ -37,11 +37,13 @@ that full product parity has already been achieved.
    select declared package palettes as bounded verified data, independently of executable
    activation. Resource reload retains the current executable generation and captured colors;
    explicit restart/selection adopts changes. These paths are no longer outstanding gaps.
-2. **Remote dependency-source acquisition.** Optional Git HTTPS/npm root acquisition now
-   performs real bounded transfer, integrity/identity checks, strict extraction and atomic
-   native import. Native exact dependency pins must already be installed/trusted; automatic
-   transitive source selection needs a host-owned source catalogue. SSH transport and npm
-   JavaScript/TypeScript ABI resolution are separate constraints. See [remote packages](remote-packages.md).
+2. **Remote native dependency acquisition is now verified.** Explicit host catalogues map
+   exact dependency pins to Git HTTPS/npm requests, recursively fetch missing content, reuse
+   installed trust and publish the validated closure once. Missing/mismatched sources,
+   aggregate budgets, cancellation and concurrent edits preserve the old selected state.
+   Only the root is enabled and existing active dependency selections stay intact. SSH and
+   npm JavaScript/TypeScript ABI resolution remain protocol/distribution constraints.
+   See [remote packages](remote-packages.md).
 3. **Tool image delivery.** MCP stores binary/image output as immutable artifacts; core
    ToolSuccess/ToolResult currently carry JSON plus artifact references, not typed visible
    image content. Local user image input does not prove that an agent can inspect a screenshot
@@ -75,6 +77,6 @@ passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /
 incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
 original score/release requirements stay open; local scripted scores cannot substitute for them.
 
-The next implementation order is remote dependency sources, typed tool
+The next implementation order is typed tool
 media, then remaining Code Mode/interception coverage. The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.

@@ -65,6 +65,12 @@ pub struct RemoteOptions {
     /// Host environment reference bound only to this source origin; never a token value.
     #[arg(long)]
     token_env: Option<String>,
+    /// Host catalogue mapping exact dependency pins to source requests.
+    #[arg(long)]
+    source_catalogue: Option<PathBuf>,
+    /// Extra host-only origin=ENV credential bindings for dependency sources (maximum eight).
+    #[arg(long = "source-token")]
+    source_tokens: Vec<String>,
     /// Explicit local fixture/self-host policy; arbitrary unencrypted HTTP remains rejected.
     #[arg(long)]
     allow_loopback_http: bool,
@@ -175,13 +181,30 @@ async fn remote(runtime: &Runtime, command: &PackageCommand) -> Result<()> {
     if let Some(reference) = &options.token_env {
         acquirer = acquirer.with_bearer_reference(origin, reference)?;
     }
+    anyhow::ensure!(
+        options.source_tokens.len() <= 8,
+        "too many dependency credential bindings"
+    );
+    for binding in &options.source_tokens {
+        let (origin, reference) = binding
+            .split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("source-token must be ORIGIN=ENV"))?;
+        acquirer = acquirer.with_bearer_reference(origin, reference)?;
+    }
+    let catalogue = options
+        .source_catalogue
+        .as_ref()
+        .map(PackageSourceCatalogue::read)
+        .transpose()?
+        .unwrap_or_default();
     let context = aicoder_core::TurnExecutionContext::new();
     let store = runtime.package_store()?;
     let result = crate::execution::cancellable(
         context.clone(),
-        acquirer.install(
+        acquirer.install_with_sources(
             &store,
             &request,
+            &catalogue,
             InstallOptions {
                 allow_execution: options.allow_execution,
                 enable: !options.disabled,

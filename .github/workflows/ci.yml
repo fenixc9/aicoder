@@ -152,6 +152,7 @@ jobs:
           cp target/debug/aicoder "$RUNNER_TEMP/aicoder-without-downloads"
           cargo build --locked -p aicoder-cli --features package-downloads
           python3 scripts/check_package_downloads.py --disabled-binary "$RUNNER_TEMP/aicoder-without-downloads"
+          python3 scripts/check_package_graph.py
 
   event-schema:
     runs-on: ubuntu-latest

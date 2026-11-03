@@ -86,10 +86,47 @@ Old binaries cannot read schema-2 provenance. To downgrade, explicitly import th
 allowlisted object into a fresh older local store; public package locks/pins and session formats
 are unchanged. Do not edit a registry to bypass validation or execution consent.
 
-Native dependencies remain exact content pins and must already be installed/trusted. Missing
-dependencies reject without publishing the root. Automatic transitive source selection needs
-a host-owned source catalogue and remains separate work; npm JavaScript dependency resolution/
-TypeScript ABI compatibility is not provided by this native resource format.
+## Exact dependency-source closures
+
+--source-catalogue FILE maps exact native dependency pins to host-selected Git/npm requests:
+
+```json
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "pin": {"id":"shared","version":"1.0.0","sha256":"EXACT_64_HEX_CONTENT_DIGEST"},
+      "request": {"kind":"npm","registry":"https://registry.example/","package":"@team/shared","version":"1.0.0"}
+    }
+  ]
+}
+```
+
+The catalogue is explicit host input (256 KiB / 32 entries), never project/session discovery.
+It cannot define credentials, programs or private storage routes. Missing dependency addresses
+must match the complete declared pin; downloaded bytes must reproduce that pin. Existing
+trusted content is reused without transfer or trust escalation. Conflicting revisions for
+one ID and cycles reject. npm JavaScript dependency/TypeScript ABI resolution is separate from
+the native exact dependency graph.
+
+Root plus transitive dependencies have a combined default 32-package limit and separate
+256 MiB archive/decoded-byte budgets (metadata remains bounded per request and by count).
+The same total acquisition deadline covers the closure. Data stages stay private until the
+complete graph validates; only one registry publication selects/trusts the result. Downloads
+hold no registry lock. Commit checks the pre-transfer revision under the exclusive lock and
+rejects concurrent edits without rolling them back. Errors can retain admitted inert objects,
+under the existing store quota, but never partially select/install a dependency graph.
+
+Only the requested root becomes enabled. Dependency active selections are preserved when
+already present; a root can use an installed exact older dependency without upgrading the
+user's global active revision. Uninstall/revocation/concurrent changes cannot be overwritten
+by an old prepared graph. --source-token ORIGIN=ENV can add host-only credential bindings for
+dependency origins; the same total eight-origin limit applies. Catalogue metadata cannot mint
+these bindings. --token-env remains shorthand for the root origin.
+
+SDK callers use PackageAcquirer::install_with_sources; existing install uses an empty
+catalogue and still reuses installed dependencies. Local import keeps its serialized copy/
+publication behavior. Session, pin, lock and registry formats are unchanged by catalogue use.
 
 Optional tar/filetime packages stay outside default builds; reqwest, flate2 and base64 reuse
 already locked packages. No HTTP/archive dependency enters core. Automated tests use loopback
@@ -98,5 +135,6 @@ registry/Git HTTP fixtures and fake credentials; no real model/provider request 
 Protocol references: [npm registry version metadata](https://github.com/npm/registry/blob/main/docs/REGISTRY-API.md),
 [Git fetch](https://git-scm.com/docs/git-fetch), [Git archive](https://git-scm.com/docs/git-archive).
 
-The [S7 acquisition acceptance](s7-package-download-acceptance.md) records actual local-service
+The [S7 acquisition acceptance](s7-package-download-acceptance.md) and
+[atomic closure acceptance](s7-package-graph-acceptance.md) record actual local-service
 CLI/runtime checks and the default/optional footprint.

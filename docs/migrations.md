@@ -1,5 +1,15 @@
 # API migrations
 
+## S7: atomic dependency-source acquisition
+
+PackageAcquirer::install_with_sources accepts an explicit PackageSourceCatalogue of exact
+pins and host-selected addresses. Existing install uses an empty catalogue and reuses trusted
+installed dependencies. Remote closure publication checks the initial registry revision and
+commits once; local imports remain serialized. Only the root is enabled, preserving existing
+dependency active selections. --source-catalogue and --source-token add host CLI options;
+catalogues contain no credential routing. Existing session/pin/lock/registry formats remain
+unchanged. Errors may retain inert admitted objects but never a partial selected graph.
+
 ## S7: remote package provenance
 
 Optional package-downloads adds PackageAcquirer and CLI install-git/install-npm paths. Local

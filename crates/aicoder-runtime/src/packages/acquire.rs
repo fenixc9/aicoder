@@ -1,5 +1,6 @@
 //! Explicit bounded acquisition. Source data never selects credentials or launches package code.
 mod archive;
+mod catalogue;
 mod git;
 use super::{InstallOptions, PackageRecord, PackageSource, PackageStore};
 use crate::resources::reader::Root;
@@ -7,6 +8,7 @@ use aicoder_core::TurnExecutionContext;
 use anyhow::{Result, ensure};
 use archive::extract;
 use base64::Engine;
+pub use catalogue::{PackageSourceCatalogue, PackageSourceEntry};
 use git::git_archive;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -49,6 +51,8 @@ pub struct PackageAcquireLimits {
     pub max_entries: usize,
     pub git_disk_bytes: u64,
     pub timeout: Duration,
+    pub max_graph_packages: usize,
+    pub max_graph_bytes: usize,
 }
 impl Default for PackageAcquireLimits {
     fn default() -> Self {
@@ -58,6 +62,8 @@ impl Default for PackageAcquireLimits {
             max_entries: 16384,
             git_disk_bytes: 256 * 1024 * 1024,
             timeout: Duration::from_secs(120),
+            max_graph_packages: 32,
+            max_graph_bytes: 256 * 1024 * 1024,
         }
     }
 }
@@ -70,6 +76,11 @@ impl PackageAcquireLimits {
                 && (16 * 1024 * 1024..=512 * 1024 * 1024).contains(&self.git_disk_bytes)
                 && (Duration::from_millis(1)..=Duration::from_secs(600)).contains(&self.timeout),
             "invalid package acquisition limits"
+        );
+        ensure!(
+            (1..=32).contains(&self.max_graph_packages)
+                && (1024..=512 * 1024 * 1024).contains(&self.max_graph_bytes),
+            "invalid package graph limits"
         );
         Ok(())
     }
@@ -184,23 +195,39 @@ impl PackageAcquirer {
         options: InstallOptions,
         context: TurnExecutionContext,
     ) -> Result<PackageRecord> {
+        self.install_with_sources(
+            store,
+            request,
+            &PackageSourceCatalogue::default(),
+            options,
+            context,
+        )
+        .await
+    }
+    async fn prepare(
+        &self,
+        store: &PackageStore,
+        request: &PackageRequest,
+        options: InstallOptions,
+        context: &TurnExecutionContext,
+        started: Instant,
+    ) -> Result<(super::store::PreparedImport, usize, usize)> {
         self.limits.validate()?;
-        let started = Instant::now();
-        check(&context, started, self.limits.timeout)?;
+        check(context, started, self.limits.timeout)?;
         let (bytes, origin, gzip) = match request {
             PackageRequest::Npm {
                 registry,
                 package,
                 version,
             } => {
-                self.npm(registry, package, version.as_deref(), &context, started)
+                self.npm(registry, package, version.as_deref(), context, started)
                     .await?
             }
             PackageRequest::Git { url, revision } => {
-                self.git(url, revision, &context, started).await?
+                self.git(url, revision, context, started).await?
             }
         };
-        check(&context, started, self.limits.timeout)?;
+        check(context, started, self.limits.timeout)?;
         let stage = super::store::Stage(
             store
                 .root
@@ -214,7 +241,7 @@ impl PackageAcquirer {
         );
         fs::create_dir(&stage.0)?;
         fs::set_permissions(&stage.0, fs::Permissions::from_mode(0o700))?;
-        extract(&bytes, gzip, &stage.0, self.limits, &context, started)?;
+        let decoded = extract(&bytes, gzip, &stage.0, self.limits, context, started)?;
         if let PackageSource::Npm {
             package, version, ..
         } = &origin
@@ -227,8 +254,9 @@ impl PackageAcquirer {
                 "downloaded npm identity differs from resolved metadata"
             );
         }
-        check(&context, started, self.limits.timeout)?;
-        store.import(&Root::open(&stage.0)?, origin, options, &context)
+        check(context, started, self.limits.timeout)?;
+        let prepared = store.prepare_import(&Root::open(&stage.0)?, origin, options, context)?;
+        Ok((prepared, bytes.len(), decoded))
     }
     async fn body(
         &self,

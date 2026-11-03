@@ -241,6 +241,12 @@ impl Drop for Lock {
     }
 }
 pub(crate) struct Stage(pub(crate) PathBuf);
+pub(crate) struct PreparedImport {
+    pub(crate) stage: Stage,
+    pub(crate) manifest: PackageManifest,
+    pub(crate) record: PackageRecord,
+}
+
 impl Drop for Stage {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
@@ -391,6 +397,18 @@ impl PackageStore {
         options: InstallOptions,
         context: &TurnExecutionContext,
     ) -> Result<PackageRecord> {
+        let _lock = self.lock(true)?;
+        let prepared = self.prepare_import(source, origin, options, context)?;
+        let pin = prepared.record.pin.clone();
+        self.commit_prepared_locked(vec![prepared], &pin, options.enable, None, context)
+    }
+    pub(crate) fn prepare_import(
+        &self,
+        source: &Root,
+        origin: PackageSource,
+        options: InstallOptions,
+        context: &TurnExecutionContext,
+    ) -> Result<PreparedImport> {
         origin.validate()?;
         if context.is_cancelled() {
             return Err(context.error().into());
@@ -405,17 +423,6 @@ impl PackageStore {
             manifest.files.len() <= self.limits.max_files,
             "package file count limit exceeded"
         );
-        let _lock = self.lock(true)?;
-        let mut index = self.read_index()?;
-        for dependency in &manifest.dependencies {
-            ensure!(
-                index
-                    .installed
-                    .get(&dependency.sha256)
-                    .is_some_and(|r| r.pin == *dependency),
-                "exact package dependency is not installed/trusted"
-            );
-        }
         let stage = Stage(
             self.root
                 .join("staging")
@@ -476,38 +483,107 @@ impl PackageStore {
             version: manifest.version.clone(),
             sha256: digest.clone(),
         };
-        let destination = self.root.join("objects").join(&digest);
-        if destination.exists() {
-            self.object(&pin)?;
-        } else {
-            self.admit(total)?;
-            fs::rename(&stage.0, &destination)?;
-            File::open(self.root.join("objects"))?.sync_all()?;
-        }
-        if context.is_cancelled() {
-            return Err(context.error().into());
-        }
-        let record = PackageRecord {
-            pin: pin.clone(),
-            source: origin,
-            bytes: total,
-            execution_allowed: options.allow_execution,
-        };
+        Ok(PreparedImport {
+            stage,
+            manifest,
+            record: PackageRecord {
+                pin,
+                source: origin,
+                bytes: total,
+                execution_allowed: options.allow_execution,
+            },
+        })
+    }
+    #[cfg(feature = "package-downloads")]
+    pub(crate) fn commit_prepared(
+        &self,
+        prepared: Vec<PreparedImport>,
+        root: &PackagePin,
+        enable: bool,
+        expected_revision: Option<u64>,
+        context: &TurnExecutionContext,
+    ) -> Result<PackageRecord> {
+        let _lock = self.lock(true)?;
+        self.commit_prepared_locked(prepared, root, enable, expected_revision, context)
+    }
+    fn commit_prepared_locked(
+        &self,
+        prepared: Vec<PreparedImport>,
+        root: &PackagePin,
+        enable: bool,
+        expected_revision: Option<u64>,
+        context: &TurnExecutionContext,
+    ) -> Result<PackageRecord> {
         ensure!(
-            index.installed.len() < 512 || index.installed.contains_key(&digest),
-            "installed package revision count exceeded"
+            !prepared.is_empty() && prepared.len() <= 32,
+            "package transaction count budget exceeded"
         );
-        if !matches!(record.source, PackageSource::Local { .. }) {
-            index.version = 2;
+        let mut index = self.read_index()?;
+        ensure!(
+            expected_revision.is_none_or(|revision| revision == index.revision),
+            "package registry changed during acquisition; prepared work was not published"
+        );
+        let mut selected = BTreeSet::new();
+        for item in &prepared {
+            ensure!(
+                selected.insert(item.record.pin.id.clone()),
+                "duplicate package transaction identity"
+            );
+            ensure!(
+                index.installed.len() < 512
+                    || index.installed.contains_key(&item.record.pin.sha256),
+                "installed package revision count exceeded"
+            );
+            if !matches!(item.record.source, PackageSource::Local { .. }) {
+                index.version = 2;
+            }
+            index
+                .installed
+                .insert(item.record.pin.sha256.clone(), item.record.clone());
+            index
+                .active
+                .entry(item.record.pin.id.clone())
+                .or_insert_with(|| item.record.pin.sha256.clone());
         }
-        index.installed.insert(digest.clone(), record.clone());
-        index.active.insert(pin.id.clone(), digest);
-        if options.enable {
-            index.enabled.insert(pin.id.clone());
+        for item in &prepared {
+            for dependency in &item.manifest.dependencies {
+                ensure!(
+                    index
+                        .installed
+                        .get(&dependency.sha256)
+                        .is_some_and(|r| r.pin == *dependency),
+                    "exact package dependency is not installed/trusted"
+                );
+            }
+        }
+        let record = index
+            .installed
+            .get(&root.sha256)
+            .filter(|r| r.pin == *root)
+            .cloned()
+            .context("root package missing from transaction")?;
+        index.active.insert(root.id.clone(), root.sha256.clone());
+        if enable {
+            index.enabled.insert(root.id.clone());
         } else {
-            index.enabled.remove(&pin.id);
+            index.enabled.remove(&root.id);
         }
-        PackageSnapshot::resolve(self, &index, None, Some(std::slice::from_ref(&pin)))?;
+        // Seal complete objects before one registry visibility boundary. An error can leave
+        // inert admitted objects, never a partially selected/trusted dependency graph.
+        for item in &prepared {
+            if context.is_cancelled() {
+                return Err(context.error().into());
+            }
+            let destination = self.root.join("objects").join(&item.record.pin.sha256);
+            if destination.exists() {
+                self.object(&item.record.pin)?;
+            } else {
+                self.admit(item.record.bytes)?;
+                fs::rename(&item.stage.0, &destination)?;
+                File::open(self.root.join("objects"))?.sync_all()?;
+            }
+        }
+        PackageSnapshot::resolve(self, &index, None, Some(std::slice::from_ref(root)))?;
         PackageSnapshot::resolve(self, &index, None, None)?;
         if context.is_cancelled() {
             return Err(context.error().into());

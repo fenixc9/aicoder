@@ -28,7 +28,7 @@ pub(super) fn extract(
     limits: PackageAcquireLimits,
     context: &TurnExecutionContext,
     started: Instant,
-) -> Result<()> {
+) -> Result<usize> {
     let input: Box<dyn Read> = if gzip {
         Box::new(flate2::read::MultiGzDecoder::new(Cursor::new(bytes)))
     } else {
@@ -216,5 +216,5 @@ pub(super) fn extract(
             "package archive contains trailing data"
         );
     }
-    Ok(())
+    Ok(limits.max_unpacked_bytes - tail.remaining)
 }
