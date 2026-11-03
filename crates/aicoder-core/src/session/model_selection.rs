@@ -167,31 +167,22 @@ impl TurnExecutor {
             "invalid model selection identity"
         );
         let mut request = std::borrow::Cow::Borrowed(&input.request);
-        let mut omitted = 0;
-        if !spec.capabilities.reasoning_history
-            && input.request.messages.iter().any(|message| {
-                message.role == MessageRole::Assistant
-                    && message
-                        .content
-                        .iter()
-                        .any(|block| matches!(block, ContentBlock::Reasoning { .. }))
-            })
-        {
-            for message in &mut request.to_mut().messages {
-                if message.role == MessageRole::Assistant {
-                    message.content.retain(|block| {
-                        let keep = !matches!(block, ContentBlock::Reasoning { .. });
-                        if !keep {
-                            omitted += 1;
-                        }
-                        keep
-                    });
-                }
-            }
-            request
-                .to_mut()
+        let omitted = if spec.capabilities.reasoning_history {
+            0
+        } else {
+            input
+                .request
                 .messages
-                .retain(|message| !message.content.is_empty());
+                .iter()
+                .filter(|message| message.role == MessageRole::Assistant)
+                .flat_map(|message| &message.content)
+                .filter(|block| matches!(block, ContentBlock::Reasoning { .. }))
+                .count()
+        };
+        if let std::borrow::Cow::Owned(projected) =
+            crate::tokens::model_messages(&input.request.messages, &spec)
+        {
+            request.to_mut().messages = projected;
         }
         let measured = self.counting.request(&request, &spec);
         let estimate = measured.tokens;

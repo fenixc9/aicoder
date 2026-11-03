@@ -44,6 +44,9 @@ impl TryFrom<Message> for AgentInput {
                 ContentBlock::Image { source } => {
                     images += 1;
                     match source {
+                        ImageSource::Artifact { .. } => {
+                            anyhow::bail!("tool artifact images are not user input")
+                        }
                         ImageSource::Url { url } => {
                             let parsed = url::Url::parse(url)?;
                             ensure!(

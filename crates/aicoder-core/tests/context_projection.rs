@@ -595,3 +595,63 @@ fn terminal_context_metadata_is_optional_for_legacy_data_but_consistent_when_pre
         }
     }
 }
+
+#[test]
+fn reordered_and_interrupted_tool_units_keep_images_with_their_recorded_origin() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let mut session = repo.create(root.path()).unwrap();
+    let mut image_result = tool("b");
+    image_result.content.push(ContentBlock::Image {
+        source: ImageSource::Artifact {
+            reference: aicoder_core::artifacts::ArtifactRef {
+                version: 1,
+                id: "00000000-0000-0000-0000-000000000001".into(),
+                media_type: "image/png".into(),
+                bytes: 3,
+                complete: true,
+            },
+        },
+    });
+    repo.append_entries(
+        &mut session,
+        vec![
+            data(user("inspect")),
+            data(calls(&["a", "b"])),
+            data(image_result.clone()),
+            data(tool("a")),
+        ],
+    )
+    .unwrap();
+    let before = serde_json::to_string(session.entries()).unwrap();
+    let view = session.selected_branch().model_context().unwrap();
+    assert_eq!(view.source.reordered_tool_results, 2);
+    assert_eq!(view.messages[3], image_result);
+    assert!(
+        matches!(view.origins[3], ContextOrigin::Recorded { entry_id } if entry_id==session.entries()[2].id)
+    );
+    assert_eq!(before, serde_json::to_string(session.entries()).unwrap());
+    let mut missing = repo.create(root.path()).unwrap();
+    repo.append_entries(
+        &mut missing,
+        vec![
+            data(user("inspect")),
+            data(calls(&["a", "b"])),
+            data(image_result.clone()),
+        ],
+    )
+    .unwrap();
+    let recovered = missing.selected_branch().model_context().unwrap();
+    assert_eq!(recovered.source.recovered_tool_results, 1);
+    assert_eq!(recovered.messages[3], image_result);
+    assert_eq!(recovered.messages[2].content.len(), 1);
+    let mut ambiguous = tool("a");
+    ambiguous.content.extend(image_result.content.clone());
+    let mut invalid = repo.create(root.path()).unwrap();
+    repo.append_entries(
+        &mut invalid,
+        vec![data(calls(&["a", "b"])), data(ambiguous)],
+    )
+    .unwrap();
+    assert!(invalid.selected_branch().model_context().is_err());
+}

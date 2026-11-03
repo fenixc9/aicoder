@@ -94,3 +94,10 @@ The example captures a PNG, modifies the original file and verifies exact captur
 in both the provider request and JSONL session, using a scripted provider without credentials.
 Runtime images is optional; CLI/TUI enable only PNG/JPEG/GIF/WebP codecs, without other image
 formats, Rayon or tokenizer vocabularies. Source reads and codec failures never become tools.
+
+## Tool output images
+
+Tool and MCP images use scoped artifacts rather than user input. Runtime can validate and
+normalize those artifacts into bounded model-only previews; canonical history keeps the
+original references. Non-vision models receive explicit preview omissions. See the separate
+[tool image contract](tool-images.md) for limits, ordering, storage and migration.

@@ -47,6 +47,7 @@ pub(crate) struct RunScope {
 }
 pub struct TurnExecutor {
     extensions: Option<Arc<crate::extensions::ExtensionSet>>,
+    tool_image_resolver: Option<Arc<dyn crate::tool_images::ToolImageResolver>>,
     pub(crate) provider: Arc<dyn ModelProvider>,
     pub(crate) dispatcher: Arc<ToolDispatcher>,
     completion_verifier: Arc<dyn CompletionVerifier>,
@@ -94,6 +95,7 @@ impl TurnExecutor {
     ) -> Self {
         Self {
             extensions: None,
+            tool_image_resolver: None,
             provider,
             dispatcher,
             completion_verifier,
@@ -899,29 +901,37 @@ impl TurnExecutor {
                 .provider
                 .model_spec(&request.model)
                 .map_err(anyhow::Error::from)?;
-            request.messages = context_messages
-                .iter()
-                .filter_map(|message| {
-                    let mut message = message.clone();
-                    if message.role == crate::model::MessageRole::Assistant
-                        && !model_spec.capabilities.reasoning_history
-                    {
-                        message.content.retain(|block| {
-                            !matches!(block, crate::model::ContentBlock::Reasoning { .. })
-                        });
-                        if message.content.is_empty() {
-                            return None;
-                        }
-                    }
-                    Some(message)
-                })
-                .collect();
+            request.messages =
+                crate::tokens::model_messages(&context_messages, &model_spec).into_owned();
+            self.provider.validate_request(&request)?;
+            crate::tool_images::materialize(
+                &mut request.messages,
+                self.tool_image_resolver.as_deref(),
+                context,
+            )
+            .await?;
+            limits.check()?;
             self.provider
                 .validate_request(&request)
                 .map_err(anyhow::Error::from)?;
             progress.stage = RunStage::Model;
             let input_count = self.counting.request(&request, &model_spec);
             let input_estimate = input_count.tokens;
+            // Materialization adds bounded delivery observations; enforce the known window again
+            // using the final view, even when a custom policy accepted the preliminary count.
+            let output_reservation = u64::from(
+                request
+                    .options
+                    .max_output_tokens
+                    .or(model_spec.max_output_tokens)
+                    .unwrap_or(0),
+            );
+            anyhow::ensure!(
+                model_spec.context_tokens.is_none_or(|window| input_estimate
+                    .saturating_add(output_reservation)
+                    <= window),
+                "materialized request exceeds model context window"
+            );
             ensure_token_capacity(limits, input_estimate)?;
             let original_output_limit = request.options.max_output_tokens;
             let mut budget_clamped = false;
@@ -1404,6 +1414,7 @@ fn ensure_valid_compaction(compaction: &ContextCompaction, target_tokens: usize)
 /// Host assembly for the reusable loop. An omitted registry is empty.
 pub struct TurnExecutorBuilder {
     extensions: Option<Arc<crate::extensions::ExtensionSet>>,
+    tool_image_resolver: Option<Arc<dyn crate::tool_images::ToolImageResolver>>,
     provider: Arc<dyn ModelProvider>,
     registry: Option<Arc<ToolRegistry>>,
     workspace: PathBuf,
@@ -1429,6 +1440,7 @@ impl TurnExecutorBuilder {
     pub fn from_shared(provider: Arc<dyn ModelProvider>) -> Self {
         Self {
             extensions: None,
+            tool_image_resolver: None,
             provider,
             registry: None,
             workspace: PathBuf::from("."),
@@ -1503,6 +1515,16 @@ impl TurnExecutorBuilder {
         self
     }
 
+    /// Install read-only tool image resolution against explicit host-scoped storage.
+    /// Omitting it retains references and reports unavailable previews to the model.
+    pub fn tool_image_resolver(
+        mut self,
+        resolver: Arc<dyn crate::tool_images::ToolImageResolver>,
+    ) -> Self {
+        self.tool_image_resolver = Some(resolver);
+        self
+    }
+
     /// Install explicit scoped artifact storage; no storage is created by core defaults.
     pub fn artifact_store(mut self, store: Arc<dyn crate::artifacts::ArtifactStore>) -> Self {
         self.artifact_store = Some(store);
@@ -1568,6 +1590,7 @@ impl TurnExecutorBuilder {
             self.execution_config,
         );
         executor.extensions = self.extensions;
+        executor.tool_image_resolver = self.tool_image_resolver;
         executor.counting = self.counting;
         executor.context_policy = self.context_policy;
         Ok(executor)

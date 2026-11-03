@@ -248,3 +248,80 @@ async fn attachment_count_is_bounded_and_text_only_input_remains_compatible() {
         "text"
     );
 }
+
+#[tokio::test]
+async fn artifact_images_validate_scoped_immutable_bytes_mime_completeness_and_limits() {
+    use aicoder_core::{artifacts::*, tool_images::*};
+    let store = Arc::new(MemoryArtifactStore::default());
+    let resolver = ArtifactImageResolver::new(store.clone());
+    let bytes = encoded(30, 20, ImageFormat::Png);
+    let reference = store_bytes(store.as_ref(), "image/png", &bytes, true)
+        .await
+        .unwrap();
+    let preview = resolver
+        .resolve(&reference, TurnExecutionContext::new())
+        .await
+        .unwrap();
+    let ImageSource::Base64 { media_type, data } = preview.source() else {
+        panic!("not inline")
+    };
+    assert_eq!(media_type, "image/jpeg");
+    let normalized = base64::engine::general_purpose::STANDARD
+        .decode(data)
+        .unwrap();
+    assert!(normalized.len() <= MAX_TOOL_IMAGE_BYTES);
+    assert_eq!(image::load_from_memory(&normalized).unwrap().width(), 30);
+    let other = ArtifactImageResolver::new(Arc::new(MemoryArtifactStore::default()));
+    assert_eq!(
+        other
+            .resolve(&reference, TurnExecutionContext::new())
+            .await
+            .unwrap_err(),
+        ToolImageError::Unavailable
+    );
+    let mut changed = reference.clone();
+    changed.bytes += 1;
+    assert_eq!(
+        resolver
+            .resolve(&changed, TurnExecutionContext::new())
+            .await
+            .unwrap_err(),
+        ToolImageError::Invalid
+    );
+    changed = reference.clone();
+    changed.complete = false;
+    assert_eq!(
+        resolver
+            .resolve(&changed, TurnExecutionContext::new())
+            .await
+            .unwrap_err(),
+        ToolImageError::Invalid
+    );
+    changed = reference.clone();
+    changed.bytes = MAX_TOOL_IMAGE_SOURCE_BYTES + 1;
+    assert_eq!(
+        resolver
+            .resolve(&changed, TurnExecutionContext::new())
+            .await
+            .unwrap_err(),
+        ToolImageError::Limit
+    );
+    for (mime, bytes) in [("image/jpeg", bytes), ("image/png", vec![1, 2, 3])] {
+        let reference = store_bytes(store.as_ref(), mime, &bytes, true)
+            .await
+            .unwrap();
+        assert_eq!(
+            resolver
+                .resolve(&reference, TurnExecutionContext::new())
+                .await
+                .unwrap_err(),
+            ToolImageError::Invalid
+        );
+    }
+    let cancelled = TurnExecutionContext::new();
+    cancelled.cancel("stop");
+    assert_eq!(
+        resolver.resolve(&reference, cancelled).await.unwrap_err(),
+        ToolImageError::Unavailable
+    );
+}

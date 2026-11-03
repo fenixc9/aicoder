@@ -228,6 +228,9 @@ async fn main() {
                         value["content"] = json!([{"type":"text","text":error.message}]);
                     }
                 }
+                if mode == "image" {
+                    value["content"] = json!([{"type":"image","mimeType":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAD0lEQVR4nGP4z8DA8J8BAAf/Af8Bf4mnAAAAAElFTkSuQmCC"}]);
+                }
                 if mode == "media" {
                     value["content"] = json!([{"type":"text","text":"media result"},{"type":"image","mimeType":"image/png","data":"AQID"},{"type":"audio","mimeType":"audio/wav","data":"BAUG"},{"type":"resource_link","uri":"file:///must-not-read","name":"inert link"},{"type":"resource","resource":{"uri":"data:embedded","mimeType":"application/octet-stream","blob":"BwgJ"}},{"type":"resource","resource":{"uri":"data:text","text":"embedded text"}}]);
                 }

@@ -459,37 +459,10 @@ impl TokenCounter for TokenizedCounter {
     }
 }
 
-/// One shared reasoning adaptation for counting and provider projections.
+/// One shared reasoning and tool-media adaptation for counting and provider projections.
 pub(crate) fn model_messages<'a>(
     messages: &'a [Message],
     spec: &ModelSpec,
 ) -> std::borrow::Cow<'a, [Message]> {
-    if spec.capabilities.reasoning_history
-        || !messages.iter().any(|message| {
-            message.role == MessageRole::Assistant
-                && message
-                    .content
-                    .iter()
-                    .any(|block| matches!(block, ContentBlock::Reasoning { .. }))
-        })
-    {
-        return std::borrow::Cow::Borrowed(messages);
-    }
-    std::borrow::Cow::Owned(
-        messages
-            .iter()
-            .filter_map(|message| {
-                let mut message = message.clone();
-                if message.role == MessageRole::Assistant {
-                    message
-                        .content
-                        .retain(|block| !matches!(block, ContentBlock::Reasoning { .. }));
-                    if message.content.is_empty() {
-                        return None;
-                    }
-                }
-                Some(message)
-            })
-            .collect(),
-    )
+    crate::tool_images::model_messages(messages, spec)
 }

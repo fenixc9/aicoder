@@ -282,6 +282,21 @@
             "media_type",
             "data"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "artifact"
+            },
+            "reference": {
+              "$ref": "#/$defs/artifact_reference"
+            }
+          },
+          "required": [
+            "type",
+            "reference"
+          ]
         }
       ]
     },

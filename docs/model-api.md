@@ -112,3 +112,9 @@ Structured [run outcomes and budgets](run-outcomes.md) are shared across hosts.
 [Tree sessions and durable recovery](sessions.md) and [RunHandle controls](run-control.md)
 and [versioned event subscriptions](events.md) complete S2; shared runtime and project
 context are next in S3.
+
+Tool messages can carry `ImageSource::Artifact` beside exactly one anchoring result. The
+core host resolves these with an explicit `ToolImageResolver`; runtime offers an optional
+scoped decoder. These sources are not valid user input. The compatible adapter projects
+resolved previews after the complete tool-result batch, without adding user facts to the
+journal. See [tool images](tool-images.md) and [migration](migrations.md).

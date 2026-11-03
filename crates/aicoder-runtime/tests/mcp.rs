@@ -616,3 +616,373 @@ async fn a_catalog_change_rejects_an_already_queued_unsent_call_without_discardi
     assert_eq!(extension.diagnostics().requests_sent, 5);
     assert!(extension.shutdown().await.reaped);
 }
+
+#[cfg(feature = "images")]
+#[tokio::test]
+async fn real_mcp_images_reach_http_after_all_parallel_results_and_replay_without_synthetic_facts()
+{
+    use aicoder_providers::{ChatClient, ClientConfig, ProxyMode};
+    use aicoder_runtime::{
+        ConfigDiscovery, Runtime, RuntimeOverrides, Setting, Settings, resources::ResourceSettings,
+    };
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("note.txt"), "image fixture").unwrap();
+    let extension =
+        McpExtension::connect(config(root.path(), "image"), TurnExecutionContext::new())
+            .await
+            .unwrap();
+    let mut extensions = ExtensionRegistry::new();
+    extensions.install(extension.extension().unwrap()).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let mut requests = Vec::new();
+        for i in 0..3 {
+            let (mut socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut buf = [0u8; 8192];
+            let end = loop {
+                let n = socket.read(&mut buf).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&buf[..n]);
+                if let Some(pos) = bytes.windows(4).position(|b| b == b"\r\n\r\n") {
+                    break pos + 4;
+                }
+                assert!(bytes.len() < 16384);
+            };
+            let size = std::str::from_utf8(&bytes[..end])
+                .unwrap()
+                .lines()
+                .find_map(|line| {
+                    let (key, value) = line.split_once(':')?;
+                    key.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            assert!(size < 2 * 1024 * 1024);
+            while bytes.len() < end + size {
+                let n = socket.read(&mut buf).await.unwrap();
+                assert!(n > 0);
+                bytes.extend_from_slice(&buf[..n]);
+            }
+            requests.push(
+                serde_json::from_slice::<serde_json::Value>(&bytes[end..end + size]).unwrap(),
+            );
+            let message = if i == 0 {
+                json!({"role":"assistant","tool_calls":[
+                    {"id":"left","type":"function","function":{"name":"fixture__read","arguments":"{\"path\":\"note.txt\"}"}},
+                    {"id":"right","type":"function","function":{"name":"fixture__read","arguments":"{\"path\":\"note.txt\"}"}}
+                ]})
+            } else {
+                json!({"role":"assistant","content":"received image previews"})
+            };
+            let body = json!({"id":"fixture","object":"chat.completion","created":1,"model":"vision","choices":[{"index":0,"message":message,"finish_reason":if i==0 {"tool_calls"}else{"stop"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}).to_string();
+            socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+        }
+        requests
+    });
+    let mut client = ChatClient::new(ClientConfig {
+        base_url: format!("http://{address}/v1"),
+        api_key: "fixture-only".into(),
+        model: "vision".into(),
+        proxy: ProxyMode::Disabled,
+        max_retries: 0,
+        ..Default::default()
+    })
+    .unwrap();
+    let mut spec = ModelSpec::new("openai-compatible", "vision");
+    spec.capabilities.tools = true;
+    spec.capabilities.images = true;
+    client.register_model(spec).unwrap();
+    let runtime = Runtime::load_with_environment(
+        root.path(),
+        RuntimeOverrides {
+            settings: Settings {
+                resources: ResourceSettings {
+                    enabled: Setting::Value(false),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            session_dir: Setting::Value(state.path().into()),
+            ..Default::default()
+        },
+        ConfigDiscovery {
+            enabled: false,
+            ..Default::default()
+        },
+        Arc::new(std::collections::BTreeMap::new()),
+    )
+    .unwrap();
+    let executor = runtime
+        .executor_builder_with_extensions(Arc::new(client), Arc::new(extensions.finish()))
+        .unwrap()
+        .approval(AllowAllApproval)
+        .config(TurnExecutionConfig {
+            stream: false,
+            ..Default::default()
+        })
+        .build()
+        .unwrap();
+    let agent = Agent::new(executor, AgentConfig::new("vision"));
+    let repo = runtime.sessions().unwrap();
+    let session = repo.create(root.path()).unwrap();
+    let selection = || SessionSelection::Existing(session.metadata().id.clone());
+    agent
+        .run_with_session_outcome(
+            &repo,
+            selection(),
+            "inspect the images",
+            Arc::new(()),
+            TurnExecutionContext::new(),
+        )
+        .await
+        .into_result()
+        .unwrap();
+    let first = repo.open(&session.metadata().id).unwrap();
+    let canonical = first
+        .messages()
+        .iter()
+        .map(|m| m.message.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        canonical
+            .iter()
+            .filter(|m| m.role == MessageRole::User)
+            .count(),
+        1
+    );
+    assert_eq!(
+        canonical
+            .iter()
+            .flat_map(|m| &m.content)
+            .filter(|b| matches!(
+                b,
+                ContentBlock::Image {
+                    source: ImageSource::Artifact { .. }
+                }
+            ))
+            .count(),
+        2
+    );
+    let serialized = serde_json::to_string(&canonical).unwrap();
+    assert!(!serialized.contains("_tool_image_projection"));
+    assert!(!serialized.contains("DO_NOT_PERSIST_PRIVATE_RESULT_META"));
+    assert!(!serialized.contains("base64"));
+    for message in canonical.iter().filter(|m| m.role == MessageRole::Tool) {
+        let result = message.tool_result().unwrap().1;
+        assert!(
+            result["output"]["structuredContent"]["calls"]
+                .as_u64()
+                .unwrap()
+                <= 2
+        );
+    }
+    agent
+        .run_with_session_outcome(
+            &repo,
+            selection(),
+            "look again",
+            Arc::new(()),
+            TurnExecutionContext::new(),
+        )
+        .await
+        .into_result()
+        .unwrap();
+    let requests = server.await.unwrap();
+    for request in &requests[1..] {
+        let messages = request["messages"].as_array().unwrap();
+        let start = messages.iter().position(|m| m["role"] == "tool").unwrap();
+        assert_eq!(messages[start + 1]["role"], "tool");
+        assert_eq!(messages[start + 2]["role"], "user");
+        let image_parts = messages[start + 2]["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|p| p["type"] == "image_url")
+            .collect::<Vec<_>>();
+        assert_eq!(image_parts.len(), 2);
+        for image in image_parts {
+            use base64::Engine;
+            let data = image["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("data:image/jpeg;base64,")
+                .unwrap();
+            let jpeg = base64::engine::general_purpose::STANDARD
+                .decode(data)
+                .unwrap();
+            assert_eq!(image::load_from_memory(&jpeg).unwrap().width(), 2);
+        }
+        for message in &messages[start..start + 2] {
+            let result: serde_json::Value =
+                serde_json::from_str(message["content"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                result["_tool_image_projection"][0]["status"],
+                "normalized_preview"
+            );
+        }
+    }
+    let final_session = repo.open(&session.metadata().id).unwrap();
+    assert_eq!(
+        final_session
+            .messages()
+            .iter()
+            .filter(|m| m.message.role == MessageRole::Tool)
+            .count(),
+        2
+    );
+    assert!(extension.shutdown().await.reaped);
+}
+
+#[cfg(feature = "images")]
+#[tokio::test]
+async fn nonvision_and_corrupt_tool_images_preserve_completion_without_reexecuting_the_call() {
+    use aicoder_runtime::{
+        ConfigDiscovery, Runtime, RuntimeOverrides, Setting, Settings, resources::ResourceSettings,
+    };
+    struct ImageProvider(bool, Mutex<Vec<ModelRequest>>);
+    #[async_trait]
+    impl ModelProvider for ImageProvider {
+        fn model_spec(&self, model: &str) -> Result<ModelSpec, ProviderError> {
+            let mut spec = ModelSpec::new("fixture", model);
+            spec.capabilities.tools = true;
+            spec.capabilities.images = self.0;
+            Ok(spec)
+        }
+        async fn generate(
+            &self,
+            request: ModelRequest,
+            _: Arc<dyn ModelEventSink>,
+            _: TurnExecutionContext,
+        ) -> Result<ModelResponse, ProviderError> {
+            request.validate(&self.model_spec(&request.model)?)?;
+            let has_result = request.messages.iter().any(|m| m.role == MessageRole::Tool);
+            let mut message = Message::text(MessageRole::Assistant, "done");
+            if !has_result {
+                message.content = vec![ContentBlock::ToolCall {
+                    call: ModelToolCall {
+                        id: "image".into(),
+                        name: "fixture__read".into(),
+                        arguments: json!({"path":"note.txt"}),
+                    },
+                }];
+            }
+            self.1.lock().unwrap().push(request.clone());
+            Ok(ModelResponse {
+                id: None,
+                model: request.model,
+                message,
+                stop_reason: if has_result {
+                    StopReason::Complete
+                } else {
+                    StopReason::ToolCalls
+                },
+                usage: ModelUsage::zero(),
+            })
+        }
+    }
+    for (vision, mode, expected) in [
+        (false, "image", "model_without_vision"),
+        (true, "media", "invalid_image"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("note.txt"), "fixture").unwrap();
+        let extension =
+            McpExtension::connect(config(root.path(), mode), TurnExecutionContext::new())
+                .await
+                .unwrap();
+        let mut extensions = ExtensionRegistry::new();
+        extensions.install(extension.extension().unwrap()).unwrap();
+        let runtime = Runtime::load_with_environment(
+            root.path(),
+            RuntimeOverrides {
+                settings: Settings {
+                    resources: ResourceSettings {
+                        enabled: Setting::Value(false),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                session_dir: Setting::Value(state.path().into()),
+                ..Default::default()
+            },
+            ConfigDiscovery {
+                enabled: false,
+                ..Default::default()
+            },
+            Arc::new(std::collections::BTreeMap::new()),
+        )
+        .unwrap();
+        let provider = Arc::new(ImageProvider(vision, Mutex::new(vec![])));
+        let agent = Agent::new(
+            runtime
+                .executor_builder_with_extensions(provider.clone(), Arc::new(extensions.finish()))
+                .unwrap()
+                .approval(AllowAllApproval)
+                .build()
+                .unwrap(),
+            AgentConfig::new("m"),
+        );
+        let repo = runtime.sessions().unwrap();
+        let session = repo.create(root.path()).unwrap();
+        agent
+            .run_with_session_outcome(
+                &repo,
+                SessionSelection::Existing(session.metadata().id.clone()),
+                "inspect",
+                Arc::new(()),
+                TurnExecutionContext::new(),
+            )
+            .await
+            .into_result()
+            .unwrap();
+        let saved = repo.open(&session.metadata().id).unwrap();
+        let saved_messages = saved.messages();
+        let tool = saved_messages
+            .iter()
+            .find(|m| m.message.role == MessageRole::Tool)
+            .unwrap();
+        let (_, result, error) = tool.message.tool_result().unwrap();
+        assert!(!error);
+        assert_eq!(result["output"]["operation_completed"], true);
+        assert_eq!(result["output"]["structuredContent"]["calls"], 1);
+        assert_eq!(result["output"]["delivery_complete"], true); // Raw archive captured; preview may fail independently.
+        assert!(tool.message.content.iter().any(|b| matches!(
+            b,
+            ContentBlock::Image {
+                source: ImageSource::Artifact { .. }
+            }
+        )));
+        assert!(result.get("_tool_image_projection").is_none());
+        {
+            let requests = provider.1.lock().unwrap();
+            assert_eq!(requests.len(), 2);
+            let projected = requests[1]
+                .messages
+                .iter()
+                .find(|m| m.role == MessageRole::Tool)
+                .unwrap();
+            assert!(
+                !projected
+                    .content
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::Image { .. }))
+            );
+            assert_eq!(
+                projected.tool_result().unwrap().1["_tool_image_projection"][0]["status"],
+                expected
+            );
+        }
+        assert!(extension.shutdown().await.reaped);
+    }
+}

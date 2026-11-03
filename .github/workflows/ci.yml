@@ -135,9 +135,10 @@ jobs:
         run: python3 scripts/check_frontend_parity.py
       - name: Explicit stdio activation and cleanup in stock hosts
         run: |
-          cargo build --locked -p aicoder-cli -p aicoder-tui -p aicoder-web -p aicoder-runtime --features server,host-extensions,mcp-fixtures --bins
+          cargo build --locked -p aicoder-cli -p aicoder-tui -p aicoder-web -p aicoder-runtime --features server,host-extensions,mcp-fixtures,images --bins
           python3 scripts/check_host_extensions.py
           python3 scripts/check_host_extensions.py --packages
+          python3 scripts/check_host_extensions.py --images
       - name: Optional Web documentation
         env:
           RUSTDOCFLAGS: -D warnings

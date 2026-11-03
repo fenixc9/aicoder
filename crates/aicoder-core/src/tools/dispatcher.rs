@@ -794,13 +794,33 @@ fn failure_outcome(error: &ToolFailure) -> ToolExecutionOutcome {
 }
 
 fn tool_message(call: &ModelToolCall, envelope: Value) -> Message {
+    // Only host-normalized top-level references can create typed media. Tool JSON is nested
+    // under output/error and cannot request arbitrary IO by resembling a reference.
+    let images = envelope
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .take(8)
+        .filter_map(|value| {
+            serde_json::from_value::<crate::artifacts::ArtifactRef>(value.clone()).ok()
+        })
+        .filter(|reference| {
+            reference.validate().is_ok() && reference.media_type.starts_with("image/")
+        })
+        .map(|reference| ContentBlock::Image {
+            source: crate::model::ImageSource::Artifact { reference },
+        })
+        .collect::<Vec<_>>();
+    let mut content = vec![ContentBlock::ToolResult {
+        call_id: call.id.clone(),
+        is_error: envelope["ok"] == false,
+        content: envelope,
+    }];
+    content.extend(images);
     Message {
         role: MessageRole::Tool,
-        content: vec![ContentBlock::ToolResult {
-            call_id: call.id.clone(),
-            is_error: envelope["ok"] == false,
-            content: envelope,
-        }],
+        content,
     }
 }
 
@@ -844,4 +864,35 @@ fn limit_payload(
         }
     }
     (envelope, outcome)
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::*;
+    #[test]
+    fn only_host_envelope_references_promote_images_independently_of_payload_truncation() {
+        let reference = crate::artifacts::ArtifactRef {
+            version: 1,
+            id: uuid::Uuid::new_v4().to_string(),
+            media_type: "image/png".into(),
+            bytes: 3,
+            complete: true,
+        };
+        let call = ModelToolCall {
+            id: "c".into(),
+            name: "image".into(),
+            arguments: json!({}),
+        };
+        let fake = tool_message(&call, json!({"ok":true,"output":{"artifacts":[reference]}}));
+        assert_eq!(fake.content.len(), 1);
+        let real = tool_message(
+            &call,
+            json!({"ok":true,"output":"","truncated":true,"artifacts":[reference]}),
+        );
+        assert_eq!(real.content.len(), 2);
+        assert!(
+            matches!(&real.content[1], ContentBlock::Image { source:crate::model::ImageSource::Artifact { reference:actual } } if actual==&reference)
+        );
+        assert_eq!(real.tool_result().unwrap().1["truncated"], true);
+    }
 }

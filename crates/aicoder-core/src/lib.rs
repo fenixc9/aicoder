@@ -27,6 +27,7 @@ pub mod run;
 pub mod session;
 pub mod state;
 pub mod summary;
+pub mod tool_images;
 pub mod tools;
 pub mod turn_executor;
 pub mod ui;

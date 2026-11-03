@@ -6,6 +6,7 @@ Build: cargo build --locked -p aicoder-cli -p aicoder-tui -p aicoder-web
 Linux PTY and /proc checks require no browser, model credentials or remote access.
 """
 import argparse
+import base64
 import fcntl
 import hashlib
 import http.client
@@ -27,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--bin-dir", type=Path, default=ROOT / "target/debug")
 parser.add_argument("--packages", action="store_true", help="Install trusted fixture packages and activate their executables")
+parser.add_argument("--images", action="store_true", help="Verify tool images reach models in every stock host")
 args = parser.parse_args()
 BINS = args.bin_dir.resolve()
 TOKEN = "fixture-host-token-0123456789abcdef"
@@ -45,7 +47,18 @@ class Provider(http.server.BaseHTTPRequestHandler):
             names = {t["function"]["name"] for t in value["tools"]}
             assert WRITE in names and READ in names, names
             assert "DO_NOT_MAKE_THIS_A_SYSTEM_PROMPT" not in json.dumps(value)
-            call = value["messages"][-1]["role"] != "tool"
+            call = not any(m["role"] == "tool" for m in value["messages"])
+            if args.images and not call:
+                messages = value["messages"]
+                index = next(i for i, m in enumerate(messages) if m["role"] == "tool")
+                assert messages[index+1]["role"] == "user"
+                parts = [p for p in messages[index+1]["content"] if p["type"] == "image_url"]
+                assert len(parts) == 1
+                raw = base64.b64decode(parts[0]["image_url"]["url"].removeprefix("data:image/jpeg;base64,"), validate=True)
+                assert raw.startswith(b"\xff\xd8") and len(raw) <= 256*1024
+                result = json.loads(messages[index]["content"])
+                assert result["_tool_image_projection"][0]["status"] == "normalized_preview"
+                assert "DO_NOT_PERSIST_PRIVATE_RESULT_META" not in json.dumps(value)
             message = {"role": "assistant", "content": None, "tool_calls": [{
                 "id": "host-write", "type": "function", "function": {"name": WRITE,
                 "arguments": json.dumps({"path": "result.txt", "content": "host approved"})}}]} if call else {
@@ -140,16 +153,28 @@ try:
                 "AICODER_API_BASE": f"http://127.0.0.1:{server.server_address[1]}/v1",
                 "AICODER_MODEL": "test", "AICODER_STREAM": "false",
                 "AICODER_PROXY": "disabled", "AICODER_MAX_RETRIES": "0", "AICODER_WEB_TOKEN": TOKEN}
-            common = ["--no-config", "--no-resources", "--workspace", str(root),
-                *configure(root, env, "mcp_stdio", "modern")]
+            config_flags = ["--no-config"]
+            if args.images:
+                settings = Path(env["AICODER_HOME"]) / "settings.json"
+                settings.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                settings.write_text(json.dumps({"version":1, "profiles":{"image-fixture":{
+                    "base_url":env["AICODER_API_BASE"], "api_key_env":"OPENAI_API_KEY",
+                    "provider_id":"openai-compatible", "model":"test", "proxy":"disabled",
+                    "models":[{"provider":"openai-compatible", "id":"test", "context_tokens":65536,
+                        "capabilities":{"tools":True, "images":True}}]}},
+                    "settings":{"provider_profile":"image-fixture"}}))
+                config_flags = []
+            sessions = [] if args.images else ["--no-session"]
+            common = [*config_flags, "--no-resources", "--workspace", str(root),
+                *configure(root, env, "mcp_stdio", "image" if args.images else "modern")]
             if frontend == "cli_json":
                 output = subprocess.check_output([str(BINS / "aicoder"), *common,
-                    "--no-session", "--yes", "--json", "--prompt", "host fixture"], env=env, timeout=15)
+                    *sessions, "--yes", "--json", "--prompt", "host fixture"], env=env, timeout=15)
                 events = [json.loads(raw)["event"] for raw in output.splitlines()]
                 assert any(e["type"] == "agent_completed" for e in events)
                 assert sum(e["type"] == "tool_execution_started" for e in events) == 1
             elif frontend == "rpc":
-                child = subprocess.Popen([str(BINS / "aicoder"), *common, "--no-session", "--rpc"],
+                child = subprocess.Popen([str(BINS / "aicoder"), *common, *sessions, "--rpc"],
                     env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
                 sequence = 0
                 approvals = []
@@ -185,7 +210,7 @@ try:
                     child.stdout.close()
             elif frontend == "web":
                 child = subprocess.Popen([str(BINS / "aicoder-web"), *common,
-                    "--no-session", "--listen", "127.0.0.1:0"], env=env,
+                    *sessions, "--listen", "127.0.0.1:0"], env=env,
                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, bufsize=0)
                 try:
                     ready = line(child.stderr).decode().strip()
@@ -262,6 +287,14 @@ try:
                     os.close(master)
             assert (root / "result.txt").read_text() == "host approved", frontend
             reaped(root)
+            if args.images:
+                records = [json.loads(raw) for file in (root / "state").rglob("*.jsonl")
+                    for raw in file.read_text().splitlines()]
+                entries = [e["data"] for record in records for e in record.get("entries", [])]
+                blocks = [b for e in entries if e.get("kind") == "message" for b in e["message"]["content"]]
+                images = [b for b in blocks if b["type"] == "image"]
+                assert len(images) == 1 and images[0]["source"]["type"] == "artifact", frontend
+                assert "_tool_image_projection" not in json.dumps(entries), frontend
         for binary, extra, termination in [
             ("aicoder", ["--json", "--prompt", "never start"], signal.SIGINT),
             ("aicoder-tui", [], signal.SIGINT),
@@ -290,7 +323,7 @@ try:
         assert len(requests) == 8 and not failures, (len(requests), failures)
         print(json.dumps({"frontends": ["cli_json", "rpc", "web", "tui_pty"],
             "package_executables": args.packages, "installation_does_not_launch": args.packages,
-            "real_mcp_child": True, "explicit_approvals": ["rpc", "web", "tui"],
+            "real_mcp_child": True, "tool_image_projection": args.images, "explicit_approvals": ["rpc", "web", "tui"],
             "all_children_reaped": True, "startup_cancellation": ["cli", "tui", "web"],
             "metadata_does_not_launch": True, "loopback_model_requests": len(requests)}))
 finally:

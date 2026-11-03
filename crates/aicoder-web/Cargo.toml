@@ -8,6 +8,7 @@ rust-version.workspace = true
 workspace = true
 
 [features]
+images = ["server", "aicoder-runtime/images"]
 host-extensions = ["aicoder-runtime/process-extensions", "aicoder-runtime/mcp-stdio"]
 default = []
 code-mode = ["server", "aicoder-runtime/code-mode"]

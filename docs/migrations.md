@@ -1,5 +1,21 @@
 # API migrations
 
+## S7: typed tool image artifacts
+
+`ImageSource` gains `Artifact { reference }`; exhaustive Rust matches need a new arm.
+Tool messages may now include typed image blocks beside exactly one tool result. Existing
+text and user URL/base64 APIs are unchanged. Custom adapters must resolve/project tool images
+or reject them explicitly; the compatible adapter never sends unresolved storage references.
+Core hosts opt into `ToolImageResolver`; runtime factories install it only with optional
+`images` and configured artifact storage. Non-vision models retain tool facts with explicit
+preview omission; user image capability checks remain strict.
+
+Session v3/event v1 envelopes are unchanged, but older binaries reject the new image-source
+variant when reading new media-bearing records. Keep the original archive and use a newer
+reader; export a separate text/reference-only copy if an older consumer is necessary. Never
+rewrite an existing journal in place or restore IO authority from exported references. Old
+JSON-only artifact results are not implicitly promoted or migrated. See [tool images](tool-images.md).
+
 ## S7: atomic dependency-source acquisition
 
 PackageAcquirer::install_with_sources accepts an explicit PackageSourceCatalogue of exact

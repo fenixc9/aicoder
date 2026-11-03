@@ -24,7 +24,7 @@ It does not certify all Pi convenience features or arbitrary third-party extensi
 | Resource package discovery/install/pins/reload | Content-addressed local imports, locks/trust/dependencies and public branch state; [packages](packages.md) | Verified scoped Git HTTPS/npm native closures and activation; no JS/TS ABI claim |
 | Themes, export/share | TUI themes and inert canonical JSON/HTML exports, explicit publication adapter; [exports](session-exports.md) | Verified scoped local/custom-host path; no third-party hosted sharing deployment |
 | MCP and Code Mode | Actual modern/legacy stdio, [stock stdio hosts](host-extensions.md), real JS composition with leaf approvals/budgets/journal, CLI opt-in; [Code Mode](code-mode.md), [MCP](mcp.md) | Partial: stock MCP works; additional Code Mode capabilities remain |
-| Multimodal | Immutable bounded local CLI/TUI image input and compatible adapter; [image acceptance](s5-images-acceptance.md) | Partial: user image input works; tool/MCP image artifacts are not delivered as visible model image content |
+| Multimodal | Immutable bounded local CLI/TUI image input and [typed tool/MCP previews](tool-images.md); [tool image acceptance](s7-tool-images-acceptance.md) | Partial: scoped user/tool image delivery verified; native image-file acquisition and Code Mode output/helpers remain below |
 
 ## Confirmed remaining differences
 
@@ -44,11 +44,18 @@ that full product parity has already been achieved.
    Only the root is enabled and existing active dependency selections stay intact. SSH and
    npm JavaScript/TypeScript ABI resolution remain protocol/distribution constraints.
    See [remote packages](remote-packages.md).
-3. **Tool image delivery.** MCP stores binary/image output as immutable artifacts; core
-   ToolSuccess/ToolResult currently carry JSON plus artifact references, not typed visible
-   image content. Local user image input does not prove that an agent can inspect a screenshot
-   returned by a tool. A proper model projection must retain canonical tool facts, bound media
-   and preserve artifact completeness without counting base64 as text tokens.
+3. **Tool image delivery is now verified.** Canonical tool results retain immutable typed
+   artifact references. Explicit scoped runtime resolution validates complete source bytes,
+   codecs and budgets; the compatible adapter places image parts after all matching results.
+   CLI/RPC/Web/TUI and actual MCP-to-HTTP/session-replay checks pass. Non-vision, malformed,
+   missing, partial and excessive previews remain explicit without repeating tool operations.
+   Core adds no codecs or implicit storage; standalone Web opts into images. Existing JSON-only
+   historical references stay reference-only, and this is not a visual reasoning quality score.
+   See [tool image acceptance](s7-tool-images-acceptance.md). The stock read_file tool still
+   accepts UTF-8 pages only: agent-selected local image acquisition remains to implement.
+   Pinned Pi read supports image files including BMP; current runtime codecs support
+   PNG/JPEG/static GIF/static WebP. User-selected --image input and MCP screenshots do not
+   substitute for that native tool path.
 4. **Code Mode auxiliary models and output.** Real JS, discovery/filtering and branch state
    are implemented. Pi additionally exposes image output and non-chat classifier/image-model
    helpers through its pinned [Code Mode contract](https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/docs/codemode.md).
@@ -77,6 +84,7 @@ passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /
 incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
 original score/release requirements stay open; local scripted scores cannot substitute for them.
 
-The next implementation order is typed tool
-media, then remaining Code Mode/interception coverage. The final audit must rerun the matrix
+The next implementation order is native local image-file acquisition (including the pinned
+BMP input gap), remaining Code Mode image output/auxiliary models and only mode, then
+interception coverage. The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.

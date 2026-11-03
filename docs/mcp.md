@@ -43,8 +43,9 @@ Images, audio and embedded resource blobs use explicit scoped host artifact stor
 binary base64 out of text-token estimates and metadata out of instructions. Capture failure
 is distinct from operation failure: completed calls are not repeated to recover missing
 media, and incomplete delivery is explicitly marked. Result-private _meta/continuation state
-does not become canonical history or authorization. No vision/audio billing precision or
-implicit image projection is invented by transport delivery.
+does not become canonical history or authorization. Raw media capture does not establish vision/audio billing precision or model visibility.
+With optional runtime images and a declared vision model, [tool image projection](tool-images.md)
+validates captured images and delivers bounded previews independently of raw capture status.
 
 The adapter reuses the bounded process worker and leader/group ownership backend. Active
 cancellation attempts the scoped MCP cancellation notification, then closes the connection

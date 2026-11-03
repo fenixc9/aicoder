@@ -49,6 +49,9 @@
 - Output artifacts are explicit scoped host storage. Bound serialization, staging, disk
   admission and pages; keep raw bytes and capture completeness separate from previews.
   Archive failures must not repeat completed operations or publish partial data as complete.
+  Tool images retain scoped immutable references in canonical results; decode bounded previews
+  only in model views. Preview omission is separate from raw capture and cannot restore IO
+  authority, fetch tool URLs, add user facts or leave resolver children running after cancellation.
 - Navigation metadata must not become model instructions. Scope idle mutations to the
   workspace/run lease, retain old branches, and reject stale cursors. Validate model,
   adapter and projected-context compatibility before writing a selection or turn;

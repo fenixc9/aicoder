@@ -412,6 +412,12 @@ impl Runtime {
         }
         builder = builder.token_counter(tokenizers::counter(self.config.context.tokenizer));
         if let Some(store) = self.artifact_store_for(workspace)? {
+            #[cfg(feature = "images")]
+            {
+                builder = builder.tool_image_resolver(Arc::new(
+                    images::ArtifactImageResolver::new(store.clone()),
+                ));
+            }
             builder = builder.artifact_store(store);
         }
         if let Some(resources) = resources {

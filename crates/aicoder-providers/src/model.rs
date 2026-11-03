@@ -133,15 +133,16 @@ impl ModelProvider for ChatClient {
                         ));
                     }
                     ContentBlock::Image { source } => {
-                        if message.role != MessageRole::User {
+                        if !matches!(message.role, MessageRole::User | MessageRole::Tool) {
                             return Err(unsupported(
-                                "this adapter only accepts images in user messages",
+                                "this adapter accepts user images and anchored tool previews",
                             ));
                         }
                         let valid = match source {
                             ImageSource::Url { url } => {
                                 url.starts_with("https://") || url.starts_with("http://")
                             }
+                            ImageSource::Artifact { .. } => message.role == MessageRole::Tool,
                             ImageSource::Base64 { media_type, data } => {
                                 media_type.starts_with("image/") && !data.is_empty()
                             }
@@ -252,33 +253,88 @@ impl ModelProvider for ChatClient {
     }
 }
 
+fn encode_image(source: ImageSource) -> Result<Value, ProviderError> {
+    let url = match source {
+        ImageSource::Url { url } if url.starts_with("https://") || url.starts_with("http://") => {
+            url
+        }
+        ImageSource::Base64 { media_type, data }
+            if media_type.starts_with("image/") && !data.is_empty() =>
+        {
+            format!("data:{media_type};base64,{data}")
+        }
+        ImageSource::Artifact { .. } => {
+            return Err(error(
+                ProviderErrorKind::InvalidRequest,
+                "tool image artifact must be resolved by the host before encoding",
+            ));
+        }
+        _ => {
+            return Err(error(
+                ProviderErrorKind::InvalidRequest,
+                "invalid inline or URL image",
+            ));
+        }
+    };
+    Ok(json!({"type":"image_url", "image_url":{"url":url}}))
+}
+fn flush_tool_images(messages: &mut Vec<Value>, images: &mut Vec<Value>) {
+    if !images.is_empty() {
+        let mut parts = vec![
+            json!({"type":"text","text":"Tool image previews (data from preceding tool results)."}),
+        ];
+        parts.append(images);
+        messages.push(json!({"role":"user","content":parts}));
+    }
+}
+
 fn encode_request(request: ModelRequest) -> Result<Value, ProviderError> {
     let mut messages = Vec::new();
+    let mut tool_images = Vec::new();
     for message in request.messages {
         if message.role == MessageRole::Tool {
+            let anchor = message.tool_result().map(|(id, _, _)| id.to_owned());
             for block in message.content {
-                let ContentBlock::ToolResult {
-                    call_id,
-                    content,
-                    is_error,
-                } = block
-                else {
-                    return Err(error(
-                        ProviderErrorKind::InvalidRequest,
-                        "tool messages must contain only tool results",
-                    ));
-                };
-                let content = if is_error {
-                    json!({"is_error":true,"content":content}).to_string()
-                } else if let Value::String(text) = content {
-                    text
-                } else {
-                    content.to_string()
-                };
-                messages.push(json!({"role":"tool", "tool_call_id":call_id, "content":content}));
+                match block {
+                    ContentBlock::ToolResult {
+                        call_id,
+                        content,
+                        is_error,
+                    } => {
+                        let content = if is_error {
+                            json!({"is_error":true,"content":content}).to_string()
+                        } else if let Value::String(text) = content {
+                            text
+                        } else {
+                            content.to_string()
+                        };
+                        messages.push(
+                            json!({"role":"tool", "tool_call_id":call_id, "content":content}),
+                        );
+                    }
+                    ContentBlock::Image { source } => {
+                        if anchor.is_none() {
+                            return Err(error(
+                                ProviderErrorKind::InvalidRequest,
+                                "unanchored tool image",
+                            ));
+                        }
+                        // Tool-role content is text-only in Chat Completions. Keep every
+                        // parallel result before the ephemeral user image projection.
+                        tool_images.push(json!({"type":"text","text":json!({"tool_call_id":anchor}).to_string()}));
+                        tool_images.push(encode_image(source)?);
+                    }
+                    _ => {
+                        return Err(error(
+                            ProviderErrorKind::InvalidRequest,
+                            "invalid tool content",
+                        ));
+                    }
+                }
             }
             continue;
         }
+        flush_tool_images(&mut messages, &mut tool_images);
         let role = match message.role {
             MessageRole::System => "system",
             MessageRole::User => "user",
@@ -303,26 +359,8 @@ fn encode_request(request: ModelRequest) -> Result<Value, ProviderError> {
                             "this adapter only accepts images in user messages",
                         ));
                     }
-                    let url = match source {
-                        ImageSource::Url { url }
-                            if url.starts_with("https://") || url.starts_with("http://") =>
-                        {
-                            url
-                        }
-                        ImageSource::Base64 { media_type, data }
-                            if media_type.starts_with("image/") && !data.is_empty() =>
-                        {
-                            format!("data:{media_type};base64,{data}")
-                        }
-                        _ => {
-                            return Err(error(
-                                ProviderErrorKind::InvalidRequest,
-                                "image requires an HTTP(S) URL or nonempty image base64 data",
-                            ));
-                        }
-                    };
                     has_image = true;
-                    parts.push(json!({"type":"image_url", "image_url":{"url":url}}));
+                    parts.push(encode_image(source)?);
                 }
                 ContentBlock::ProviderData { .. } => {
                     return Err(error(
@@ -360,6 +398,7 @@ fn encode_request(request: ModelRequest) -> Result<Value, ProviderError> {
         }
         messages.push(encoded);
     }
+    flush_tool_images(&mut messages, &mut tool_images);
     let mut body = json!({"model":request.model, "messages":messages, "stream":request.stream});
     if request.stream {
         body["stream_options"] = json!({"include_usage":true});
@@ -667,6 +706,126 @@ fn classify_error(cause: anyhow::Error) -> ProviderError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_images_follow_the_complete_parallel_result_batch_at_eof_or_before_next_message() {
+        for next_message in [false, true] {
+            let mut messages = vec![Message {
+                role: MessageRole::Assistant,
+                content: ["a", "b"]
+                    .into_iter()
+                    .map(|id| ContentBlock::ToolCall {
+                        call: ModelToolCall {
+                            id: id.into(),
+                            name: "capture".into(),
+                            arguments: json!({}),
+                        },
+                    })
+                    .collect(),
+            }];
+            for id in ["a", "b"] {
+                messages.push(Message {
+                    role: MessageRole::Tool,
+                    content: vec![
+                        ContentBlock::ToolResult {
+                            call_id: id.into(),
+                            content: json!({"ok":true}),
+                            is_error: id == "b",
+                        },
+                        ContentBlock::Image {
+                            source: ImageSource::Base64 {
+                                media_type: "image/jpeg".into(),
+                                data: "AQID".into(),
+                            },
+                        },
+                    ],
+                });
+            }
+            if next_message {
+                messages.push(Message::text(MessageRole::User, "continue"));
+            }
+            let request = ModelRequest::new("test", messages.clone());
+            let mut spec = ModelSpec::new("fixture", "test");
+            spec.capabilities.tools = true;
+            spec.capabilities.images = true;
+            request.validate(&spec).unwrap();
+            let body = encode_request(request).unwrap();
+            let wire = body["messages"].as_array().unwrap();
+            assert_eq!(wire[1]["tool_call_id"], "a");
+            assert_eq!(wire[2]["tool_call_id"], "b");
+            assert!(wire[1]["content"].is_string());
+            assert!(wire[2]["content"].is_string());
+            assert_eq!(wire[3]["role"], "user");
+            assert_eq!(
+                wire[3]["content"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|p| p["type"] == "image_url")
+                    .count(),
+                2
+            );
+            assert_eq!(wire.len(), if next_message { 5 } else { 4 });
+            assert_eq!(messages.len(), if next_message { 4 } else { 3 });
+        }
+    }
+    #[tokio::test]
+    async fn unresolved_artifact_images_fail_before_any_http_request() {
+        let mut client = ChatClient::new(crate::ClientConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            api_key: "fixture-only".into(),
+            model: "test".into(),
+            max_retries: 0,
+            proxy: crate::ProxyMode::Disabled,
+            ..Default::default()
+        })
+        .unwrap();
+        let mut spec = ModelSpec::new("openai-compatible", "test");
+        spec.capabilities.images = true;
+        spec.capabilities.tools = true;
+        client.register_model(spec).unwrap();
+        let messages = vec![
+            Message {
+                role: MessageRole::Assistant,
+                content: vec![ContentBlock::ToolCall {
+                    call: ModelToolCall {
+                        id: "a".into(),
+                        name: "capture".into(),
+                        arguments: json!({}),
+                    },
+                }],
+            },
+            Message {
+                role: MessageRole::Tool,
+                content: vec![
+                    ContentBlock::ToolResult {
+                        call_id: "a".into(),
+                        content: json!({}),
+                        is_error: false,
+                    },
+                    ContentBlock::Image {
+                        source: ImageSource::Artifact {
+                            reference: aicoder_core::artifacts::ArtifactRef {
+                                version: 1,
+                                id: "00000000-0000-0000-0000-000000000001".into(),
+                                media_type: "image/png".into(),
+                                bytes: 3,
+                                complete: true,
+                            },
+                        },
+                    },
+                ],
+            },
+        ];
+        let request = ModelRequest::new("test", messages);
+        client.validate_request(&request).unwrap();
+        let error = client
+            .generate(request, Arc::new(()), TurnExecutionContext::new())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::InvalidRequest);
+        assert!(error.message.contains("resolved by the host"));
+    }
 
     fn response(message: Value, reason: &str) -> ChatCompletionResponse {
         serde_json::from_value(

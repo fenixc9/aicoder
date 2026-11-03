@@ -91,8 +91,17 @@ pub enum ContentBlock {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
-    Url { url: String },
-    Base64 { media_type: String, data: String },
+    Url {
+        url: String,
+    },
+    Base64 {
+        media_type: String,
+        data: String,
+    },
+    /// Immutable tool output in explicit host-scoped storage. Not user input or IO authority.
+    Artifact {
+        reference: crate::artifacts::ArtifactRef,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -334,11 +343,36 @@ impl ModelRequest {
                     "tool calls must be followed by all matching results",
                 ));
             }
+            let image_count = message
+                .content
+                .iter()
+                .filter(|block| matches!(block, ContentBlock::Image { .. }))
+                .count();
+            let has_images = image_count > 0;
+            if message.role == MessageRole::Tool && image_count > 8 {
+                return Err(invalid("tool messages exceed eight image references"));
+            }
+            if message.role == MessageRole::Tool
+                && has_images
+                && message
+                    .content
+                    .iter()
+                    .filter(|block| matches!(block, ContentBlock::ToolResult { .. }))
+                    .count()
+                    != 1
+            {
+                return Err(invalid("tool images require exactly one anchoring result"));
+            }
             for block in &message.content {
                 if message.role == MessageRole::Tool
-                    && !matches!(block, ContentBlock::ToolResult { .. })
+                    && !matches!(
+                        block,
+                        ContentBlock::ToolResult { .. } | ContentBlock::Image { .. }
+                    )
                 {
-                    return Err(invalid("tool messages must contain only tool results"));
+                    return Err(invalid(
+                        "tool messages accept results and anchored images only",
+                    ));
                 }
                 match block {
                     ContentBlock::ToolCall { .. } | ContentBlock::ToolResult { .. }
@@ -348,6 +382,23 @@ impl ModelRequest {
                     }
                     ContentBlock::Image { .. } if !caps.images => {
                         return Err(unsupported("image input"));
+                    }
+                    ContentBlock::Image {
+                        source: ImageSource::Artifact { reference },
+                    } => {
+                        if message.role != MessageRole::Tool
+                            || reference.validate().is_err()
+                            || !reference.media_type.starts_with("image/")
+                        {
+                            return Err(invalid(
+                                "artifact images require a valid tool image reference",
+                            ));
+                        }
+                    }
+                    ContentBlock::Image {
+                        source: ImageSource::Url { .. },
+                    } if message.role == MessageRole::Tool => {
+                        return Err(invalid("tool images cannot fetch URLs"));
                     }
                     ContentBlock::Reasoning { .. } if !caps.reasoning_history => {
                         return Err(unsupported("reasoning history"));

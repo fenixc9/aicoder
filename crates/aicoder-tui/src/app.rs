@@ -1054,6 +1054,10 @@ fn push_message(timeline: &mut Vec<TimelineItem>, message: &Message) {
                         "[Recorded image: {media_type}, {} base64 bytes]",
                         data.len()
                     ),
+                    aicoder_core::model::ImageSource::Artifact { reference } => format!(
+                        "[Tool image artifact: {}, {} bytes; preview depends on model capability]",
+                        reference.id, reference.bytes
+                    ),
                     aicoder_core::model::ImageSource::Url { .. } => {
                         "[Recorded image URL; not fetched by the TUI]".into()
                     }

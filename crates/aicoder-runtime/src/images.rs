@@ -188,6 +188,18 @@ fn capture(
             && !named.file_type().is_symlink(),
         "image changed during capture"
     );
+    normalize_bytes(bytes, paths.relative_path(&path), limits, context)
+}
+fn normalize_bytes(
+    bytes: Vec<u8>,
+    label: String,
+    limits: ImageLimits,
+    context: &TurnExecutionContext,
+) -> Result<ImageAttachment> {
+    ensure!(
+        bytes.len() <= limits.max_source_bytes,
+        "image source byte budget exceeded"
+    );
     let format = image::guess_format(&bytes).context("unsupported or invalid image signature")?;
     ensure!(
         matches!(
@@ -303,7 +315,7 @@ fn capture(
                 .wrapping_mul(0x100000001b3))
     );
     let info = ImageInfo {
-        path: paths.relative_path(&path),
+        path: label,
         source_bytes: bytes.len(),
         source_fingerprint: fingerprint,
         source_dimensions,
@@ -363,5 +375,94 @@ impl Write for Bounded<'_> {
     }
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+/// Decode immutable tool artifacts only from the explicitly installed scoped store.
+/// This does not load paths, fetch URLs or install a store from transcript references.
+pub struct ArtifactImageResolver {
+    store: std::sync::Arc<dyn aicoder_core::artifacts::ArtifactStore>,
+}
+impl ArtifactImageResolver {
+    pub fn new(store: std::sync::Arc<dyn aicoder_core::artifacts::ArtifactStore>) -> Self {
+        Self { store }
+    }
+}
+#[async_trait::async_trait]
+impl aicoder_core::tool_images::ToolImageResolver for ArtifactImageResolver {
+    async fn resolve(
+        &self,
+        reference: &aicoder_core::artifacts::ArtifactRef,
+        context: TurnExecutionContext,
+    ) -> std::result::Result<
+        aicoder_core::tool_images::ResolvedToolImage,
+        aicoder_core::tool_images::ToolImageError,
+    > {
+        use aicoder_core::{artifacts::MAX_ARTIFACT_PAGE_BYTES, tool_images::*};
+        let context = context.child();
+        let _cancel = Cancel(context.clone());
+        if reference.validate().is_err() || !reference.complete || reference.bytes == 0 {
+            return Err(ToolImageError::Invalid);
+        }
+        if reference.bytes > MAX_TOOL_IMAGE_SOURCE_BYTES {
+            return Err(ToolImageError::Limit);
+        }
+        let mut bytes = Vec::new();
+        while (bytes.len() as u64) < reference.bytes {
+            if context.is_cancelled() {
+                return Err(ToolImageError::Unavailable);
+            }
+            let offset = bytes.len() as u64;
+            let limit = MAX_ARTIFACT_PAGE_BYTES.min((reference.bytes - offset) as usize);
+            let page = tokio::select! {
+                biased;
+                _ = context.cancelled() => return Err(ToolImageError::Unavailable),
+                page = self.store.read(&reference.id, offset, limit) => page.map_err(|_| ToolImageError::Unavailable)?,
+            };
+            let next = offset + page.bytes.len() as u64;
+            if page.artifact != *reference
+                || page.offset != offset
+                || page.bytes.is_empty()
+                || page.bytes.len() > limit
+                || page.next_offset != (next < reference.bytes).then_some(next)
+            {
+                return Err(ToolImageError::Invalid);
+            }
+            bytes.extend_from_slice(&page.bytes);
+        }
+        let mime = reference.media_type.clone();
+        let label = format!("artifact:{}", reference.id);
+        let worker_context = context.clone();
+        let attachment = tokio::task::spawn_blocking(move || {
+            let expected = match mime.as_str() {
+                "image/png" => ImageFormat::Png,
+                "image/jpeg" => ImageFormat::Jpeg,
+                "image/gif" => ImageFormat::Gif,
+                "image/webp" => ImageFormat::WebP,
+                _ => return Err(ToolImageError::Invalid),
+            };
+            if image::guess_format(&bytes).ok() != Some(expected) {
+                return Err(ToolImageError::Invalid);
+            }
+            normalize_bytes(
+                bytes,
+                label,
+                ImageLimits {
+                    max_output_bytes: MAX_TOOL_IMAGE_BYTES,
+                    ..Default::default()
+                },
+                &worker_context,
+            )
+            .map_err(|_| ToolImageError::Invalid)
+        })
+        .await
+        .map_err(|_| ToolImageError::Invalid)??;
+        if context.is_cancelled() {
+            return Err(ToolImageError::Unavailable);
+        }
+        let ImageSource::Base64 { media_type, data } = attachment.source else {
+            return Err(ToolImageError::Invalid);
+        };
+        ResolvedToolImage::new(media_type, data)
     }
 }

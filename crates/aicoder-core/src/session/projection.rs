@@ -223,7 +223,33 @@ impl<'a> SessionBranch<'a> {
                         let tools = pending.as_mut().ok_or_else(|| {
                             anyhow::anyhow!("orphan tool result in session history")
                         })?;
+                        let images = message
+                            .content
+                            .iter()
+                            .filter(|block| matches!(block, ContentBlock::Image { .. }))
+                            .count();
+                        ensure!(
+                            images <= 8,
+                            "too many tool image references in session history"
+                        );
+                        if images > 0 {
+                            ensure!(
+                                message
+                                    .content
+                                    .iter()
+                                    .filter(|block| matches!(
+                                        block,
+                                        ContentBlock::ToolResult { .. }
+                                    ))
+                                    .count()
+                                    == 1,
+                                "tool images require exactly one anchoring result"
+                            );
+                        }
                         for block in &message.content {
+                            if matches!(block, ContentBlock::Image { .. }) {
+                                continue;
+                            }
                             let ContentBlock::ToolResult { call_id, .. } = block else {
                                 bail!("tool message contains a non-result block")
                             };
@@ -234,7 +260,17 @@ impl<'a> SessionBranch<'a> {
                             ensure!(
                                 tools
                                     .results
-                                    .insert(call_id.as_str(), (block, entry.id.as_str()))
+                                    .insert(
+                                        call_id.as_str(),
+                                        (
+                                            if images > 0 {
+                                                message.content.iter().collect()
+                                            } else {
+                                                vec![block]
+                                            },
+                                            entry.id.as_str()
+                                        )
+                                    )
                                     .is_none(),
                                 "duplicate tool result in session history"
                             );
@@ -366,7 +402,7 @@ impl<'a> SessionBranch<'a> {
 struct Pending<'a> {
     order: Vec<&'a str>,
     ids: HashSet<&'a str>,
-    results: HashMap<&'a str, (&'a ContentBlock, &'a str)>,
+    results: HashMap<&'a str, (Vec<&'a ContentBlock>, &'a str)>,
     arrival: Vec<&'a str>,
     call_entry_id: &'a str,
 }
@@ -392,16 +428,19 @@ fn flush<'a>(
             .filter(|(a, b)| a != b)
             .count();
         for id in tools.order {
-            let (block, origin) = match tools.results.remove(id) {
-                Some((block, entry_id)) => (block.clone(), ContextOrigin::Recorded { entry_id }),
+            let (content, origin) = match tools.results.remove(id) {
+                Some((blocks, entry_id)) => (
+                    blocks.into_iter().cloned().collect(),
+                    ContextOrigin::Recorded { entry_id },
+                ),
                 None => {
                     output.source.recovered_tool_results += 1;
                     (
-                        ContentBlock::ToolResult {
+                        vec![ContentBlock::ToolResult {
                             call_id: id.into(),
                             content: serde_json::json!({"ok":false,"error":{"code":"execution_interrupted","message":"No completed result was recorded. The operation may have run partially; inspect the workspace before retrying."}}),
                             is_error: true,
-                        },
+                        }],
                         ContextOrigin::RecoveredToolResult {
                             call_entry_id: tools.call_entry_id,
                             call_id: id,
@@ -411,7 +450,7 @@ fn flush<'a>(
             };
             output.messages.push(Message {
                 role: MessageRole::Tool,
-                content: vec![block],
+                content,
             });
             output.origins.push(origin);
         }
