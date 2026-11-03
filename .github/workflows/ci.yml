@@ -17,7 +17,7 @@ jobs:
           toolchain: 1.92.0
           components: clippy,rustfmt
       - name: Install runtime tools
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep bubblewrap util-linux mount ca-certificates
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Test isolated core without workspace feature unification
@@ -146,6 +146,12 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --workspace --no-deps
+      - name: Bounded remote package CLI over local npm and actual Git HTTP
+        run: |
+          cargo build --locked -p aicoder-cli
+          cp target/debug/aicoder "$RUNNER_TEMP/aicoder-without-downloads"
+          cargo build --locked -p aicoder-cli --features package-downloads
+          python3 scripts/check_package_downloads.py --disabled-binary "$RUNNER_TEMP/aicoder-without-downloads"
 
   event-schema:
     runs-on: ubuntu-latest

@@ -1,5 +1,15 @@
 # API migrations
 
+## S7: remote package provenance
+
+Optional package-downloads adds PackageAcquirer and CLI install-git/install-npm paths. Local
+install remains available by default. First remote publication upgrades the private registry
+to schema 2; current readers accept local schema 1 and both origins in schema 2. Older
+binaries cannot read new origin variants: import verified allowlisted payloads into a fresh
+older local store before downgrading. Public package locks/pins and session formats do not
+change. Source URLs cannot carry credential/capability parameters; host references are not
+serialized. See [transport/budget rules](remote-packages.md).
+
 ## S7: explicit package palette data
 
 `Runtime::package_theme_asset` reads only declared installed themes under host policy and

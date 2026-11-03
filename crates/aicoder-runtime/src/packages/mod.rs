@@ -1,7 +1,11 @@
 //! Explicit content-pinned resource bundles. Registry trust is host state, never model history.
+#[cfg(feature = "package-downloads")]
+mod acquire;
 #[cfg(feature = "process-extensions")]
 mod activation;
 mod assets;
+#[cfg(feature = "package-downloads")]
+pub use acquire::{PackageAcquireLimits, PackageAcquirer, PackageRequest};
 mod manifest;
 mod snapshot;
 mod state;

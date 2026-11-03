@@ -33,12 +33,16 @@ tiktoken-rs = { version = "0.12.0", default-features = false, optional = true }
 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"], optional = true }
 base64 = { version = "0.22", optional = true }
+reqwest = { version = "0.12", features = ["json", "stream"], optional = true }
+flate2 = { version = "1", optional = true }
+tar = { version = "0.4", default-features = false, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
+package-downloads = ["dep:reqwest", "dep:flate2", "dep:tar", "dep:base64"]
 code-mode = ["dep:aicoder-codemode"]
 mcp-stdio = ["process-extensions", "dep:base64"]
 mcp-fixtures = ["mcp-stdio", "process-extension-fixtures"]

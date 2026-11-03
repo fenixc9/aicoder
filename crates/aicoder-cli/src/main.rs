@@ -744,7 +744,7 @@ async fn application() -> Result<()> {
         environment_file(cli.env_file.as_deref())?,
     )?;
     if let Some(Command::Packages { command }) = &cli.command {
-        return packages::execute(&runtime, command);
+        return packages::execute(&runtime, command).await;
     }
     let runtime = if let Some(path) = &cli.package_lock {
         runtime.with_package_state(&aicoder_runtime::packages::PackageSessionState::read(path)?)?

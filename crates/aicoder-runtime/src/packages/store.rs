@@ -50,7 +50,97 @@ impl PackageLimits {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum PackageSource {
-    Local { path: PathBuf },
+    Local {
+        path: PathBuf,
+    },
+    Git {
+        url: String,
+        requested_revision: String,
+        commit: String,
+        archive_sha256: String,
+    },
+    Npm {
+        registry: String,
+        package: String,
+        version: String,
+        integrity: String,
+        archive_sha256: String,
+    },
+}
+impl PackageSource {
+    fn validate(&self) -> Result<()> {
+        let digest = |v: &str| v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit());
+        let label = |v: &str| max_label(v, 256);
+        match self {
+            Self::Local { path } => ensure!(
+                path.is_absolute() && path.as_os_str().as_encoded_bytes().len() <= 4096,
+                "invalid local package provenance"
+            ),
+            Self::Git {
+                url,
+                requested_revision,
+                commit,
+                archive_sha256,
+            } => {
+                provenance_url(url)?;
+                ensure!(
+                    label(requested_revision)
+                        && (commit.len() == 40 || commit.len() == 64)
+                        && commit.bytes().all(|b| b.is_ascii_hexdigit())
+                        && digest(archive_sha256),
+                    "invalid Git package provenance"
+                );
+            }
+            Self::Npm {
+                registry,
+                package,
+                version,
+                integrity,
+                archive_sha256,
+            } => {
+                provenance_url(registry)?;
+                ensure!(
+                    max_label(package, 214)
+                        && max_label(version, 128)
+                        && integrity.len() <= 4096
+                        && !integrity.is_empty()
+                        && integrity.bytes().all(|b| b.is_ascii_graphic())
+                        && digest(archive_sha256),
+                    "invalid npm package provenance"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+fn max_label(value: &str, limit: usize) -> bool {
+    !value.is_empty() && value.len() <= limit && value.bytes().all(|b| b.is_ascii_graphic())
+}
+fn provenance_url(value: &str) -> Result<()> {
+    ensure!(
+        value.len() <= 4096,
+        "package provenance URL budget exceeded"
+    );
+    let url =
+        url::Url::parse(value).map_err(|_| anyhow::anyhow!("invalid package provenance URL"))?;
+    let local = match url.host() {
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        Some(url::Host::Domain(name)) => name == "localhost",
+        _ => false,
+    };
+    ensure!(
+        url.scheme() == "https" || url.scheme() == "http" && local,
+        "invalid package provenance transport"
+    );
+    ensure!(
+        url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "package provenance cannot contain URL credentials or capability parameters"
+    );
+    Ok(())
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -72,7 +162,7 @@ pub struct PackageIndex {
 impl PackageIndex {
     fn validate(&self) -> Result<()> {
         ensure!(
-            self.version == 1
+            (self.version == 1 || self.version == 2)
                 && self.installed.len() <= 512
                 && self.active.len() <= 64
                 && self.enabled.len() <= 32,
@@ -80,6 +170,11 @@ impl PackageIndex {
         );
         for (digest, record) in &self.installed {
             record.pin.validate()?;
+            record.source.validate()?;
+            ensure!(
+                self.version == 2 || matches!(record.source, PackageSource::Local { .. }),
+                "remote package provenance requires registry schema 2"
+            );
             ensure!(
                 digest == &record.pin.sha256 && record.bytes <= 128 * 1024 * 1024,
                 "invalid installed package record"
@@ -145,7 +240,7 @@ impl Drop for Lock {
         let _ = FileExt::unlock(&self.0);
     }
 }
-struct Stage(PathBuf);
+pub(crate) struct Stage(pub(crate) PathBuf);
 impl Drop for Stage {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
@@ -296,6 +391,7 @@ impl PackageStore {
         options: InstallOptions,
         context: &TurnExecutionContext,
     ) -> Result<PackageRecord> {
+        origin.validate()?;
         if context.is_cancelled() {
             return Err(context.error().into());
         }
@@ -401,6 +497,9 @@ impl PackageStore {
             index.installed.len() < 512 || index.installed.contains_key(&digest),
             "installed package revision count exceeded"
         );
+        if !matches!(record.source, PackageSource::Local { .. }) {
+            index.version = 2;
+        }
         index.installed.insert(digest.clone(), record.clone());
         index.active.insert(pin.id.clone(), digest);
         if options.enable {
@@ -410,6 +509,9 @@ impl PackageStore {
         }
         PackageSnapshot::resolve(self, &index, None, Some(std::slice::from_ref(&pin)))?;
         PackageSnapshot::resolve(self, &index, None, None)?;
+        if context.is_cancelled() {
+            return Err(context.error().into());
+        }
         self.publish(index)?;
         Ok(record)
     }

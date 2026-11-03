@@ -31,8 +31,8 @@ new owners without replacing a working snapshot.
 
 Package dependency versions/digests are exact, bounded and cycle-checked. Missing or changed
 dependencies fail resolution; no hidden downloader or lifecycle script grants authority.
-Local directories are the implemented import source; remote Git/npm acquisition is deferred
-until it has bounded download, extraction and lifecycle rules. Pin identity depends on bytes
+Local directories and optional [bounded Git/npm acquisition](remote-packages.md) import into
+the same immutable object store. Pin identity depends on bytes
 and executable modes, rather than an upstream branch/tag name. User-facing activation and source inspection report dependency/
 permission metadata, without resource bodies or credential values.
 
