@@ -24,6 +24,9 @@ async fn media(
     {
         return Err("invalid_media_type");
     }
+    if block["type"] == "image" && aicoder_core::media::image_media_type(mime).is_none() {
+        return Err("invalid_image_mime");
+    }
     if data.len() > limit.div_ceil(3).saturating_mul(4) {
         return Err("media_budget");
     }

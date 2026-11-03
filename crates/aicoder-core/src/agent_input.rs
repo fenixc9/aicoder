@@ -58,7 +58,7 @@ impl TryFrom<Message> for AgentInput {
                             );
                         }
                         ImageSource::Base64 { media_type, data } => ensure!(
-                            media_type.starts_with("image/")
+                            crate::media::image_media_type(media_type).is_some()
                                 && media_type.len() <= 128
                                 && media_type.is_ascii()
                                 && !media_type.chars().any(char::is_control)

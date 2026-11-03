@@ -805,9 +805,7 @@ fn tool_message(call: &ModelToolCall, envelope: Value) -> Message {
         .filter_map(|value| {
             serde_json::from_value::<crate::artifacts::ArtifactRef>(value.clone()).ok()
         })
-        .filter(|reference| {
-            reference.validate().is_ok() && reference.media_type.starts_with("image/")
-        })
+        .filter(|reference| reference.validate().is_ok() && reference.is_image())
         .map(|reference| ContentBlock::Image {
             source: crate::model::ImageSource::Artifact { reference },
         })

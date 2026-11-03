@@ -105,3 +105,8 @@ original references. Non-vision models receive explicit preview omissions. See t
 Native agent-selected image files now use [read_file](file-tools.md#native-image-files),
 including BMP, through the same scoped artifact/preview path. Those raw snapshots include
 all original bytes; the user-selected local capture path above retains normalized pixels.
+
+Inline image MIME declarations accept bounded case/parameter/JPEG-alias interpretation.
+AgentInput preserves the submitted declaration; adapter views use a canonical data URI header.
+Non-image/control-bearing declarations reject before journal application. See
+[image MIME views](tool-images.md#mime-declarations).

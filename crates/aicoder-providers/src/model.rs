@@ -144,7 +144,8 @@ impl ModelProvider for ChatClient {
                             }
                             ImageSource::Artifact { .. } => message.role == MessageRole::Tool,
                             ImageSource::Base64 { media_type, data } => {
-                                media_type.starts_with("image/") && !data.is_empty()
+                                aicoder_core::media::image_media_type(media_type).is_some()
+                                    && !data.is_empty()
                             }
                         };
                         if !valid {
@@ -258,9 +259,14 @@ fn encode_image(source: ImageSource) -> Result<Value, ProviderError> {
         ImageSource::Url { url } if url.starts_with("https://") || url.starts_with("http://") => {
             url
         }
-        ImageSource::Base64 { media_type, data }
-            if media_type.starts_with("image/") && !data.is_empty() =>
-        {
+        ImageSource::Base64 { media_type, data } if !data.is_empty() => {
+            let media_type =
+                aicoder_core::media::image_media_type(&media_type).ok_or_else(|| {
+                    error(
+                        ProviderErrorKind::InvalidRequest,
+                        "invalid image MIME declaration",
+                    )
+                })?;
             format!("data:{media_type};base64,{data}")
         }
         ImageSource::Artifact { .. } => {
@@ -825,6 +831,42 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind, ProviderErrorKind::InvalidRequest);
         assert!(error.message.contains("resolved by the host"));
+    }
+
+    #[test]
+    fn wire_mime_normalization_does_not_rewrite_user_messages_or_forward_parameters() {
+        let source = ImageSource::Base64 {
+            media_type: " IMAGE/JpG ; url=https://must-not-fetch.invalid/a".into(),
+            data: "AQID".into(),
+        };
+        let message = Message {
+            role: MessageRole::User,
+            content: vec![ContentBlock::Image {
+                source: source.clone(),
+            }],
+        };
+        let original = message.clone();
+        let body = encode_request(ModelRequest::new("test", vec![message])).unwrap();
+        assert_eq!(
+            body["messages"][0]["content"][0]["image_url"]["url"],
+            "data:image/jpeg;base64,AQID"
+        );
+        assert_eq!(original.content, vec![ContentBlock::Image { source }]);
+        assert!(
+            encode_image(ImageSource::Base64 {
+                media_type: "text/plain;image/png".into(),
+                data: "AQID".into()
+            })
+            .is_err()
+        );
+        let preview = aicoder_core::tool_images::ResolvedToolImage::new(
+            " IMAGE/JpG ; ignored=value".into(),
+            "AQID".into(),
+        )
+        .unwrap();
+        assert!(
+            matches!(preview.source(),ImageSource::Base64{media_type,..} if media_type=="image/jpeg")
+        );
     }
 
     fn response(message: Value, reason: &str) -> ChatCompletionResponse {

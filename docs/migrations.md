@@ -1,5 +1,16 @@
 # API migrations
 
+## S7: image MIME views
+
+Core adds `media::image_media_type` and ArtifactRef::is_image. Image declarations now share
+bounded case/parameter/alias interpretation across tool promotion, user input, model validation
+and adapters. Known JPEG/BMP aliases use canonical provider headers; raw declarations and
+exact stored reference identity remain unchanged. Existing session/artifact/event schemas and
+dependencies are unchanged. Invalid subtype/control/non-image declarations reject at the
+input/transport boundary; a malformed MCP image declaration marks incomplete media delivery
+without retrying its completed operation. Unknown valid image subtypes retain an explicit
+unsupported preview path. See [contract](tool-images.md#mime-declarations).
+
 ## S7: native read_file images and BMP
 
 `ReadFileTool` keeps its public type, name, arguments and text-page/cursor format. Recognized

@@ -24,7 +24,7 @@ It does not certify all Pi convenience features or arbitrary third-party extensi
 | Resource package discovery/install/pins/reload | Content-addressed local imports, locks/trust/dependencies and public branch state; [packages](packages.md) | Verified scoped Git HTTPS/npm native closures and activation; no JS/TS ABI claim |
 | Themes, export/share | TUI themes and inert canonical JSON/HTML exports, explicit publication adapter; [exports](session-exports.md) | Verified scoped local/custom-host path; no third-party hosted sharing deployment |
 | MCP and Code Mode | Actual modern/legacy stdio, [stock stdio hosts](host-extensions.md), real JS composition with leaf approvals/budgets/journal, CLI opt-in; [Code Mode](code-mode.md), [MCP](mcp.md) | Partial: stock MCP works; additional Code Mode capabilities remain |
-| Multimodal | Immutable bounded local CLI/TUI image input and [typed tool/MCP previews](tool-images.md); [tool image acceptance](s7-tool-images-acceptance.md) | Partial: native/MCP image paths including BMP verified; MIME compatibility and Code Mode output/helpers remain below |
+| Multimodal | Immutable bounded local CLI/TUI image input and [typed tool/MCP previews](tool-images.md); [tool image acceptance](s7-tool-images-acceptance.md) | Partial: native/MCP image paths including BMP verified; MIME compatibility verified; Code Mode output/helpers remain below |
 
 ## Confirmed remaining differences
 
@@ -57,14 +57,19 @@ that full product parity has already been achieved.
    output/storage budgets and cancellation are checked independently of preview decoding.
    Codec-free runtime acquisition plus actual CLI/RPC/Web/TUI image reads are verified in
    [native image acceptance](s7-native-images-acceptance.md). Optional user/tool normalization
-   also supports BMP; image previews remain static and bounded. The pinned Pi image
-   processor also normalizes MIME case, parameters and image/jpg aliases. Current artifact
-   promotion/resolution expects canonical lower-case MIME declarations; matching that valid
-   peer-input behavior remains work, independently of the completed native signature path.
+   also supports BMP; image previews remain static and bounded. MIME case,
+   parameters and JPEG/BMP aliases now share a bounded interpretation across core/runtime/
+   adapter paths, while immutable raw declarations and actual codec checks remain intact.
+   Actual MIME-alias MCP/HTTP/replay and four-stock-host checks pass; see
+   [MIME acceptance](s7-mime-acceptance.md).
 4. **Code Mode auxiliary models and output.** Real JS, discovery/filtering and branch state
    are implemented. Pi additionally exposes image output and non-chat classifier/image-model
    helpers through its pinned [Code Mode contract](https://github.com/earendil-works/pi/blob/4a080252f06caf63a525d7873c5d94d3c23887e0/packages/coding-agent/docs/codemode.md).
-   Those are absent. Pi's default on mode keeps normal tools declared, like the current
+   Those explicit helpers are absent. Generic composition recovery currently copies leaf
+   image artifact references to the outer result; typed media projection can therefore expose
+   images even when script text filtering did not select them. Explicit media output must
+   separate selected images from recovery references while retaining canonical leaf facts.
+   Pi's default on mode keeps normal tools declared, like the current
    aicoder behavior; its additional only mode is not implemented. Different source syntax,
    smaller host limits and TypeScript declarations versus JSON schemas are explicit protocol
    differences, not by themselves proof of missing underlying execution capability.
@@ -89,6 +94,6 @@ passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /
 incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
 original score/release requirements stay open; local scripted scores cannot substitute for them.
 
-The next implementation order is image MIME compatibility, remaining Code Mode image
-output/auxiliary models and only mode, then interception coverage. The final audit must rerun the matrix
+The next implementation order is remaining Code Mode image output/auxiliary models and only
+mode, then interception coverage. The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.

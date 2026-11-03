@@ -411,6 +411,15 @@ impl aicoder_core::tool_images::ToolImageResolver for ArtifactImageResolver {
         if reference.bytes > MAX_TOOL_IMAGE_SOURCE_BYTES {
             return Err(ToolImageError::Limit);
         }
+        let expected = match aicoder_core::media::image_media_type(&reference.media_type).as_deref()
+        {
+            Some("image/png") => ImageFormat::Png,
+            Some("image/jpeg") => ImageFormat::Jpeg,
+            Some("image/gif") => ImageFormat::Gif,
+            Some("image/webp") => ImageFormat::WebP,
+            Some("image/bmp") => ImageFormat::Bmp,
+            _ => return Err(ToolImageError::Invalid),
+        };
         let mut bytes = Vec::new();
         while (bytes.len() as u64) < reference.bytes {
             if context.is_cancelled() {
@@ -434,18 +443,9 @@ impl aicoder_core::tool_images::ToolImageResolver for ArtifactImageResolver {
             }
             bytes.extend_from_slice(&page.bytes);
         }
-        let mime = reference.media_type.clone();
         let label = format!("artifact:{}", reference.id);
         let worker_context = context.clone();
         let attachment = tokio::task::spawn_blocking(move || {
-            let expected = match mime.as_str() {
-                "image/png" => ImageFormat::Png,
-                "image/jpeg" => ImageFormat::Jpeg,
-                "image/gif" => ImageFormat::Gif,
-                "image/webp" => ImageFormat::WebP,
-                "image/bmp" => ImageFormat::Bmp,
-                _ => return Err(ToolImageError::Invalid),
-            };
             if image::guess_format(&bytes).ok() != Some(expected) {
                 return Err(ToolImageError::Invalid);
             }

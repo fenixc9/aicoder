@@ -39,7 +39,9 @@ let executor = TurnExecutor::builder_from_shared(provider)
 
 The runtime resolver reads at most 8 MiB per source in at most 64 KiB pages. Every page must
 match the complete reference, expected offset and continuation. It never loads a path or URL
-from a result. Actual PNG/JPEG/static GIF/static WebP/BMP signatures must match the declared MIME.
+from a result. A shared bounded MIME view accepts case, parameters and JPEG/BMP aliases;
+actual PNG/JPEG/static GIF/static WebP/BMP signatures must still match that interpreted type.
+The original stored declaration and exact reference/page equality remain unchanged.
 The existing optional bounded decoder checks dimensions/pixels, orientation and animation,
 then produces a JPEG preview with at most 1600 pixels per side and 256 KiB encoded bytes.
 Preview normalization can reduce quality/resolution. Raw captured bytes stay unchanged.
@@ -77,6 +79,26 @@ framing, vision tokens or billed usage. Final materialized counts, including del
 observations, are checked against known model windows and run token limits again. A custom
 resolver/counter cannot turn declared metadata into exact service usage. Semantic summaries
 omit pixels and preserve raw history under the existing summary contract.
+
+## MIME declarations
+
+`aicoder_core::media::image_media_type` interprets at most 128 ASCII bytes, rejects controls,
+non-image type names and invalid subtypes, ignores parameters and returns a canonical type.
+For example ` IMAGE/JpG ; profile=fixture` becomes `image/jpeg` in a provider view;
+`image/x-bmp` and `image/x-ms-bmp` map to `image/bmp`. PNG/GIF/WebP use their canonical names.
+Unknown valid image subtypes remain image candidates so the runtime can report unsupported
+previews explicitly. An unsupported codec is rejected before loading its raw artifact bytes.
+
+ArtifactRef::is_image, tool promotion, core validation, user input, runtime decoding and
+adapter encoding share this interpretation. Stored references, MIME declarations, pixels and
+user/tool messages are not rewritten. Resolved previews and wire data URI headers use the
+normalized type; parameters are never resource locations or authorization. Actual codec
+validation remains mandatory in the runtime; an aliased JPEG declaration over PNG bytes
+still fails. A non-image MIME on an MCP image block reports incomplete delivery for its
+completed call instead of publishing an invented image reference. Low-level SDK payloads
+with invalid image declarations reject before transport; callers retain pixel responsibility.
+
+See [MIME acceptance](s7-mime-acceptance.md) for actual MCP/HTTP/replay and stock-host coverage.
 
 ## Offline verification
 

@@ -326,3 +326,62 @@ async fn artifact_images_validate_scoped_immutable_bytes_mime_completeness_and_l
         ToolImageError::Unavailable
     );
 }
+
+#[tokio::test]
+async fn image_mime_aliases_preserve_stored_declarations_and_validate_actual_codecs() {
+    use aicoder_core::{artifacts::*, tool_images::*};
+    let store = Arc::new(MemoryArtifactStore::default());
+    let resolver = ArtifactImageResolver::new(store.clone());
+    for (mime, format) in [
+        (" IMAGE/PNG ; profile=fixture", ImageFormat::Png),
+        ("image/JpG;ignored=value", ImageFormat::Jpeg),
+        ("Image/GIF", ImageFormat::Gif),
+        ("IMAGE/WEBP; charset=binary", ImageFormat::WebP),
+        ("image/X-MS-BMP", ImageFormat::Bmp),
+    ] {
+        let raw = encoded(20, 10, format);
+        let reference = store_bytes(store.as_ref(), mime, &raw, true).await.unwrap();
+        assert!(reference.is_image());
+        let preview = resolver
+            .resolve(&reference, TurnExecutionContext::new())
+            .await
+            .unwrap();
+        assert!(
+            matches!(preview.source(),ImageSource::Base64{media_type,..} if media_type=="image/jpeg")
+        );
+        let page = store.read(&reference.id, 0, 65536).await.unwrap();
+        assert_eq!(page.artifact.media_type, mime);
+        assert_eq!(page.bytes, raw);
+    }
+    let wrong = store_bytes(
+        store.as_ref(),
+        "IMAGE/JPG;ignored=value",
+        &encoded(20, 10, ImageFormat::Png),
+        true,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        resolver
+            .resolve(&wrong, TurnExecutionContext::new())
+            .await
+            .unwrap_err(),
+        ToolImageError::Invalid
+    );
+    let unknown = store_bytes(
+        store.as_ref(),
+        "IMAGE/VND.EXAMPLE;ignored=value",
+        b"unknown pixels",
+        true,
+    )
+    .await
+    .unwrap();
+    assert!(unknown.is_image());
+    assert_eq!(
+        resolver
+            .resolve(&unknown, TurnExecutionContext::new())
+            .await
+            .unwrap_err(),
+        ToolImageError::Invalid
+    );
+}

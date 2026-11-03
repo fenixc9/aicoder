@@ -270,3 +270,43 @@ async fn image_estimates_still_enforce_known_windows_before_any_turn_write() {
     assert_eq!(repo.open(&id).unwrap().metadata().revision, before);
     assert!(calls.lock().unwrap().is_empty());
 }
+
+#[test]
+fn inline_mime_aliases_remain_original_user_facts_and_nonimage_declarations_fail() {
+    let mut message = image("eA==");
+    if let ContentBlock::Image {
+        source: ImageSource::Base64 { media_type, .. },
+    } = &mut message.content[0]
+    {
+        *media_type = " IMAGE/JpG ; profile=fixture".into();
+    }
+    assert_eq!(
+        AgentInput::try_from(message.clone())
+            .unwrap()
+            .into_message(),
+        message
+    );
+    let mut spec = ModelSpec::new("fixture", "vision");
+    spec.capabilities.images = true;
+    ModelRequest::new("vision", vec![message.clone()])
+        .validate(&spec)
+        .unwrap();
+    for mime in [
+        "text/plain;type=image/png",
+        "image/",
+        "image/png\r\nInjected:value",
+    ] {
+        if let ContentBlock::Image {
+            source: ImageSource::Base64 { media_type, .. },
+        } = &mut message.content[0]
+        {
+            *media_type = mime.into();
+        }
+        assert!(AgentInput::try_from(message.clone()).is_err());
+        assert!(
+            ModelRequest::new("vision", vec![message.clone()])
+                .validate(&spec)
+                .is_err()
+        );
+    }
+}

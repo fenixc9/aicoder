@@ -29,7 +29,10 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--bin-dir", type=Path, default=ROOT / "target/debug")
 parser.add_argument("--packages", action="store_true", help="Install trusted fixture packages and activate their executables")
 parser.add_argument("--images", action="store_true", help="Verify tool images reach models in every stock host")
+parser.add_argument("--mime-alias", action="store_true", help="Verify noncanonical MCP image MIME declarations; requires --images")
 args = parser.parse_args()
+if args.mime_alias and not args.images:
+    parser.error("--mime-alias requires --images")
 BINS = args.bin_dir.resolve()
 TOKEN = "fixture-host-token-0123456789abcdef"
 NAMESPACE = "hostpack_" + hashlib.sha256(b"host-package/peer").hexdigest()[:12] if args.packages else "host"
@@ -166,7 +169,7 @@ try:
                 config_flags = []
             sessions = [] if args.images else ["--no-session"]
             common = [*config_flags, "--no-resources", "--workspace", str(root),
-                *configure(root, env, "mcp_stdio", "image" if args.images else "modern")]
+                *configure(root, env, "mcp_stdio", "image_alias" if args.mime_alias else "image" if args.images else "modern")]
             if frontend == "cli_json":
                 output = subprocess.check_output([str(BINS / "aicoder"), *common,
                     *sessions, "--yes", "--json", "--prompt", "host fixture"], env=env, timeout=15)
@@ -294,6 +297,8 @@ try:
                 blocks = [b for e in entries if e.get("kind") == "message" for b in e["message"]["content"]]
                 images = [b for b in blocks if b["type"] == "image"]
                 assert len(images) == 1 and images[0]["source"]["type"] == "artifact", frontend
+                if args.mime_alias:
+                    assert images[0]["source"]["reference"]["media_type"] == " IMAGE/PNG ; profile=fixture", frontend
                 assert "_tool_image_projection" not in json.dumps(entries), frontend
         for binary, extra, termination in [
             ("aicoder", ["--json", "--prompt", "never start"], signal.SIGINT),
@@ -323,7 +328,7 @@ try:
         assert len(requests) == 8 and not failures, (len(requests), failures)
         print(json.dumps({"frontends": ["cli_json", "rpc", "web", "tui_pty"],
             "package_executables": args.packages, "installation_does_not_launch": args.packages,
-            "real_mcp_child": True, "tool_image_projection": args.images, "explicit_approvals": ["rpc", "web", "tui"],
+            "real_mcp_child": True, "tool_image_projection": args.images, "mime_alias_preserved": args.mime_alias, "explicit_approvals": ["rpc", "web", "tui"],
             "all_children_reaped": True, "startup_cancellation": ["cli", "tui", "web"],
             "metadata_does_not_launch": True, "loopback_model_requests": len(requests)}))
 finally:

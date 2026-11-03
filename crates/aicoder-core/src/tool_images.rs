@@ -44,6 +44,9 @@ impl ResolvedToolImage {
     /// The resolver must validate the actual codec, dimensions and immutable source bytes.
     /// Core additionally bounds and validates the inline envelope without codec dependencies.
     pub fn new(media_type: String, data: String) -> Result<Self, ToolImageError> {
+        let media_type = crate::media::image_media_type(&media_type)
+            .ok_or(ToolImageError::Invalid)?
+            .into_owned();
         let body = data.trim_end_matches('=');
         let padding = data.len() - body.len();
         if !matches!(

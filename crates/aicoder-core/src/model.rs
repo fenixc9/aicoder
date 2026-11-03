@@ -388,12 +388,19 @@ impl ModelRequest {
                     } => {
                         if message.role != MessageRole::Tool
                             || reference.validate().is_err()
-                            || !reference.media_type.starts_with("image/")
+                            || !reference.is_image()
                         {
                             return Err(invalid(
                                 "artifact images require a valid tool image reference",
                             ));
                         }
+                    }
+                    ContentBlock::Image {
+                        source: ImageSource::Base64 { media_type, .. },
+                    } if crate::media::image_media_type(media_type).is_none() => {
+                        return Err(invalid(
+                            "image content requires a valid image MIME declaration",
+                        ));
                     }
                     ContentBlock::Image {
                         source: ImageSource::Url { .. },

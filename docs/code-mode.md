@@ -16,7 +16,8 @@ assistant/tool pair and its provider projection. Write an intent before invoking
 write completed results once. Persistence failure stops admission, never retries an operation
 and never publishes an unfinished call as complete. Root transcript indices remain canonical.
 Existing tool events use distinct leaf call IDs under the same run; composition records carry
-explicit parent/scope/sequence linkage. Only explicit script output reaches the next model view.
+explicit parent/scope/sequence linkage. Explicit script output supplies the next model
+text, alongside bounded outer composition/recovery metadata.
 
 Read-only calls may run concurrently; mutation/command calls serialize after earlier work,
 retaining normal approval semantics. Budget admission is atomic across queued leaf calls and
@@ -86,9 +87,12 @@ descriptions, `describeTool(name)` supplies its schema and `describeNamespace(pr
 
 `text(value)`, console methods and a non-undefined return become separate JSON output items
 or console entries. Output is buffered until completion/error. `exit()` ends the script successfully. Exceptions preserve bounded
-partial output in the outer tool error. Only these explicit outputs and normal outer
-composition metadata enter the next provider projection, while canonical leaf records remain
-available to storage/export/bench. Do not use the public store for credentials.
+partial output in the outer tool error. These explicit outputs and normal outer
+composition/recovery metadata enter the next provider projection, while canonical leaf records
+remain available to storage/export/bench. Current generic recovery also retains leaf image
+references on the outer result, so vision hosts can receive their previews despite text
+filtering. A dedicated image output/selection path remains open in the [Pi audit](pi-parity-audit.md);
+text filtering alone currently does not select image exposure. Do not use the public store for credentials.
 `store(key, value)` saves a JSON copy; an omitted/undefined value deletes a key; `load` returns
 a fresh copy or undefined. The store follows the selected branch and survives cold JSONL
 reopen. Transient runs without a repository have no durable store.

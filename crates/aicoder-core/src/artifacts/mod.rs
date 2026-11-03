@@ -45,6 +45,10 @@ pub struct ArtifactRef {
     pub complete: bool,
 }
 impl ArtifactRef {
+    /// Image routing uses a bounded MIME view; the immutable stored declaration is unchanged.
+    pub fn is_image(&self) -> bool {
+        crate::media::image_media_type(&self.media_type).is_some()
+    }
     pub fn validate(&self) -> Result<(), ArtifactError> {
         if self.bytes > 1024 * 1024 * 1024
             || self.version != 1

@@ -228,8 +228,21 @@ async fn main() {
                         value["content"] = json!([{"type":"text","text":error.message}]);
                     }
                 }
-                if mode == "image" {
+                if matches!(
+                    mode,
+                    "image" | "image_alias" | "image_invalid_mime" | "image_unsupported_mime"
+                ) {
                     value["content"] = json!([{"type":"image","mimeType":"image/png","data":"iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAAD0lEQVR4nGP4z8DA8J8BAAf/Af8Bf4mnAAAAAElFTkSuQmCC"}]);
+                    if mode == "image_alias" {
+                        value["content"][0]["mimeType"] = json!(" IMAGE/PNG ; profile=fixture");
+                    }
+                    if mode == "image_unsupported_mime" {
+                        value["content"][0]["mimeType"] =
+                            json!("IMAGE/VND.EXAMPLE; profile=fixture");
+                    }
+                    if mode == "image_invalid_mime" {
+                        value["content"][0]["mimeType"] = json!("text/plain;type=image/png");
+                    }
                 }
                 if mode == "media" {
                     value["content"] = json!([{"type":"text","text":"media result"},{"type":"image","mimeType":"image/png","data":"AQID"},{"type":"audio","mimeType":"audio/wav","data":"BAUG"},{"type":"resource_link","uri":"file:///must-not-read","name":"inert link"},{"type":"resource","resource":{"uri":"data:embedded","mimeType":"application/octet-stream","blob":"BwgJ"}},{"type":"resource","resource":{"uri":"data:text","text":"embedded text"}}]);
