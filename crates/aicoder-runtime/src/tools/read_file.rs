@@ -26,7 +26,7 @@ impl ExecutableTool for ReadFileTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "read_file".into(),
-            description: Some("Read a bounded UTF-8 page. Pass next_cursor unchanged to continue, including inside long lines. Do not combine cursor with offset_line.".into()),
+            description: Some("Read a bounded UTF-8 page or capture a complete PNG/JPEG/GIF/WebP/BMP image as an artifact with a model preview when supported. Images require artifact storage and default pagination. For text pass next_cursor unchanged to continue, including inside long lines. Do not combine cursor with offset_line.".into()),
             parameters: json!({"type":"object","properties":{
                 "path":{"type":"string"},"offset_line":{"type":"integer","minimum":1,"default":1},
                 "limit_lines":{"type":"integer","minimum":1,"maximum":4000,"default":400},
@@ -67,10 +67,10 @@ async fn read(context: &ToolContext, args: Arguments) -> Result<ToolSuccess, Too
     }
     let label = paths.relative_path(&path);
     let query = key(&("read_file", &path));
-    let (file, stamp) = open_regular(&path).await?;
+    let (file, stamp, metadata) = open_regular_with_metadata(&path).await?;
     let mut reader = BufReader::new(file);
-    let (offset, line, skipped) = if let Some(cursor) = args.cursor {
-        let cursor = Cursor::decode(&cursor, &query)?;
+    let cursor = if let Some(cursor) = args.cursor.as_deref() {
+        let cursor = Cursor::decode(cursor, &query)?;
         cursor.check_file(&stamp)?;
         if cursor.path != label {
             return Err(failure(
@@ -78,6 +78,25 @@ async fn read(context: &ToolContext, args: Arguments) -> Result<ToolSuccess, Too
                 "Cursor path differs from requested file",
             ));
         }
+        Some(cursor)
+    } else {
+        None
+    };
+    // Inspect the existing bounded buffer, never reopen the file or trust an extension.
+    // A stale text cursor is checked before a changed file can become an image read.
+    if let Some(mime) = super::image_file::media_type(reader.fill_buf().await.map_err(io_error)?) {
+        if cursor.is_some()
+            || args.offset_line.is_some_and(|line| line != 1)
+            || args.limit_lines != default_lines()
+        {
+            return Err(failure(
+                "image_pagination",
+                "Image reads require default pagination; pass only path",
+            ));
+        }
+        return super::image_file::capture(context, reader, &path, metadata, mime, limit).await;
+    }
+    let (offset, line, skipped) = if let Some(cursor) = cursor {
         reader
             .seek(SeekFrom::Start(cursor.offset))
             .await

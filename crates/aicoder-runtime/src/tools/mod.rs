@@ -2,6 +2,7 @@ mod atomic_file;
 mod bash;
 mod edit_file;
 mod grep;
+mod image_file;
 mod io;
 mod list;
 mod read_file;

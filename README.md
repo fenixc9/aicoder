@@ -54,7 +54,8 @@ credentials, timeouts and compatible-service behavior. [Reasoning controls](docs
 expose declared effort levels through SDK, CLI and TUI. [Image input](docs/image-input.md)
 uses the same Agent API, with bounded local captures via CLI `--image` and TUI `/image`.
 [Tool/MCP images](docs/tool-images.md) use scoped artifacts and bounded model-only previews,
-while canonical history retains references. [Tree sessions and recovery](docs/sessions.md)
+while canonical history retains references. Native `read_file` can acquire all five supported
+image formats, including BMP, under the same workspace and storage bounds. [Tree sessions and recovery](docs/sessions.md)
 cover branches, durable tool checkpoints, interrupted turns and backed-up v1/v2 migration.
 [RunHandle controls](docs/run-control.md) add bounded steer/follow-up queues and scoped
 asynchronous approvals over the same execution loop. [Versioned events](docs/events.md)

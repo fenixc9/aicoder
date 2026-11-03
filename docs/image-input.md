@@ -19,7 +19,7 @@ internal allocations do not enforce it strictly, so this is not an absolute proc
 Captured normalized pixels/bytes are immutable. Submission and
 historical replay never re-open the file. Codec work is host IO, not agent execution.
 
-PNG, JPEG, GIF and WebP inputs are normalized to static JPEG, including declared orientation,
+PNG, JPEG, GIF, WebP and BMP inputs are normalized to static JPEG, including declared orientation,
 white-background RGB conversion, aspect-preserving resize and at most five quality/size
 attempts (q80/60/40 at max side, then q60 at half/quarter side). The original file
 is not modified; metadata reports its source size/fingerprint, original/output dimensions,
@@ -92,7 +92,7 @@ cargo run --locked -p aicoder-runtime --features images --example offline_images
 
 The example captures a PNG, modifies the original file and verifies exact captured input
 in both the provider request and JSONL session, using a scripted provider without credentials.
-Runtime images is optional; CLI/TUI enable only PNG/JPEG/GIF/WebP codecs, without other image
+Runtime images is optional; CLI/TUI enable only PNG/JPEG/GIF/WebP/BMP codecs, without other image
 formats, Rayon or tokenizer vocabularies. Source reads and codec failures never become tools.
 
 ## Tool output images
@@ -101,3 +101,7 @@ Tool and MCP images use scoped artifacts rather than user input. Runtime can val
 normalize those artifacts into bounded model-only previews; canonical history keeps the
 original references. Non-vision models receive explicit preview omissions. See the separate
 [tool image contract](tool-images.md) for limits, ordering, storage and migration.
+
+Native agent-selected image files now use [read_file](file-tools.md#native-image-files),
+including BMP, through the same scoped artifact/preview path. Those raw snapshots include
+all original bytes; the user-selected local capture path above retains normalized pixels.

@@ -52,6 +52,7 @@ async fn static_codecs_are_detected_by_signature_normalized_and_snapshotted() {
         ImageFormat::Jpeg,
         ImageFormat::Gif,
         ImageFormat::WebP,
+        ImageFormat::Bmp,
     ] {
         let original = encoded(30, 20, format);
         fs::write(root.path().join("wrong-extension.txt"), &original).unwrap();

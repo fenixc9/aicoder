@@ -147,6 +147,12 @@ impl Cursor {
     }
 }
 pub(super) async fn open_regular(path: &Path) -> Result<(File, FileStamp), ToolFailure> {
+    let (file, stamp, _) = open_regular_with_metadata(path).await?;
+    Ok((file, stamp))
+}
+pub(super) async fn open_regular_with_metadata(
+    path: &Path,
+) -> Result<(File, FileStamp, std::fs::Metadata), ToolFailure> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -157,7 +163,7 @@ pub(super) async fn open_regular(path: &Path) -> Result<(File, FileStamp), ToolF
         return Err(failure("not_a_file", "Path is not a regular file"));
     }
     let stamp = FileStamp::from(&metadata)?;
-    Ok((file, stamp))
+    Ok((file, stamp, metadata))
 }
 pub(super) async fn unchanged(file: &File, stamp: &FileStamp) -> Result<(), ToolFailure> {
     if FileStamp::from(&file.metadata().await.map_err(io_error)?)? != *stamp {

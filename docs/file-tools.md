@@ -79,8 +79,8 @@ page stability does not establish a transaction across an entire tree.
 It reads a fixed-size byte window, never an unbounded line/string. Pages preserve UTF-8
 boundaries; incomplete/invalid UTF-8 at EOF is an error. Text is literal except that
 a terminal LF and its optional preceding CR are removed from each returned page.
-Interior line endings remain as stored. This is a text inspection API, not a raw-byte
-archive/export API.
+Interior line endings remain as stored. Text pages are literal inspection data; image
+signatures select the separate complete-artifact path below.
 
 Pages also carry a `revision` for optional [mutation preconditions](file-mutations.md).
 It is a stat/identity fingerprint, not a content hash.
@@ -91,6 +91,43 @@ remains on that same line. `next_offset_byte` identifies the exact continuation;
 `next_cursor` carries both byte and line positions. Copy the cursor to avoid re-reading
 or skipping the rest of a wide line. The legacy practice of always incrementing
 `next_offset_line` after truncation is no longer valid.
+
+## Native image files
+
+`read_file` recognizes PNG, JPEG, GIF, WebP and BMP by bounded signature inspection, regardless
+of filename extension. It captures the complete opened regular file into explicit scoped
+artifact storage. Native acquisition requires no codec dependency: pixel validation and
+normalization happen later through [tool image projection](tool-images.md). Without storage,
+`artifact_store_unavailable` is explicit; `--no-session` disables persistent artifacts and
+cannot deliver a native image implicitly. SDK hosts can explicitly install MemoryArtifactStore.
+
+An image success has `kind: "image"`, `path`, `media_type`, `source_bytes`, `revision`,
+`operation_completed`, `delivery_complete` and `has_more: false`. Its complete ArtifactRef
+is in ToolSuccess.artifacts and the dispatcher-owned root envelope/image block. It has no
+text `content`, line numbers or continuation cursor. The raw artifact retains every source
+byte, including embedded metadata. Normalized model previews remove metadata; raw capture
+completeness does not establish pixel validity or that a model received a preview.
+
+Images use default pagination: omit cursor, use offset_line absent/1 and limit_lines absent/400.
+Other values return `image_pagination`. Existing text cursor validation happens before
+signature inspection, so a changed text source cannot silently become a whole image read.
+The probe reuses at most one 8 KiB buffered read, including on text continuation. Text pages,
+escaping and cursor schema remain unchanged.
+
+Admission is at most 8 MiB per raw source, also bounded by the store's per-artifact limit.
+A fixed buffered read can detect one byte beyond admission and bounded read-ahead; excessive
+or growing sources never publish an oversized snapshot. Complete result metadata must fit
+the output cap before full capture/publication. The opened descriptor and named source must
+retain their identity/size/time state, including Unix ctime, across capture. Identity/size/time mismatches or observed symlinks return `image_source_changed`; IO errors
+retain explicit read failure codes. Every such failure precedes publication. No source
+file is written and no path is reopened for subsequent model projection.
+
+Archive failure after capture returns `image_capture_failed` with `operation_completed: true`,
+`delivery_complete: false` and a bounded capture error. The storage attempt has a 250 ms
+sub-deadline inside the normal tool/run deadline. Timeout/cancellation drops pending writers;
+completed captures are not retried automatically. A vision host with optional images validates
+PNG/JPEG/static GIF/static WebP/BMP and normalizes a bounded JPEG preview. Non-vision, malformed,
+missing or excessive previews retain the existing explicit [omission contract](tool-images.md).
 
 ## Bounds, errors and cancellation
 
@@ -103,7 +140,8 @@ budget exhaustion remains a terminal run stop and can supersede tool paging.
 
 | Resource | Bound / behavior |
 | --- | --- |
-| Read page buffer | At most output cap + 4 bytes, plus an 8 KiB buffered reader |
+| Text read page buffer | At most output cap + 4 bytes, plus an 8 KiB buffered reader/signature probe |
+| Image source | At most 8 MiB admitted, also limited by scoped store; bounded excess detection/read-ahead |
 | Initial read `offset_line` scan | At most 16 MiB consumed before an explicit `scan_limit`; buffered read-ahead is bounded |
 | Grep scan per call | 16 MiB accounted input plus at most one 8 KiB buffer of read-ahead; cursor resumes at a complete line boundary |
 | Grep line buffer | 64 KiB including its newline; larger lines return `line_too_long` with path/line and a recovery `read_cursor` |

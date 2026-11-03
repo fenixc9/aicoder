@@ -139,6 +139,7 @@ jobs:
           python3 scripts/check_host_extensions.py
           python3 scripts/check_host_extensions.py --packages
           python3 scripts/check_host_extensions.py --images
+          python3 scripts/check_file_images.py
       - name: Optional Web documentation
         env:
           RUSTDOCFLAGS: -D warnings

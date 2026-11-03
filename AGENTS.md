@@ -52,6 +52,8 @@
   Tool images retain scoped immutable references in canonical results; decode bounded previews
   only in model views. Preview omission is separate from raw capture and cannot restore IO
   authority, fetch tool URLs, add user facts or leave resolver children running after cancellation.
+  Native image snapshots use opened descriptors and source identity checks; text cursors
+  cannot silently select complete image capture.
 - Navigation metadata must not become model instructions. Scope idle mutations to the
   workspace/run lease, retain old branches, and reject stale cursors. Validate model,
   adapter and projected-context compatibility before writing a selection or turn;

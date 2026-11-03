@@ -204,9 +204,13 @@ fn normalize_bytes(
     ensure!(
         matches!(
             format,
-            ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::Gif | ImageFormat::WebP
+            ImageFormat::Png
+                | ImageFormat::Jpeg
+                | ImageFormat::Gif
+                | ImageFormat::WebP
+                | ImageFormat::Bmp
         ),
-        "only PNG/JPEG/GIF/WebP images are supported"
+        "only PNG/JPEG/GIF/WebP/BMP images are supported"
     );
     let mut decoder_limits = image::Limits::default();
     decoder_limits.max_image_width = Some(8192);
@@ -439,6 +443,7 @@ impl aicoder_core::tool_images::ToolImageResolver for ArtifactImageResolver {
                 "image/jpeg" => ImageFormat::Jpeg,
                 "image/gif" => ImageFormat::Gif,
                 "image/webp" => ImageFormat::WebP,
+                "image/bmp" => ImageFormat::Bmp,
                 _ => return Err(ToolImageError::Invalid),
             };
             if image::guess_format(&bytes).ok() != Some(expected) {

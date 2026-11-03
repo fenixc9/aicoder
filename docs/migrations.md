@@ -1,5 +1,19 @@
 # API migrations
 
+## S7: native read_file images and BMP
+
+`ReadFileTool` keeps its public type, name, arguments and text-page/cursor format. Recognized
+PNG/JPEG/GIF/WebP/BMP signatures now return a complete `kind: "image"` success with raw source
+metadata and ToolSuccess.artifacts; consumers must not assume every success has text content.
+Images require explicit artifact storage and default pagination. No storage/oversized sources
+fail before publication; archive failures identify completed capture with incomplete delivery.
+
+Acquisition is codec-free, including default standalone runtime/eval. Optional runtime images
+adds BMP to existing user/tool normalization; no dependency or lockfile version changes.
+Existing text/history and artifact/session formats remain compatible with the preceding typed
+tool-image release. `--no-session` keeps its previous storage-disabled behavior. See
+[native image reads](file-tools.md#native-image-files).
+
 ## S7: typed tool image artifacts
 
 `ImageSource` gains `Artifact { reference }`; exhaustive Rust matches need a new arm.

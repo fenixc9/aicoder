@@ -4,9 +4,8 @@ Tools return image artifacts through the existing `ToolSuccess.artifacts` or
 `ToolFailure.artifacts` fields. Dispatcher-owned output envelopes promote valid top-level
 `image/*` references to `ContentBlock::Image { source: ImageSource::Artifact { reference } }`
 beside the anchoring tool result. JSON inside ordinary tool output cannot mint these blocks.
-MCP image results use this same path; private MCP metadata remains excluded. This delivery
-layer does not change the stock UTF-8 read_file tool into an image acquisition tool; that
-remaining Pi difference is tracked in the [audit](pi-parity-audit.md).
+MCP image results use this same path; private MCP metadata remains excluded. The stock [read_file image path](file-tools.md#native-image-files) also supplies complete
+PNG/JPEG/GIF/WebP/BMP snapshots through this interface without requiring codecs for acquisition.
 
 Canonical history stores the original tool result and immutable reference, never decoded
 preview bytes or a synthetic user turn. Artifact capture completeness describes raw storage,
@@ -40,7 +39,7 @@ let executor = TurnExecutor::builder_from_shared(provider)
 
 The runtime resolver reads at most 8 MiB per source in at most 64 KiB pages. Every page must
 match the complete reference, expected offset and continuation. It never loads a path or URL
-from a result. Actual PNG/JPEG/static GIF/static WebP signatures must match the declared MIME.
+from a result. Actual PNG/JPEG/static GIF/static WebP/BMP signatures must match the declared MIME.
 The existing optional bounded decoder checks dimensions/pixels, orientation and animation,
 then produces a JPEG preview with at most 1600 pixels per side and 256 KiB encoded bytes.
 Preview normalization can reduce quality/resolution. Raw captured bytes stay unchanged.
