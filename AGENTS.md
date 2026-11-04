@@ -126,6 +126,9 @@
   filtered images. Revalidate references in current host storage, never from script state.
   Root model catalogs are separate from leaf registries; reject fresh unadvertised calls
   before preparation/approval and keep preflight, counting and bench observations consistent.
+  Auxiliary models use immutable native task plans, explicit host routes and parent token
+  reservations. Charge failed/cancelled attempts, retain uncertainty, never infer free usage
+  or retry completed requests; keep primary/auxiliary usage separate for pricing.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

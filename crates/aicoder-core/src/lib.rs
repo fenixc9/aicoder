@@ -21,6 +21,7 @@ pub mod input_context;
 pub mod journal;
 pub use input_context::{InputContextProvider, PreparedInput};
 pub mod artifacts;
+pub mod auxiliary;
 pub mod media;
 pub mod model;
 pub mod redaction;

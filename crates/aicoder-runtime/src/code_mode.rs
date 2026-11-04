@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 #[serde(default, deny_unknown_fields)]
 pub struct CodeModeSettings {
     #[serde(skip_serializing_if = "Setting::is_inherit")]
+    pub model_profiles: Setting<Vec<String>>,
+    #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub only: Setting<bool>,
     #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub enabled: Setting<bool>,
@@ -13,12 +15,26 @@ pub struct CodeModeSettings {
 }
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct CodeModePolicy {
+    pub model_profiles: Vec<String>,
     pub only: bool,
     pub enabled: bool,
     pub tools: Option<Vec<String>>,
 }
 impl CodeModePolicy {
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        let mut profiles = std::collections::BTreeSet::new();
+        anyhow::ensure!(
+            self.model_profiles.len() <= 16
+                && self.model_profiles.iter().all(|name| !name.is_empty()
+                    && name.len() <= 128
+                    && !name.chars().any(char::is_control)
+                    && profiles.insert(name)),
+            "invalid auxiliary profile selection"
+        );
+        anyhow::ensure!(
+            self.model_profiles.is_empty() || cfg!(feature = "auxiliary-models"),
+            "auxiliary profiles require the auxiliary-models build feature"
+        );
         anyhow::ensure!(
             !self.only || self.enabled,
             "Code Mode only requires Code Mode to be enabled"
@@ -45,4 +61,11 @@ impl CodeModePolicy {
         );
         Ok(())
     }
+}
+#[cfg(feature = "auxiliary-models")]
+#[derive(Debug, Clone)]
+pub(crate) struct ClassifierRoute {
+    pub config: aicoder_providers::ClientConfig,
+    pub models: Vec<aicoder_core::auxiliary::ClassifierModel>,
+    pub images: aicoder_providers::ClassifierImageInput,
 }

@@ -76,6 +76,7 @@ fn runtime(root: &Path, state: &Path, tools: Option<Vec<String>>) -> Runtime {
                     enabled: Setting::Value(true),
                     only: Setting::Value(true),
                     tools: tools.map(Setting::Value).unwrap_or(Setting::Inherit),
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -213,7 +214,11 @@ async fn explicit_reference_and_inline_outputs_reach_model_views_and_keep_raw_le
             .into_result()
             .unwrap();
         let canonical = root_result(&turn.execution_result.messages);
-        assert_eq!(count_images(std::slice::from_ref(canonical)), 2);
+        assert_eq!(
+            count_images(std::slice::from_ref(canonical)),
+            2,
+            "{canonical:?}"
+        );
         let (_, value, error) = canonical.tool_result().unwrap();
         assert!(!error, "{value}");
         assert_eq!(value["output"]["composition"]["calls"], 4);

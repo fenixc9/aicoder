@@ -119,6 +119,7 @@ impl WorkerProfile {
             .config(TurnExecutionConfig {
                 max_rounds: budget.rounds,
                 budget: RunBudget {
+                    max_auxiliary_calls: Some(0),
                     max_tool_calls: Some(budget.tools),
                     max_tokens: Some(budget.tokens),
                     max_output_bytes: Some(budget.output),

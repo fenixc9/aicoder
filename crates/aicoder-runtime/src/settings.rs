@@ -54,6 +54,8 @@ pub struct ModelSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct ExecutionSettings {
     #[serde(skip_serializing_if = "Setting::is_inherit")]
+    pub max_auxiliary_calls: Setting<usize>,
+    #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub tool_timeout_ms: Setting<u64>,
     #[serde(skip_serializing_if = "Setting::is_inherit")]
     pub max_rounds: Setting<usize>,
@@ -142,6 +144,10 @@ pub struct Settings {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderProfile {
+    #[serde(default)]
+    pub classifiers: Vec<aicoder_core::auxiliary::ClassifierModel>,
+    #[serde(default)]
+    pub classifier_image_input: aicoder_providers::ClassifierImageInput,
     #[serde(default)]
     pub models: Vec<aicoder_core::model::ModelSpec>,
     pub base_url: String,

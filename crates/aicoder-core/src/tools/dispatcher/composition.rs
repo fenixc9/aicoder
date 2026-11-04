@@ -203,6 +203,7 @@ impl ToolDispatcher {
             };
             let mut program = ProgramOwner(program);
             let child = Self {
+                counting: self.counting.clone(),
                 hooks: self.hooks.clone(),
                 registry: self.registry.clone(),
                 context: self.context.clone().bounded_output(config.max_result_bytes),
@@ -233,9 +234,9 @@ impl ToolDispatcher {
                                 break;
                             }
                             let call: &ProgramCall = call;
-                            let capability = self.registry.get(&call.tool)
-                                .expect("validated tool").capability();
-                            if capability != ToolCapability::ReadOnly && !running.is_empty() {
+                            let parallel = self.registry.get(&call.tool)
+                                .expect("validated tool").parallel_safe();
+                            if !parallel && !running.is_empty() {
                                 break;
                             }
                             if context.control.as_ref().is_some_and(|control| control.has_steering()) {
@@ -252,7 +253,7 @@ impl ToolDispatcher {
                                 scope: id.clone(), sequence: call.id, call: tool_call.clone(),
                             }, limits).await?;
                             admitted.insert(call.id);
-                            mutation = capability != ToolCapability::ReadOnly;
+                            mutation = !parallel;
                             let dispatcher = &child;
                             let child_context = &child_context;
                             running.push(Box::pin(async move {

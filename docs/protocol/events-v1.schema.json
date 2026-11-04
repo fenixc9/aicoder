@@ -633,7 +633,8 @@
             "tool_calls_per_round",
             "tokens",
             "duration",
-            "output_bytes"
+            "output_bytes",
+            "auxiliary_calls"
           ]
         },
         "limit": {
@@ -1297,6 +1298,23 @@
           "anyOf": [
             {
               "$ref": "#/$defs/model_context"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "auxiliary": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/auxiliary_attempt"
+          }
+        },
+        "primary_usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/usage"
             },
             {
               "type": "null"
@@ -2517,6 +2535,77 @@
             "code"
           ]
         }
+      ]
+    },
+    "auxiliary_attempt": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "prepared",
+            "not_started",
+            "running",
+            "interrupted",
+            "completed",
+            "error"
+          ]
+        },
+        "usage": {
+          "$ref": "#/$defs/usage"
+        },
+        "reported_usage": {
+          "type": "boolean"
+        },
+        "tokens": {
+          "$ref": "#/$defs/token_accounting"
+        },
+        "input_count": {
+          "$ref": "#/$defs/token_count"
+        },
+        "delivery_complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "call_id",
+        "provider",
+        "model",
+        "status",
+        "usage",
+        "reported_usage",
+        "tokens",
+        "input_count",
+        "delivery_complete"
+      ]
+    },
+    "token_accounting": {
+      "type": "object",
+      "properties": {
+        "used": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615
+        },
+        "estimated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "used",
+        "estimated"
       ]
     }
   }

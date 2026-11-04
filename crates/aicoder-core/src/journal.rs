@@ -30,6 +30,12 @@ pub trait RunJournal: Send + Sync {
     ) -> anyhow::Result<()> {
         anyhow::bail!("journal does not support canonical tool composition records")
     }
+    async fn record_auxiliary(
+        &self,
+        _record: &crate::auxiliary::AuxiliaryRecord,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support auxiliary model records")
+    }
     async fn composition_state(
         &self,
         _namespace: &str,
@@ -49,6 +55,9 @@ pub trait RunJournal: Send + Sync {
 }
 #[async_trait]
 impl RunJournal for () {
+    async fn record_auxiliary(&self, _: &crate::auxiliary::AuxiliaryRecord) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn checkpoint(&self, _: usize, _: &Message) -> anyhow::Result<()> {
         Ok(())
     }

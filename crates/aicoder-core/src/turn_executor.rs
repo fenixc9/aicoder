@@ -1616,6 +1616,7 @@ impl TurnExecutorBuilder {
             self.approval,
             self.dispatcher_config,
         )?;
+        dispatcher = dispatcher.with_counting(self.counting.clone());
         if let Some(store) = self.artifact_store {
             dispatcher = dispatcher.with_artifact_store(store)?;
         }

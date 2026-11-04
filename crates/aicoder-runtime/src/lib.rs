@@ -1,5 +1,7 @@
 //! Shared application configuration and agent assembly. Core remains environment/UI independent.
 pub mod artifacts;
+#[cfg(feature = "auxiliary-models")]
+pub mod auxiliary;
 pub mod code_mode;
 mod config;
 mod environment;
@@ -333,6 +335,8 @@ impl Runtime {
         if let Some(resources) = resources {
             resources.register_tools(&mut registry)?;
         }
+        #[cfg(feature = "auxiliary-models")]
+        self.register_auxiliary_tools(&mut registry)?;
         #[cfg(feature = "code-mode")]
         if self.config.code_mode.enabled {
             registry.register(tools::ImageOutputTool)?;

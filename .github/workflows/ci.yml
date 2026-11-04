@@ -146,6 +146,7 @@ jobs:
           cargo build --locked -p aicoder-cli -p aicoder-tui -p aicoder-web --features server,images,code-mode --bins
           python3 scripts/check_file_images.py --code-mode
           python3 scripts/check_file_images.py --only
+          python3 scripts/check_file_images.py --classifier
       - name: Optional Web documentation
         env:
           RUSTDOCFLAGS: -D warnings

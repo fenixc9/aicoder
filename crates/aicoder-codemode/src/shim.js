@@ -55,3 +55,39 @@ globalThis.image = async value => {
   }
   throw new TypeError("image() expects an image source or a tool .result() envelope with image artifacts");
 };
+
+// Host catalog data selects identities only; scripts never supply routes or credentials.
+globalThis.models = Object.freeze({
+  async getModelsOfType(type, provider) {
+    if (typeof tools.model_catalog !== 'function') return [];
+    return await tools.model_catalog({type,...(provider===undefined?{}:{provider})});
+  },
+  async getAvailableOfType(type, provider) {
+    if (typeof tools.model_catalog !== 'function') return [];
+    return await tools.model_catalog({type,available:true,...(provider===undefined?{}:{provider})});
+  },
+  async getModelOfType(type, provider, id) {
+    return (await models.getModelsOfType(type,provider)).find(model=>model.id===id);
+  },
+  async classify(model, context) {
+    const identity={provider:model.provider,id:model.id};
+    try {
+      if (typeof tools.model_classify !== 'function') throw new Error('No host classifier task tool is available');
+      const request={state:context.state,questions:context.questions};
+      if(context.images) request.images=context.images.flatMap(value=>{
+        if(value && Array.isArray(value._image_artifacts)) return value._image_artifacts.map(reference=>({type:'artifact',reference}));
+        if(value && value.artifact) return [{type:'artifact',reference:value.artifact}];
+        if(value && value.type==='artifact') return [value];
+        if(value && typeof value.data==='string') return [{type:'base64',data:value.data,media_type:value.mimeType || value.media_type}];
+        if(value && typeof value.id==='string') return [{type:'artifact',reference:value}];
+        throw new TypeError('Invalid classifier image source');
+      });
+      return await tools.model_classify({model:identity,context:request});
+    } catch(error) {
+      const result={provider:identity.provider,model:identity.id,answers:{},stopReason:'error',errorMessage:typeof error.message==='string'?error.message:'Classifier task failed'};
+      const usage=error.details?.error?.details?.usage;
+      if (usage!==undefined) result.usage=usage;
+      return result;
+    }
+  }
+});

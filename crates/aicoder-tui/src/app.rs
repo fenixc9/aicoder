@@ -744,8 +744,9 @@ impl App {
     }
 
     fn finish_turn(&mut self, outcome: AgentTurnOutcome) {
-        self.cost_usage_complete =
-            outcome.progress().reported_usage && !outcome.progress().tokens.estimated;
+        self.cost_usage_complete = outcome.progress().reported_usage
+            && !outcome.progress().tokens.estimated
+            && outcome.progress().auxiliary.is_empty();
         self.model_context = outcome.progress().model_context.clone();
         if let Some(info) = &outcome.progress().model_context {
             self.reasoning_effort = info.reasoning_effort;

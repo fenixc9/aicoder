@@ -1,5 +1,42 @@
 # API migrations
 
+## S7: native auxiliary classifiers
+
+Core adds the auxiliary module for typed native classifier models, questions/answers,
+request-time usage reporting and immutable AuxiliaryOperation plans. PreparedTool gains a
+default auxiliary_operation() hook returning None. ExecutableTool gains parallel_safe(); its
+default retains the preceding read-only scheduling rule. Override it only when the host can
+guarantee independent execution; it never changes capability, guards or approval requirements.
+
+RunBudget adds optional max_auxiliary_calls. Use ..Default::default() in Rust struct literals.
+BudgetResource gains AuxiliaryCalls; update exhaustive matches. RunProgress, RunTermination
+and TurnStatistics add auxiliary and primary_usage with absent/empty defaults. Normal runs
+keep their previous serialized shape. When tasks exist, usage includes primary and auxiliary
+work and primary_usage retains the primary subtotal. Do not add these subtotals again or use
+the primary model's price for every task. RPC finished results expose the same optional
+breakdown. Event/RPC v1 schemas are updated; consumers rejecting new enum values need an update.
+
+RunJournal gains record_auxiliary(), rejecting by default. Custom durable journals must store
+Started before provider IO and Finished after settlement; unsupported implementations fail
+as persistence errors before inference. The explicit unit journal supports nonpersistent SDK
+runs. Session v3 uses inert aicoder.auxiliary.v1 Extension records, with no transcript-index
+changes or restoration of execution authority. Existing history needs no rewrite.
+
+ProviderProfile adds optional classifiers and classifier_image_input; CodeModeSettings/Policy
+add model_profiles, empty by default. ProviderProfile literals need classifiers: Vec::new()
+and classifier_image_input: Default::default(); CodeMode literals can use defaults. Only trusted user
+profiles define native routes/credential references; project files can select existing names.
+The optional runtime auxiliary-models feature exposes native tasks without JS; code-mode
+includes it. Selected routes register reserved model_catalog/model_classify tools; Code Mode
+also registers the catalog when empty. Resolve extension collisions and include these names
+in explicit leaf allowlists. No default features, package versions or dependencies were added.
+
+models.getModelsOfType/getAvailableOfType/getModelOfType and models.classify use typed native
+System One requests, not generic chat inference. Missing usage is estimated with uncertainty;
+reported usage survives invalid output. Completed tasks are not retried after failed delivery.
+Native classifier/image input protocols are explicit host settings. Image generation remains
+pending. See [contract](auxiliary-models.md) and [acceptance](s7-classifiers-acceptance.md).
+
 ## S7: Code Mode only and root tool catalogs
 
 Core builders add model_tools(Vec<String>), model_tool_definitions() and model_tool_names().

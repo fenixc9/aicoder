@@ -24,12 +24,15 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--bin-dir', type=Path, default=ROOT/'target/debug')
 parser.add_argument("--code-mode", action="store_true", help="Exercise explicit and filtered Code Mode image output")
 parser.add_argument("--only", action="store_true", help="Exercise Code Mode only root exposure and direct-call rejection")
+parser.add_argument("--classifier", action="store_true", help="Exercise native non-chat tasks through all frontend approval paths")
 args = parser.parse_args()
+args.only = args.only or args.classifier
 args.code_mode = args.code_mode or args.only
 BINS = args.bin_dir.resolve()
 TOKEN = 'fixture-file-images-token-0123456789'
 requests = []
 failures = []
+task_requests = []
 
 
 def bmp():
@@ -44,12 +47,23 @@ class Provider(http.server.BaseHTTPRequestHandler):
             size = int(self.headers['Content-Length'])
             assert size < 2*1024*1024
             request = json.loads(self.rfile.read(size))
+            if self.path.endswith('/systemone'):
+                assert args.classifier
+                assert self.headers['Authorization']=='Bearer fixture-judge'
+                assert request['model']=='native' and request['questions']['ok']['type']=='noul'
+                task_requests.append(request)
+                body=json.dumps({'answers':{'ok':{'type':'noul','noul':0.9}},'usage':{'input_tokens':11,'output_tokens':0}}).encode()
+                self.send_response(200); self.send_header('Content-Type','application/json'); self.send_header('Content-Length',str(len(body))); self.end_headers(); self.wfile.write(body)
+                return
+
             requests.append(request)
             if args.only:
                 assert [t['function']['name'] for t in request['tools']] == ['codemode']
             tools = [m for m in request['messages'] if m['role'] == 'tool']
             if not tools:
                 code = "try {const full=await tools.read_file.result({path:'picture.txt'}); " + ("text('filtered');" if request['model']=='filtered' else "await image(full); text('selected');") + "} catch(e) {text(e.code); throw e;}"
+                if args.classifier:
+                    code="const found=await models.getAvailableOfType('classifier');const judge=await models.getModelOfType('classifier','judge','native');const result=await models.classify(judge,{state:{text:'sample'},questions:{ok:{type:'bool',instructions:'Valid?',criteria:{true:'yes',false:'no'}}}});text([found.length,result.stopReason,result.answers.ok.probability]);"
                 message = {'role': 'assistant', 'tool_calls': [{'id': 'native-image', 'type': 'function',
                     'function': {'name': 'codemode' if args.code_mode else 'read_file', 'arguments': json.dumps({'code':code} if args.code_mode else {'path':'picture.txt'})}}]}
                 if request['model']=='bypass':
@@ -57,7 +71,11 @@ class Provider(http.server.BaseHTTPRequestHandler):
             else:
                 assert len(tools) == 1
                 result = json.loads(tools[0]['content'])
-                if request['model']=='bypass':
+                if args.classifier:
+                    assert result['ok'] is True, result
+                    assert result['output']['program']['items']==[[1,'stop',0.9]], result
+                    assert result['output']['composition']['calls']==3, result
+                elif request['model']=='bypass':
                     assert result['is_error'] is True
                     assert result['content']['error']['code']=='tool_not_exposed'
                     assert result['content']['error']['details']['operation_completed'] is False
@@ -155,7 +173,7 @@ server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Provider)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 try:
     with tempfile.TemporaryDirectory(prefix='aicoder-native-images-') as folder:
-        for frontend in ['cli', 'rpc', 'web', 'tui', 'text', 'nostore'] + (['filtered'] if args.code_mode else []) + (['bypass'] if args.only else []):
+        for frontend in (['cli','rpc','web','tui'] if args.classifier else ['cli', 'rpc', 'web', 'tui', 'text', 'nostore'] + (['filtered'] if args.code_mode else []) + (['bypass'] if args.only else [])):
             root = Path(folder)/frontend
             root.mkdir()
             (root/'picture.txt').write_bytes(bmp())
@@ -168,8 +186,15 @@ try:
                 'models': [{'provider': 'fixture', 'id': m, 'context_tokens': 65536,
                             'capabilities': {'tools': True, 'images': m != 'text'}} for m in ['vision', 'text', 'nostore', 'filtered', 'bypass']]}},
                 'settings': {'provider_profile': 'fixture', 'execution': {'stream': False}, 'code_mode':{'enabled':args.code_mode}}}))
+            if args.classifier:
+                config=json.loads((state/'settings.json').read_text())
+                config['profiles']['judge']={'provider_id':'judge','base_url':f'http://127.0.0.1:{server.server_address[1]}/v1','api_key_env':'JUDGE_KEY','proxy':'disabled','classifiers':[{'provider':'judge','id':'native','name':'Native fixture','context_tokens':65536}]}
+                config['settings']['code_mode']['model_profiles']=['judge']
+                (state/'settings.json').write_text(json.dumps(config))
             env = {'PATH': os.environ.get('PATH', ''), 'TERM': 'xterm-256color',
                    'AICODER_HOME': str(state), 'FIXTURE_KEY': 'fixture-key', 'AICODER_WEB_TOKEN': TOKEN}
+            if args.classifier:
+                env['JUDGE_KEY']='fixture-judge'
             common = ['--workspace', str(root), '--no-resources']
             if args.only:
                 common += ['--code-mode-only']
@@ -194,7 +219,7 @@ try:
                             event=frame['event']['event']
                             if event['type']=='run_approval_requested':
                                 assert args.code_mode
-                                question=event['request']; assert question['invocation']['name']=='codemode'
+                                question=event['request']; assert question['invocation']['name'] in (['codemode','model_classify'] if args.classifier else ['codemode'])
                                 sequence+=1
                                 child.stdin.write((json.dumps({'version':1,'id':sequence,'command':{'type':'approve','run_id':question['id']['run_id'],'approval_id':question['id'],'decision':'allow_once'}})+'\n').encode())
                         if frame['type'] == 'run_finished':
@@ -232,7 +257,7 @@ try:
                     def poll_run():
                         state=api('GET',path)
                         for question in state['approvals']:
-                            assert args.code_mode and question['invocation']['name']=='codemode'
+                            assert args.code_mode and question['invocation']['name'] in (['codemode','model_classify'] if args.classifier else ['codemode'])
                             api('POST',path+'/approval',{'approval_id':question['id'],'decision':'allow_once'})
                         return state if state['result'] else None
                     result = until(poll_run, 'Web completion')
@@ -276,6 +301,13 @@ try:
                     if args.code_mode:
                         until(lambda: marker('codemode') and marker('Approval'),'TUI program approval')
                         os.write(master,b'y')
+                        if args.classifier:
+                            try:
+                                until(lambda: marker('model_classify') and marker('judge/native'),'TUI classifier approval')
+                            except RuntimeError:
+                                Path('/tmp/aicoder-classifier-pty.log').write_bytes(output)
+                                raise
+                            os.write(master,b'y')
                     until(completed, 'TUI canonical completion')
                     time.sleep(.15)
                     marker('')
@@ -291,7 +323,11 @@ try:
                 rows = entries(root)
                 messages = [e['message'] for e in rows if e.get('kind') == 'message']
                 images = [b for m in messages for b in m['content'] if b['type'] == 'image']
-                if frontend=='bypass':
+                if args.classifier:
+                    assert not images, frontend
+                    attempts=[e for e in rows if e.get('namespace')=='aicoder.auxiliary.v1']
+                    assert len(attempts)==2 and attempts[-1]['data']['attempt']['usage']['total_tokens']==11
+                elif frontend=='bypass':
                     assert not images, frontend
                 elif frontend=='filtered':
                     assert not images, frontend
@@ -303,9 +339,9 @@ try:
                 assert sum(m['role'] == 'user' for m in messages) == 1
                 assert '_tool_image_projection' not in json.dumps(rows)
         assert not failures, failures
-        print(json.dumps({'native_read_file': True, 'code_mode':args.code_mode, 'only_mode':args.only, 'direct_hidden_call_rejected':args.only, 'explicit_image_selection':args.code_mode, 'signature_not_extension': True, 'bmp': True,
-            'frontends': ['cli_json', 'rpc', 'web', 'tui_pty'], 'nonvision_omission': True,
-            'missing_storage_explicit': True, 'source_unchanged': True, 'raw_canonical_artifacts': True,
+        print(json.dumps({'native_read_file': not args.classifier, 'code_mode':args.code_mode, 'only_mode':args.only, 'direct_hidden_call_rejected':args.only and not args.classifier, 'classifier':args.classifier, 'native_task_requests':len(task_requests), 'explicit_image_selection':args.code_mode and not args.classifier, 'signature_not_extension': not args.classifier, 'bmp': not args.classifier,
+            'frontends': ['cli_json', 'rpc', 'web', 'tui_pty'], 'nonvision_omission': not args.classifier,
+            'missing_storage_explicit': not args.classifier, 'source_unchanged': True, 'raw_canonical_artifacts': True,
             'synthetic_user_history': False, 'loopback_model_requests': len(requests), 'real_model_requests': 0}))
 finally:
     server.shutdown()

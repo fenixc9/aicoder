@@ -93,7 +93,7 @@ impl TryFrom<Message> for AgentInput {
     }
 }
 
-fn inline_base64(data: &str) -> bool {
+pub(crate) fn inline_base64(data: &str) -> bool {
     if data.is_empty() || !data.len().is_multiple_of(4) {
         return false;
     }

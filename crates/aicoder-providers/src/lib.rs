@@ -3,6 +3,8 @@
 //! The OpenAI-compatible adapter implements the provider-neutral model contract.
 //! Protocol-specific request, response and stream types live in `wire`.
 
+#[cfg(feature = "auxiliary-models")]
+pub mod auxiliary;
 mod chat;
 mod config;
 mod credentials;
@@ -18,3 +20,12 @@ pub use config::{ClientConfig, CompatibilityProfile, ProxyMode};
 pub use credentials::{BearerToken, CredentialProvider, EnvironmentCredential, StaticCredential};
 
 pub mod wire;
+
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClassifierImageInput {
+    #[default]
+    Assets,
+    StateImageUrls,
+    Images,
+}

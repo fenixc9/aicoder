@@ -1,4 +1,5 @@
 use crate::run::{RunFailure, RunLimiter, RunStage};
+mod auxiliary;
 mod composition;
 #[derive(Clone, Copy)]
 struct CallScope<'a> {
@@ -70,6 +71,7 @@ impl Default for DispatcherConfig {
 }
 
 pub struct ToolDispatcher {
+    counting: crate::tokens::TokenCounting,
     hooks: Vec<crate::extensions::Registered<dyn crate::extensions::ToolHook>>,
     registry: Arc<ToolRegistry>,
     context: ToolContext,
@@ -87,6 +89,7 @@ impl ToolDispatcher {
         let context =
             ToolContext::new(workspace_root, config.tool_timeout, config.max_output_bytes)?;
         Ok(Self {
+            counting: crate::tokens::TokenCounting::default(),
             hooks: Vec::new(),
             registry,
             context,
@@ -100,6 +103,10 @@ impl ToolDispatcher {
         hooks: Vec<crate::extensions::Registered<dyn crate::extensions::ToolHook>>,
     ) -> Self {
         self.hooks = hooks;
+        self
+    }
+    pub(crate) fn with_counting(mut self, counting: crate::tokens::TokenCounting) -> Self {
+        self.counting = counting;
         self
     }
 
@@ -294,12 +301,9 @@ impl ToolDispatcher {
         let mut results = vec![None; calls.len()];
         let mut index = 0;
         while index < calls.len() {
-            let capability = self.capability_for(&calls[index]);
-            if capability == ToolCapability::ReadOnly {
+            if self.parallel_for(&calls[index]) {
                 let start = index;
-                while index < calls.len()
-                    && self.capability_for(&calls[index]) == ToolCapability::ReadOnly
-                {
+                while index < calls.len() && self.parallel_for(&calls[index]) {
                     index += 1;
                 }
                 let futures = calls[start..index]
@@ -323,11 +327,10 @@ impl ToolDispatcher {
         Ok(results.into_iter().flatten().collect())
     }
 
-    fn capability_for(&self, call: &ModelToolCall) -> ToolCapability {
+    fn parallel_for(&self, call: &ModelToolCall) -> bool {
         self.registry
             .get(&call.name)
-            .map(|tool| tool.capability())
-            .unwrap_or(ToolCapability::Command)
+            .is_some_and(|tool| tool.parallel_safe())
     }
 
     async fn execute_call(
@@ -738,6 +741,15 @@ impl ToolDispatcher {
         } else {
             let execution = timeout(self.config.tool_timeout, async {
                 match prepared {
+                    Some(ref plan) if plan.auxiliary_operation().is_some() => {
+                        self.execute_auxiliary(
+                            plan.auxiliary_operation().expect("auxiliary plan"),
+                            call,
+                            tool_context,
+                            scope,
+                        )
+                        .await
+                    }
                     Some(plan) => plan.execute(tool_context).await,
                     None => tool.execute(tool_context, arguments).await,
                 }

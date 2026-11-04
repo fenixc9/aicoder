@@ -56,6 +56,10 @@ impl ToolFailure {
 
 #[async_trait]
 pub trait ExecutableTool: Send + Sync {
+    /// Host declaration for independent operations; this never changes approval requirements.
+    fn parallel_safe(&self) -> bool {
+        self.capability() == ToolCapability::ReadOnly
+    }
     fn composition_factory(&self) -> Option<&dyn crate::composition::ToolCompositionFactory> {
         None
     }
@@ -87,6 +91,10 @@ pub enum PreparedToolEffects<'a> {
 /// An immutable operation prepared before approval and consumed once after approval.
 #[async_trait]
 pub trait PreparedTool: Send + Sync {
+    /// Optional non-chat model operation, invoked only by a metered Agent dispatcher.
+    fn auxiliary_operation(&self) -> Option<&dyn crate::auxiliary::AuxiliaryOperation> {
+        None
+    }
     fn effects(&self) -> PreparedToolEffects<'_> {
         PreparedToolEffects::Unknown
     }

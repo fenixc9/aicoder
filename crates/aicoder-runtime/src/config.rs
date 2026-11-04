@@ -25,6 +25,9 @@ pub enum ConfigSource {
 }
 #[derive(Debug, Clone, Serialize)]
 pub struct RuntimeConfig {
+    #[cfg(feature = "auxiliary-models")]
+    #[serde(skip)]
+    pub(crate) classifier_routes: Vec<crate::code_mode::ClassifierRoute>,
     pub version: u32,
     pub workspace: PathBuf,
     pub state_root: Option<PathBuf>,
@@ -179,7 +182,12 @@ fn env_setting<T: std::str::FromStr>(
         .transpose()
 }
 fn env_code_tools(env: &dyn Environment) -> Result<Option<(Setting<Vec<String>>, String)>> {
-    let name = "AICODER_CODE_MODE_TOOLS";
+    env_code_list(env, "AICODER_CODE_MODE_TOOLS")
+}
+fn env_code_list(
+    env: &dyn Environment,
+    name: &str,
+) -> Result<Option<(Setting<Vec<String>>, String)>> {
     env_value(env, name)?
         .map(|value| {
             ensure!(
@@ -596,6 +604,14 @@ pub(crate) fn resolve(
             true,
         )?,
         budget: RunBudget {
+            max_auxiliary_calls: optional(
+                pick!(
+                    "execution.max_auxiliary_calls",
+                    execution.max_auxiliary_calls,
+                    || env_setting::<usize>(env.as_ref(), "AICODER_MAX_AUXILIARY_CALLS")
+                ),
+                None,
+            ),
             max_tool_calls: optional(
                 pick!("execution.max_tool_calls", execution.max_tool_calls, || {
                     env_setting::<usize>(env.as_ref(), "AICODER_MAX_TOOL_CALLS")
@@ -914,6 +930,13 @@ pub(crate) fn resolve(
     };
     packages.validate()?;
     let code_mode = crate::code_mode::CodeModePolicy {
+        model_profiles: optional(
+            pick!("code_mode.model_profiles", code_mode.model_profiles, || {
+                env_code_list(env.as_ref(), "AICODER_MODEL_PROFILES")
+            }),
+            Some(Vec::new()),
+        )
+        .unwrap_or_default(),
         only: required(
             "code_mode.only",
             pick!("code_mode.only", code_mode.only, || env_setting::<bool>(
@@ -939,6 +962,48 @@ pub(crate) fn resolve(
         ),
     };
     code_mode.validate()?;
+    #[cfg(feature = "auxiliary-models")]
+    let classifier_routes = {
+        let mut classifier_routes = Vec::new();
+        let mut classifier_ids = std::collections::BTreeSet::new();
+        for name in &code_mode.model_profiles {
+            let profile = profiles
+                .get(name)
+                .context("selected auxiliary profile is not defined in trusted user settings")?;
+            profile_variables(Some(profile), false)?;
+            ensure!(
+                !profile.classifiers.is_empty() && profile.classifiers.len() <= 64,
+                "auxiliary profile needs a bounded classifier catalog"
+            );
+            let provider = profile.provider_id.clone().unwrap_or_else(|| name.clone());
+            for model in &profile.classifiers {
+                model.validate()?;
+                ensure!(
+                    model.provider == provider
+                        && classifier_ids.insert((model.provider.clone(), model.id.clone())),
+                    "duplicate or mismatched classifier route"
+                );
+            }
+            let route = ClientConfig {
+                provider_id: provider,
+                base_url: profile.base_url.clone(),
+                api_key_env: Some(profile.api_key_env.clone()),
+                model: profile.classifiers[0].id.clone(),
+                timeout: profile.timeout.unwrap_or(30),
+                connect_timeout: profile.connect_timeout.unwrap_or(5),
+                max_retries: 0,
+                proxy: profile.proxy.as_deref().unwrap_or("auto").parse()?,
+                max_response_bytes: profile.max_response_bytes.unwrap_or(2 * 1024 * 1024),
+                ..Default::default()
+            };
+            classifier_routes.push(crate::code_mode::ClassifierRoute {
+                config: route,
+                models: profile.classifiers.clone(),
+                images: profile.classifier_image_input,
+            });
+        }
+        classifier_routes
+    };
     let mut credential_references = profiles
         .values()
         .map(|profile| profile.api_key_env.clone())
@@ -983,6 +1048,8 @@ pub(crate) fn resolve(
         },
     );
     Ok(RuntimeConfig {
+        #[cfg(feature = "auxiliary-models")]
+        classifier_routes,
         version: SETTINGS_VERSION,
         workspace,
         state_root,

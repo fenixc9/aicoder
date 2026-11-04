@@ -114,6 +114,13 @@ impl EvaluationJournal {
 }
 #[async_trait]
 impl RunJournal for EvaluationJournal {
+    async fn record_auxiliary(
+        &self,
+        record: &aicoder_core::auxiliary::AuxiliaryRecord,
+    ) -> Result<()> {
+        self.record(json!({"kind":"auxiliary","data":record}))
+    }
+
     async fn checkpoint(&self, _: usize, _: &Message) -> Result<()> {
         Ok(())
     }

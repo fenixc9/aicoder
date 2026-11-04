@@ -13,6 +13,11 @@ OpenAI protocol types live only in `aicoder-providers::wire`; core retains a
 private v1 session storage codec for compatibility. [Provider configuration](provider-configuration.md)
 and [run outcomes and budgets](run-outcomes.md) are shared across hosts.
 
+Optional [auxiliary classifiers](auxiliary-models.md) use the separate core
+ClassifierProvider/ClassifierContext contract for native typed questions. Prepared tasks
+share parent admission, cancellation and usage accounting without a nested chat loop.
+Provider routes remain explicit host configuration; image generation is not yet implemented.
+
 ## Types and ownership
 
 - `Message` contains ordered `ContentBlock` values: text, reasoning, images,

@@ -25,7 +25,8 @@ charges the parent run. Unawaited calls are cancelled when a script ends; comple
 are not undone. Cancellation/timeout/steering closes the program, expires its intents and
 awaits bounded engine cleanup. Dropping a future still signals stop independently of Tokio.
 
-The VM exposes tools, text/console/return, explicit image output, discovery and bounded store/load. It has no Node,
+The VM exposes tools, text/console/return, explicit image output, typed classifier helpers,
+discovery and bounded store/load. It has no Node,
 filesystem, network, timers, module loader, credential lookup or direct model-service client.
 Memory, stack, interrupt checks, wall time, calls, queues, JSON and output have explicit limits.
 Store data is branch-local public JSON committed only on script success; it cannot restore
@@ -206,8 +207,9 @@ Trusted SDK hosts can adjust validated CodeModeConfig/CompositionLimits within h
 model input cannot raise them. Parent tool-call accounting includes the outer call plus every
 admitted leaf. Parent output accounting includes leaf results even when the script filters
 them away; filtering saves subsequent model context, not execution budget. Provider usage
-continues to charge actual model requests. Composition creates no model request or fresh run
-budget. The image helper emits provided/captured media through existing tools. The existing calls-per-round setting bounds the provider's outer batch and also caps
+continues to charge actual model requests. The composition engine creates no independent run budget. Native classifier helpers emit
+ordinary metered host-tool calls; their native usage/reservations count toward the same parent
+run. The image helper emits provided/captured media through existing tools. The existing calls-per-round setting bounds the provider's outer batch and also caps
 parallel leaf execution; sequential leaf totals use the separate program/root call limits.
 
 Atomic admission covers ordinary siblings in the same batch: a program cannot spend the
@@ -229,9 +231,9 @@ these unknown extension records without projecting their payload as model instru
 
 This covers the S6 bounded JavaScript composition item: actual promises, loops, parallel
 reads, filtering, discovery, explicit output and branch state over existing tools. The pinned
-Pi contract also describes classifier/image-model helpers and provider-specific conveniences;
-those helpers, Pi's source pragma/options syntax and TypeScript extension ABI are not
-implemented here. Call available media tools through their normal result/artifact contracts.
+Native classifier catalog/execution helpers now use [shared auxiliary task metering](auxiliary-models.md).
+Pi also describes image-model generation, source pragma/options syntax and TypeScript extension
+ABI; those remain outside the implemented paths listed here. Call available media tools through their normal result/artifact contracts.
 This is functional coverage, not evidence of equal coding success or performance. S7 retains
 the full matrix review and comparison under identical models/tasks/budgets.
 

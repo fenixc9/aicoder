@@ -11,6 +11,8 @@ use tokio::time::Instant;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RunBudget {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_auxiliary_calls: Option<usize>,
     pub max_tool_calls: Option<usize>,
     pub max_tokens: Option<u64>,
     pub max_duration: Option<Duration>,
@@ -20,6 +22,7 @@ pub struct RunBudget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BudgetResource {
+    AuxiliaryCalls,
     Rounds,
     ToolCalls,
     ToolCallsPerRound,
@@ -37,6 +40,7 @@ pub struct BudgetExceeded {
 impl fmt::Display for BudgetResource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Self::AuxiliaryCalls => "auxiliary model calls",
             Self::Rounds => "model rounds",
             Self::ToolCalls => "tool calls",
             Self::ToolCallsPerRound => "tool calls per round",
@@ -206,6 +210,11 @@ impl PartialModelResponse {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunProgress {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auxiliary: Vec<crate::auxiliary::AuxiliaryAttempt>,
+    /// Present when usage includes non-chat tasks; retains the main/summary subtotal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_usage: Option<ModelUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_context: Option<crate::ModelContextInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,6 +239,8 @@ pub struct RunProgress {
 impl RunProgress {
     pub fn new(messages: Vec<Message>) -> Self {
         Self {
+            auxiliary: Vec::new(),
+            primary_usage: None,
             input_context: None,
             model_context: None,
             event_delivery: crate::events::EventDeliveryReport::default(),
@@ -322,6 +333,9 @@ impl RunOutcome {
 }
 #[derive(Default)]
 struct Usage {
+    failure: Option<RunFailure>,
+    auxiliary: Vec<crate::auxiliary::AuxiliaryAttempt>,
+    auxiliary_reserved: u64,
     output_bytes: usize,
     output_limited: bool,
     tool_calls: usize,
@@ -329,6 +343,7 @@ struct Usage {
     stop: Option<BudgetExceeded>,
 }
 pub(crate) struct RunLimiter {
+    auxiliary_gate: tokio::sync::Semaphore,
     pub budget: RunBudget,
     pub context: TurnExecutionContext,
     pub started: Instant,
@@ -337,6 +352,7 @@ pub(crate) struct RunLimiter {
 impl RunLimiter {
     pub fn new(budget: RunBudget, context: TurnExecutionContext) -> Self {
         Self {
+            auxiliary_gate: tokio::sync::Semaphore::new(4),
             budget,
             context,
             started: Instant::now(),
@@ -355,6 +371,15 @@ impl RunLimiter {
         self.state.lock().expect("run budget poisoned").stop.clone()
     }
     pub fn check(&self) -> anyhow::Result<()> {
+        if let Some(failure) = self
+            .state
+            .lock()
+            .expect("run budget poisoned")
+            .failure
+            .clone()
+        {
+            return Err(failure.into());
+        }
         if self.budget.max_output_bytes == Some(0) {
             self.stop(BudgetExceeded {
                 resource: BudgetResource::OutputBytes,
@@ -391,6 +416,11 @@ impl RunLimiter {
             return Err(self.context.error().into());
         }
         Ok(())
+    }
+    pub(crate) fn fail_persistence(&self, error: &anyhow::Error) {
+        self.state.lock().expect("run budget poisoned").failure =
+            Some(RunFailure::from_error(RunStage::Persistence, error));
+        self.context.cancel("auxiliary persistence failed");
     }
     pub fn retain_text(&self, text: &str) -> String {
         let mut state = self.state.lock().expect("run budget poisoned");
@@ -474,7 +504,10 @@ impl RunLimiter {
     }
     pub fn remaining_tokens(&self) -> Option<u64> {
         self.budget.max_tokens.map(|limit| {
-            limit.saturating_sub(self.state.lock().expect("run budget poisoned").tokens.used)
+            let state = self.state.lock().expect("run budget poisoned");
+            limit
+                .saturating_sub(state.tokens.used)
+                .saturating_sub(state.auxiliary_reserved)
         })
     }
     pub fn account_tokens(&self, usage: &ModelUsage, estimate: u64) {
@@ -487,12 +520,29 @@ impl RunLimiter {
     }
     pub fn snapshot(&self, progress: &mut RunProgress) {
         let state = self.state.lock().expect("run budget poisoned");
+        progress.auxiliary = state
+            .auxiliary
+            .iter()
+            .filter(|attempt| !matches!(attempt.status.as_str(), "prepared" | "not_started"))
+            .cloned()
+            .collect();
+        if !progress.auxiliary.is_empty() {
+            let primary = progress
+                .primary_usage
+                .get_or_insert_with(|| progress.usage.clone());
+            progress.usage = primary.clone();
+            for attempt in &progress.auxiliary {
+                progress.usage.accumulate(&attempt.usage);
+                progress.reported_usage |= attempt.reported_usage;
+            }
+        }
         progress.tool_calls = state.tool_calls;
         progress.output_bytes = state.output_bytes;
         progress.tokens = state.tokens.clone();
         progress.elapsed = self.started.elapsed();
     }
 }
+mod auxiliary;
 pub(crate) fn millis(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
 }

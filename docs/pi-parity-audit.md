@@ -24,7 +24,7 @@ It does not certify all Pi convenience features or arbitrary third-party extensi
 | Resource package discovery/install/pins/reload | Content-addressed local imports, locks/trust/dependencies and public branch state; [packages](packages.md) | Verified scoped Git HTTPS/npm native closures and activation; no JS/TS ABI claim |
 | Themes, export/share | TUI themes and inert canonical JSON/HTML exports, explicit publication adapter; [exports](session-exports.md) | Verified scoped local/custom-host path; no third-party hosted sharing deployment |
 | MCP and Code Mode | Actual modern/legacy stdio, [stock stdio hosts](host-extensions.md), real JS composition with leaf approvals/budgets/journal, CLI opt-in; [Code Mode](code-mode.md), [MCP](mcp.md) | Partial: stock MCP works; additional Code Mode capabilities remain |
-| Multimodal | Immutable bounded local CLI/TUI image input and [typed tool/MCP previews](tool-images.md); [tool image acceptance](s7-tool-images-acceptance.md) | Partial: native/MCP image paths including BMP verified; MIME compatibility verified; Code Mode auxiliary models remain below |
+| Multimodal | Immutable bounded local CLI/TUI image input and [typed tool/MCP previews](tool-images.md); [tool image acceptance](s7-tool-images-acceptance.md) | Partial: native/MCP image paths including BMP verified; MIME compatibility verified; Code Mode image-model generation remains below |
 
 ## Confirmed remaining differences
 
@@ -68,7 +68,9 @@ that full product parity has already been achieved.
    Explicit image output is now implemented through the ordinary scoped tool dispatcher,
    with inline/reference input, raw leaf history and selected model views; see
    [Code Mode image acceptance](s7-code-images-acceptance.md). Recovery image references no
-   longer auto-expose filtered pixels in new runs. Classifier/image-model helpers remain absent.
+   longer auto-expose filtered pixels in new runs. Native typed classifiers now have a host catalog, native System One adapter, immutable task
+   plans, parent reservations and per-attempt usage through SDK/Code Mode; see
+   [classifier acceptance](s7-classifiers-acceptance.md). Image-model generation remains absent.
    Normal mode keeps ordinary root declarations; only mode now declares codemode alone while
    preserving the independently allowed leaf registry. Fresh undeclared direct calls reject
    before preparation, with paired canonical failure records and actual root catalog bench
@@ -96,5 +98,5 @@ passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /
 incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
 original score/release requirements stay open; local scripted scores cannot substitute for them.
 
-The next implementation order is Code Mode auxiliary models, then interception coverage. The final audit must rerun the matrix
+The next implementation order is native image-model generation, then interception coverage. The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.

@@ -46,6 +46,9 @@ prepared paths and explicitly managed read-only worker Agents over the same loop
 with discovery/filtering, explicit image output and branch-local state while preserving
 per-tool approvals and parent budgets. Enable the host's `code-mode` build feature and `--code-mode` setting; `--code-mode-only`
 declares only the composition tool to the model while keeping scoped leaf execution.
+[Native classifiers](docs/auxiliary-models.md) add typed bool/choice/score tasks through
+explicit trusted profiles and `models` helpers, sharing core approvals, cancellation,
+run budgets and durable usage records. They are optional; image generation remains pending.
 Canonical sessions support [bounded JSON/HTML exports](docs/session-exports.md), with
 explicit publication adapters and no automatic third-party sharing.
 The [provider-neutral model API](docs/model-api.md) is shared by the agent

@@ -342,9 +342,13 @@ impl<'a> Host<'a> {
             | AgentTurnOutcome::Stopped(v)
             | AgentTurnOutcome::Failed(v) => (Some(&v.stop), v.persistence_error.as_ref()),
         };
-        let result = json!({"run_id":active.handle.run_id(),"session_id":outcome.session().map(|s|&s.id),"status":status,"stop":stop,"persistence_error":persistence_error,
+        let mut result = json!({"run_id":active.handle.run_id(),"session_id":outcome.session().map(|s|&s.id),"status":status,"stop":stop,"persistence_error":persistence_error,
             "rounds":progress.rounds,"tool_calls":progress.tool_calls,"usage":progress.usage,"tokens":progress.tokens,"output_bytes":progress.output_bytes,"elapsed_ms":progress.elapsed.as_millis(),"model_context":progress.model_context,"event_delivery":progress.event_delivery,
             "pending_inputs":progress.pending_inputs.iter().map(|v|json!({"run_id":v.run_id,"id":v.id,"kind":v.kind})).collect::<Vec<_>>()});
+        if !progress.auxiliary.is_empty() {
+            result["auxiliary"] = json!(progress.auxiliary);
+            result["primary_usage"] = json!(progress.primary_usage);
+        }
         self.last = Some(result.clone());
         result
     }

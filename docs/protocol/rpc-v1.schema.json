@@ -674,6 +674,23 @@
                 ],
                 "additionalProperties": false
               }
+            },
+            "auxiliary": {
+              "type": "array",
+              "maxItems": 128,
+              "items": {
+                "$ref": "urn:aicoder:events:v1#/$defs/auxiliary_attempt"
+              }
+            },
+            "primary_usage": {
+              "anyOf": [
+                {
+                  "$ref": "urn:aicoder:events:v1#/$defs/usage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [

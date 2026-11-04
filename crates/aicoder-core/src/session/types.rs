@@ -70,6 +70,10 @@ pub struct TurnRecord {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TurnStatistics {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auxiliary: Vec<crate::auxiliary::AuxiliaryAttempt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_usage: Option<ModelUsage>,
     pub usage: ModelUsage,
     pub rounds: usize,
     pub tool_calls: usize,
@@ -84,6 +88,8 @@ impl TurnRecord {
             stop,
             partial_response: progress.partial_response.clone(),
             statistics: Some(TurnStatistics {
+                auxiliary: progress.auxiliary.clone(),
+                primary_usage: progress.primary_usage.clone(),
                 usage: progress.usage.clone(),
                 rounds: progress.rounds,
                 tool_calls: progress.tool_calls,

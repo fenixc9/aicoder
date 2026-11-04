@@ -244,6 +244,10 @@ pub enum AgentRawEvent {
 /// Small authoritative terminal summary; transcript bodies stay in the run result/session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunTermination {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auxiliary: Vec<crate::auxiliary::AuxiliaryAttempt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_usage: Option<ModelUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_context: Option<crate::ModelContextInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -268,6 +272,8 @@ impl From<&crate::RunOutcome> for RunTermination {
     fn from(outcome: &crate::RunOutcome) -> Self {
         let progress = outcome.progress();
         Self {
+            auxiliary: progress.auxiliary.clone(),
+            primary_usage: progress.primary_usage.clone(),
             model_context: progress.model_context.clone(),
             input_context: progress.input_context.clone(),
             stop: outcome.stop().cloned(),
