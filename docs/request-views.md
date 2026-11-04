@@ -4,8 +4,9 @@ RequestHook transforms an ephemeral provider-neutral ModelRequest before context
 compaction decisions and generation. Conversation filtering, explicit system-prefix replacement,
 generation options and tool subsets use one core path for SDK/frontends/bench hosts. Canonical
 user/tool history stays unchanged. This covers the pinned Pi context/context_with_system intent;
-HTTP header/raw-payload hooks, transport observations and actionable lifecycle hooks remain
-separate open audit items.
+[Compatible-client transport hooks](transport-hooks.md) add safe headers/service controls and
+response/parsed-stream observations. Auxiliary transport binding and actionable lifecycle hooks
+remain separate open audit items.
 
 ## Register a bounded transformation
 

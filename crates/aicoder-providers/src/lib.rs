@@ -14,6 +14,8 @@ mod event_sink;
 pub mod image_generation;
 mod model;
 mod stream;
+pub mod transport;
+mod transport_client;
 
 pub(crate) use event_sink::ProviderEventSink;
 

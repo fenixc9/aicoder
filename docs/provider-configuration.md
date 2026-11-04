@@ -160,3 +160,12 @@ additionally resolves a non-secret descriptor without requiring a token. Runtime
 request-time credentials separately. Automatic dotenv/crate-path loading is removed from
 applications; use explicit --env-file. User profile routing, project selectors, field
 precedence and snapshot source metadata are documented in the runtime contract.
+
+
+## Native transport stages
+
+Explicit Rust hosts can bind [TransportHooks](transport-hooks.md) to ChatClient before runtime
+assembly. Safe tracing headers, allowlisted service controls and bounded response/parsed-stream
+observers preserve core request fields and private authentication. for_model/SessionModelClient
+retain the binding. No setting/history record loads native callbacks; default clients retain
+existing behavior. Core semantic prompt/options edits use [request views](request-views.md).

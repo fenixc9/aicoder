@@ -94,11 +94,13 @@ fn emit_retry(
 
 /// OpenAI 兼容 API 客户端
 pub struct ChatClient {
+    pub(crate) transport_hooks: Option<Arc<crate::transport::TransportHooks>>,
+    pub(crate) transport_report: Arc<std::sync::Mutex<crate::transport::Diagnostics>>,
     pub(crate) config: ClientConfig,
     http_client: Client,
     credentials: Arc<dyn CredentialProvider>,
     endpoint: reqwest::Url,
-    proxy_secrets: Vec<String>,
+    pub(crate) proxy_secrets: Vec<String>,
     pub(crate) models: aicoder_core::model::ModelRegistry,
 }
 
@@ -138,6 +140,10 @@ impl ChatClient {
             .build()
             .map_err(|_| crate::config::invalid("Failed to create HTTP client"))?;
         Ok(Self {
+            transport_hooks: None,
+            transport_report: Arc::new(std::sync::Mutex::new(
+                crate::transport::Diagnostics::default(),
+            )),
             config,
             http_client,
             credentials,
@@ -163,6 +169,8 @@ impl ChatClient {
         let mut config = self.config.clone();
         config.model = model.to_string();
         Ok(Self {
+            transport_hooks: self.transport_hooks.clone(),
+            transport_report: self.transport_report.clone(),
             config,
             http_client: self.http_client.clone(),
             credentials: self.credentials.clone(),
@@ -238,6 +246,10 @@ impl ChatClient {
         request: serde_json::Value,
         events: Option<&dyn ProviderEventSink>,
     ) -> Result<ChatCompletionResponse> {
+        let prepared = self.prepare_transport(request, false, events).await?;
+        let request = prepared.payload;
+        let headers = prepared.headers;
+        let session = prepared.session;
         let url = self.endpoint.to_string();
         let request_body = serde_json::to_string(&request)?;
 
@@ -254,14 +266,28 @@ impl ChatClient {
         let total_attempts = self.config.max_retries.saturating_add(1);
         for attempt in 1..=total_attempts {
             tracing::debug!(attempt, total_attempts, "Starting HTTP attempt");
+            self.transport_admit(session.as_ref())?;
             let token = self.credentials.bearer_token().await.map_err(|mut error| {
                 error.provider = self.config.provider_id.clone();
                 error
             })?;
+            self.transport_ready(session.as_ref()).await?;
             let response = match self
                 .http_client
                 .post(&url)
-                .header("Content-Type", "application/json")
+                .headers(
+                    headers
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.parse::<reqwest::header::HeaderName>()
+                                    .expect("validated header"),
+                                v.parse::<reqwest::header::HeaderValue>()
+                                    .expect("validated header"),
+                            )
+                        })
+                        .collect(),
+                )
                 .header("Authorization", token.header())
                 .body(request_body.clone())
                 .send()
@@ -289,6 +315,8 @@ impl ChatClient {
                 }
             };
 
+            self.observe_transport_response(session.as_ref(), attempt, &response, &token)
+                .await;
             let status = response.status();
             let delay_from_header = retry_after(response.headers());
             let request_id = response
@@ -308,7 +336,11 @@ impl ChatClient {
             .await
             {
                 Ok(body) => body,
-                Err(error) if attempt < total_attempts && is_retryable_body_error(&error) => {
+                Err(error)
+                    if attempt < total_attempts
+                        && is_retryable_body_error(&error)
+                        && (session.is_none() || !status.is_success()) =>
+                {
                     let delay = delay_from_header.unwrap_or_else(|| retry_delay(None, attempt));
                     let reason = self.diagnostic(&token, &error.to_string(), false);
                     emit_retry(events, attempt + 1, delay, reason.clone());
@@ -434,6 +466,10 @@ impl ChatClient {
                 .context("invalid request body")?
                 .remove("stream_options");
         }
+        let prepared = self.prepare_transport(request, true, events).await?;
+        let request = prepared.payload;
+        let headers = prepared.headers;
+        let session = prepared.session;
         let url = self.endpoint.to_string();
         let request_body = serde_json::to_string(&request)?;
 
@@ -447,13 +483,22 @@ impl ChatClient {
         );
 
         let total_attempts = self.config.max_retries.saturating_add(1);
-        let (response, token) = self
-            .send_streaming_request(&url, &request_body, total_attempts, events)
+        let (response, token, attempt) = self
+            .send_streaming_request(
+                &url,
+                &request_body,
+                total_attempts,
+                events,
+                &headers,
+                session.as_ref(),
+            )
             .await?;
 
         let mut response_stream = response.bytes_stream();
         let max_response_bytes = self.config.max_response_bytes;
         let parsed_stream = async_stream::try_stream! {
+            let _session_owner=session.clone();
+            let mut sequence=0u64;
             let mut response_bytes=0usize;
             let mut decoder = SseDecoder::default();
             let mut done = false;
@@ -468,9 +513,12 @@ impl ChatClient {
                 for event in decoder.push(&bytes[..allowed])? {
                     match event {
                         SseEvent::Data(data) => {
+                            sequence=sequence.saturating_add(1);
                             let chunk = serde_json::from_str::<StreamChunk>(&data)
-                                .map_err(|error|aicoder_core::model::ProviderError::new("openai-compatible",aicoder_core::model::ProviderErrorKind::InvalidResponse,self.diagnostic(&token,&error.to_string(),false)))?;
-                            yield chunk;
+                                .map_err(|error|aicoder_core::model::ProviderError::new("openai-compatible",aicoder_core::model::ProviderErrorKind::InvalidResponse,self.diagnostic(&token,&error.to_string(),false)));
+                            if let Ok(chunk)=&chunk {self.transport_usage_before_observation(session.as_ref(),chunk.usage.as_ref(),events);}
+                            self.observe_transport_event(session.as_ref(),attempt,sequence,&data,&token,events).await?;
+                            yield chunk?;
                         }
                         SseEvent::Done => {
                             done = true;
@@ -485,9 +533,12 @@ impl ChatClient {
                 for event in decoder.finish()? {
                     match event {
                         SseEvent::Data(data) => {
+                            sequence=sequence.saturating_add(1);
                             let chunk = serde_json::from_str::<StreamChunk>(&data)
-                                .map_err(|error|aicoder_core::model::ProviderError::new("openai-compatible",aicoder_core::model::ProviderErrorKind::InvalidResponse,self.diagnostic(&token,&error.to_string(),false)))?;
-                            yield chunk;
+                                .map_err(|error|aicoder_core::model::ProviderError::new("openai-compatible",aicoder_core::model::ProviderErrorKind::InvalidResponse,self.diagnostic(&token,&error.to_string(),false)));
+                            if let Ok(chunk)=&chunk {self.transport_usage_before_observation(session.as_ref(),chunk.usage.as_ref(),events);}
+                            self.observe_transport_event(session.as_ref(),attempt,sequence,&data,&token,events).await?;
+                            yield chunk?;
                         }
                         SseEvent::Done => break,
                     }
@@ -504,19 +555,34 @@ impl ChatClient {
         request_body: &str,
         total_attempts: u32,
         events: Option<&dyn ProviderEventSink>,
-    ) -> Result<(reqwest::Response, BearerToken)> {
+        headers: &std::collections::BTreeMap<String, String>,
+        session: Option<&Arc<crate::transport::Session>>,
+    ) -> Result<(reqwest::Response, BearerToken, u32)> {
         for attempt in 1..=total_attempts {
             tracing::debug!(attempt, total_attempts, "Starting streaming HTTP attempt");
+            self.transport_admit(session)?;
             let token = self.credentials.bearer_token().await.map_err(|mut error| {
                 error.provider = self.config.provider_id.clone();
                 error
             })?;
+            self.transport_ready(session).await?;
             let response = match self
                 .http_client
                 .post(url)
                 .header("Authorization", token.header())
-                .header("Content-Type", "application/json")
-                .header("Accept", "text/event-stream")
+                .headers(
+                    headers
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.parse::<reqwest::header::HeaderName>()
+                                    .expect("validated header"),
+                                v.parse::<reqwest::header::HeaderValue>()
+                                    .expect("validated header"),
+                            )
+                        })
+                        .collect(),
+                )
                 .body(request_body.to_string())
                 .send()
                 .await
@@ -544,9 +610,11 @@ impl ChatClient {
                 }
             };
 
+            self.observe_transport_response(session, attempt, &response, &token)
+                .await;
             let status = response.status();
             if status.is_success() {
-                return Ok((response, token));
+                return Ok((response, token, attempt));
             }
 
             let delay_from_header = retry_after(response.headers());

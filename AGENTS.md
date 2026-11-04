@@ -6,6 +6,10 @@
   events, cancellation, session domain and memory storage. Keep frontend concerns out of core.
 - `crates/aicoder-providers` owns model-service clients and HTTP adapters.
   Providers depend on core; core must not depend on providers or HTTP clients.
+  Native transport hooks freeze safe headers/payload controls before attempts; protect auth,
+  framing and admitted core fields. Observers cannot mutate normalization or trigger retries.
+  Publish known usage before awaiting stream observers, bound diagnostics/whole observations,
+  and cancel dropped callback children without relying on runtime shutdown.
 - `crates/aicoder-runtime` owns layered application settings, credential references,
   default coding tools, filesystem session stores and Git completion verification.
   Keep terminal/Web types out; core must not depend on it.

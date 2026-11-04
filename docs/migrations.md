@@ -1,5 +1,32 @@
 # API migrations
 
+## S7: compatible-client native transport hooks
+
+Providers exports TransportHooks/TransportHook and bounded header/payload/response/parsed-stream
+inputs, cancellation observation, metadata reports and the reusable TransportSession driver.
+ChatClient::with_transport_hooks or with_shared_transport_hooks explicitly binds an immutable
+snapshot. for_model shares it and diagnostic state; SessionModelClient therefore preserves it.
+Core model traits, default builds and credential configuration remain source compatible.
+Native callbacks are not loaded by settings/history or implicitly installed by core extensions;
+a host can register/select the already-bound client as its provider contribution.
+
+Request stages freeze safe headers and allowlisted service fields once before HTTP. Original
+adapter fields and core-owned aliases, auth/framing/routing headers stay protected. Semantic
+changes use core RequestHook before admission. Rejected preparation reports locally known zero
+model usage; observers publish known stream usage before waiting and never replace normalization.
+Error/panic/timeout/whole-event omissions are bounded fixed-class diagnostics, not native strings.
+
+Opted-in clients do not retry an incomplete body after successful response headers. Configured
+retryable statuses/pre-response behavior remain, using the frozen plan and fresh private bearer
+credentials. Default clients without hooks preserve prior behavior. Observation data may be
+redacted or omitted; it is neither exact HTTP bytes nor a billing/replay record. No dependency,
+package version, event/session version or default feature changes were made.
+
+The initial binding covers compatible chat and SessionModelClient. Existing native classifier/
+image clients need explicit further integration; this and actionable lifecycle hooks remain
+open. See [contract](transport-hooks.md), [loopback example](../crates/aicoder-runtime/examples/offline_transport_hooks.rs)
+and [acceptance](s7-transport-hooks-acceptance.md).
+
 ## S7: provider-neutral request views
 
 Extension adds request_hook(HookSpec, RequestHookScope, Arc<dyn RequestHook>). New typed
