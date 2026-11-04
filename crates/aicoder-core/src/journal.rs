@@ -30,6 +30,12 @@ pub trait RunJournal: Send + Sync {
     ) -> anyhow::Result<()> {
         anyhow::bail!("journal does not support canonical tool composition records")
     }
+    async fn record_interception(
+        &self,
+        _record: &crate::extensions::InterceptionRecord,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support tool interception records")
+    }
     async fn record_auxiliary(
         &self,
         _record: &crate::auxiliary::AuxiliaryRecord,
@@ -55,6 +61,13 @@ pub trait RunJournal: Send + Sync {
 }
 #[async_trait]
 impl RunJournal for () {
+    async fn record_interception(
+        &self,
+        _: &crate::extensions::InterceptionRecord,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn record_auxiliary(&self, _: &crate::auxiliary::AuxiliaryRecord) -> anyhow::Result<()> {
         Ok(())
     }

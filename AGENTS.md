@@ -93,6 +93,10 @@
   preparation and approval-cache lookup; observations cannot mutate execution. Preserve
   declared prefix boundaries, cancel dropped hook children and rotate registry authority
   when installing a new snapshot. Never load native code or restore grants from history.
+  Tool argument edits precede guards/preparation/approval and retain inert proposal records;
+  recheck grants and steering after awaited receipts. Result transformations retain actual
+  execution/capture status, narrow artifact exposure, and cannot retry completed effects.
+  Capture known completion before output normalization can replace error details with previews.
 - Process tools use explicit host launch settings and conservative capabilities. Keep remote
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership

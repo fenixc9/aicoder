@@ -19,7 +19,7 @@ preempt a blocking callback or recover from process exit/abort/allocation failur
 ## Registration and authority
 
 Contributions include ExecutableTool, ModelProvider routes, named ContextPolicy objects,
-ContextHook, ToolHook, AgentEventHandler observers and ExtensionCommand. Existing public
+ContextHook, ToolHook, ToolCallHook/ToolResultHook, AgentEventHandler observers and ExtensionCommand. Existing public
 traits stay authoritative; no parallel execution loop or provider-specific core types appear.
 
 - IDs/names are 1–64 ASCII letters/digits/dot/underscore/hyphen; versions are 1–128 graphic
@@ -63,8 +63,11 @@ system messages as host input. Its default delegates to prepare for source compa
 custom providers that compose prefixes should override it. Historical provider projections
 and canonical journal indices remain separate.
 
-ToolHook runs on every resolved tool call, before read-only preparation or any approval/cache
-lookup. It sees workspace, original call/arguments and declared capability, and returns
+[ToolCallHook/ToolResultHook](tool-interception.md) additionally provide bounded argument and
+delivered-result transformations with inert proposal/execution receipts. Their actual tool
+identity, operation completion, capture facts and artifact authority remain explicit.
+ToolHook runs on every resolved tool call, after argument transformations and before read-only preparation or any approval/cache
+lookup. It sees workspace, effective call/arguments and declared capability, and returns
 Continue or Deny with at most 4 KiB JSON reason. It cannot rewrite IDs, names, arguments,
 results, previews, plans or capabilities; later approved execution consumes the original
 owned plan. A Deny becomes a paired extension_denied tool result. Callback errors/panics/

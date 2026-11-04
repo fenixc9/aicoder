@@ -145,6 +145,20 @@ impl RunJournal for SessionJournal<'_> {
             }],
         )
     }
+    async fn record_interception(
+        &self,
+        record: &crate::extensions::InterceptionRecord,
+    ) -> Result<()> {
+        crate::extensions::size(record, 96 * 1024)?;
+        let mut state = self.state.lock().expect("session journal poisoned");
+        self.write(
+            &mut state,
+            vec![SessionEntryData::Extension {
+                namespace: crate::extensions::INTERCEPTION_NAMESPACE.into(),
+                data: serde_json::to_value(record)?,
+            }],
+        )
+    }
     async fn record_auxiliary(&self, record: &crate::auxiliary::AuxiliaryRecord) -> Result<()> {
         crate::extensions::size(record, 64 * 1024)?;
         let mut state = self.state.lock().expect("session journal poisoned");

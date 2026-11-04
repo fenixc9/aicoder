@@ -1,6 +1,7 @@
 use crate::run::{RunFailure, RunLimiter, RunStage};
 mod auxiliary;
 mod composition;
+mod interception;
 #[derive(Clone, Copy)]
 struct CallScope<'a> {
     offered_tools: Option<&'a [crate::model::ToolDefinition]>,
@@ -71,6 +72,8 @@ impl Default for DispatcherConfig {
 }
 
 pub struct ToolDispatcher {
+    call_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::ToolCallHook>>,
+    result_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::ToolResultHook>>,
     counting: crate::tokens::TokenCounting,
     hooks: Vec<crate::extensions::Registered<dyn crate::extensions::ToolHook>>,
     registry: Arc<ToolRegistry>,
@@ -89,6 +92,8 @@ impl ToolDispatcher {
         let context =
             ToolContext::new(workspace_root, config.tool_timeout, config.max_output_bytes)?;
         Ok(Self {
+            call_hooks: Vec::new(),
+            result_hooks: Vec::new(),
             counting: crate::tokens::TokenCounting::default(),
             hooks: Vec::new(),
             registry,
@@ -103,6 +108,15 @@ impl ToolDispatcher {
         hooks: Vec<crate::extensions::Registered<dyn crate::extensions::ToolHook>>,
     ) -> Self {
         self.hooks = hooks;
+        self
+    }
+    pub(crate) fn with_interception(
+        mut self,
+        call: Vec<crate::extensions::Registered<dyn crate::extensions::ToolCallHook>>,
+        result: Vec<crate::extensions::Registered<dyn crate::extensions::ToolResultHook>>,
+    ) -> Self {
+        self.call_hooks = call;
+        self.result_hooks = result;
         self
     }
     pub(crate) fn with_counting(mut self, counting: crate::tokens::TokenCounting) -> Self {
@@ -404,6 +418,23 @@ impl ToolDispatcher {
                 )
                 .await);
         }
+        let original_arguments = &call.arguments;
+        let effective = if self.call_hooks.is_empty() {
+            None
+        } else {
+            match self
+                .intercept_arguments(call, tool.capability(), tool_context, scope)
+                .await
+            {
+                Ok(call) => Some(call),
+                Err(failure) => {
+                    return Ok(self
+                        .failed_tool_message(events, call, limits, failure)
+                        .await);
+                }
+            }
+        };
+        let call = effective.as_ref().unwrap_or(call);
         let arguments = call.arguments.clone();
 
         if tool.composition_factory().is_some()
@@ -681,6 +712,27 @@ impl ToolDispatcher {
                 }
             }
         }
+        tracing::debug!(
+            tool = %sanitize_text(&invocation.name, 256),
+            call_id_bytes = invocation.call_id.len(),
+            arguments_bytes = invocation.arguments.to_string().len(),
+            "Executing tool"
+        );
+        if !self.result_hooks.is_empty()
+            && let Err(failure) = self
+                .interception_record(
+                    scope,
+                    crate::extensions::InterceptionRecord::ResultPending {
+                        call_id: call.id.clone(),
+                        tool: call.name.clone(),
+                    },
+                )
+                .await
+        {
+            return Ok(self
+                .failed_tool_message(events, call, limits, failure)
+                .await);
+        }
         if let Some(ticket) = &ticket
             && let Err(error) = ticket.current()
         {
@@ -713,12 +765,6 @@ impl ToolDispatcher {
                 .await);
         }
 
-        tracing::debug!(
-            tool = %sanitize_text(&invocation.name, 256),
-            call_id_bytes = invocation.call_id.len(),
-            arguments_bytes = invocation.arguments.to_string().len(),
-            "Executing tool"
-        );
         let execution = if let Some(factory) = tool.composition_factory() {
             match self
                 .execute_composition(factory, call, arguments, events, scope)
@@ -772,6 +818,17 @@ impl ToolDispatcher {
                 None => execution.await,
             }
         };
+        // Capture host execution facts before bounding/archive can replace error details
+        // with a preview. A missing receipt must stay unknown, never inferred false.
+        let operation_completed = match &execution {
+            Ok(Ok(_)) => Some(true),
+            Ok(Err(error)) => error
+                .details
+                .as_ref()
+                .and_then(|d| d.get("operation_completed"))
+                .and_then(Value::as_bool),
+            Err(_) => None,
+        };
         let (envelope, outcome) = match execution {
             Ok(Ok(success)) => super::output::success_envelope(success, &self.context).await,
             Ok(Err(error)) => {
@@ -790,6 +847,32 @@ impl ToolDispatcher {
                 (failure_envelope(error), ToolExecutionOutcome::TimedOut)
             }
         };
+        let (envelope, outcome) = if self.result_hooks.is_empty() {
+            (envelope, outcome)
+        } else {
+            self.intercept_result(
+                call,
+                envelope,
+                outcome,
+                operation_completed,
+                tool_context,
+                scope,
+            )
+            .await
+        };
+        let mut envelope = envelope;
+        // The source assistant call stays canonical; make any effective change explicit in
+        // delivered results without copying potentially large/private arguments into output.
+        if let Some(effective) = &effective
+            && &effective.arguments != original_arguments
+        {
+            if envelope.get("interception").is_none() {
+                envelope["interception"] = json!({});
+            }
+            envelope["interception"]["arguments_changed"] = json!(true);
+            envelope["interception"]["namespace"] =
+                json!(crate::extensions::INTERCEPTION_NAMESPACE);
+        }
         let artifacts = envelope
             .get("artifacts")
             .and_then(|value| serde_json::from_value(value.clone()).ok())
@@ -868,6 +951,9 @@ fn limit_payload(
     limits: Option<&RunLimiter>,
 ) -> (Value, ToolExecutionOutcome) {
     if let Some(limits) = limits {
+        if let Some(metadata) = envelope.get("interception") {
+            let _ = limits.retain_text(&metadata.to_string());
+        }
         let is_success = envelope["ok"] == true;
         let payload = if is_success {
             &envelope["output"]

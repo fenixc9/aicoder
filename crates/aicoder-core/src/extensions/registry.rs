@@ -52,6 +52,8 @@ pub struct Extension {
     policies: Vec<(String, Arc<dyn ContextPolicy>)>,
     contexts: Vec<Registered<dyn ContextHook>>,
     guards: Vec<Registered<dyn ToolHook>>,
+    call_hooks: Vec<Registered<dyn ToolCallHook>>,
+    result_hooks: Vec<Registered<dyn ToolResultHook>>,
     observers: Vec<Observer>,
     commands: Vec<Command>,
     registrations: Vec<RegistrationInfo>,
@@ -79,6 +81,8 @@ impl Extension {
             policies: Vec::new(),
             contexts: Vec::new(),
             guards: Vec::new(),
+            call_hooks: Vec::new(),
+            result_hooks: Vec::new(),
             observers: Vec::new(),
             commands: Vec::new(),
             registrations: Vec::new(),
@@ -190,6 +194,44 @@ impl Extension {
             size(&spec, 1024)?,
         )?;
         self.guards.push(Registered {
+            owner: self.manifest.id.clone(),
+            spec,
+            callback: hook,
+        });
+        Ok(self)
+    }
+    pub fn tool_call_hook(
+        &mut self,
+        spec: HookSpec,
+        hook: Arc<dyn ToolCallHook>,
+    ) -> Result<&mut Self> {
+        spec.validate()?;
+        self.register(
+            "tool_call_hook",
+            &spec.id,
+            Some(spec.priority),
+            size(&spec, 1024)?,
+        )?;
+        self.call_hooks.push(Registered {
+            owner: self.manifest.id.clone(),
+            spec,
+            callback: hook,
+        });
+        Ok(self)
+    }
+    pub fn tool_result_hook(
+        &mut self,
+        spec: HookSpec,
+        hook: Arc<dyn ToolResultHook>,
+    ) -> Result<&mut Self> {
+        spec.validate()?;
+        self.register(
+            "tool_result_hook",
+            &spec.id,
+            Some(spec.priority),
+            size(&spec, 1024)?,
+        )?;
+        self.result_hooks.push(Registered {
             owner: self.manifest.id.clone(),
             spec,
             callback: hook,
@@ -427,6 +469,20 @@ impl ExtensionSet {
             .collect();
         hooks.sort_by_key(|h| h.spec.priority);
         hooks
+    }
+    pub(crate) fn call_hooks(&self) -> Vec<Registered<dyn ToolCallHook>> {
+        ordered(
+            self.extensions
+                .iter()
+                .flat_map(|e| e.call_hooks.iter().cloned()),
+        )
+    }
+    pub(crate) fn result_hooks(&self) -> Vec<Registered<dyn ToolResultHook>> {
+        ordered(
+            self.extensions
+                .iter()
+                .flat_map(|e| e.result_hooks.iter().cloned()),
+        )
     }
     pub(crate) fn handler(&self, host: Arc<dyn AgentEventHandler>) -> Arc<dyn AgentEventHandler> {
         let mut observers: Vec<_> = self.extensions.iter().flat_map(|e| &e.observers).collect();

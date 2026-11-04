@@ -1,6 +1,13 @@
 //! Explicit native extension registration. Native code is trusted host code, not a sandbox.
 mod commands;
 mod hooks;
+mod interception;
+pub use interception::{
+    INTERCEPTION_NAMESPACE, InterceptionChange, InterceptionRecord, MAX_INTERCEPTION_BYTES,
+    MAX_INTERCEPTION_CHAIN_BYTES, ToolCallEdit, ToolCallHook, ToolCallHookInput,
+    ToolExecutionStatus, ToolResultEdit, ToolResultHook, ToolResultHookInput,
+};
+pub(crate) use interception::{ordered, replace_result};
 pub mod process_protocol;
 mod registry;
 pub use commands::{CommandContext, CommandOutput, CommandRequest, CommandSpec, ExtensionCommand};
@@ -53,4 +60,4 @@ pub(crate) fn size(value: &impl Serialize, limit: usize) -> Result<usize> {
     Ok(count.bytes)
 }
 
-pub(crate) use hooks::{Registered, tool_hooks};
+pub(crate) use hooks::{Registered, invoke, tool_hooks};

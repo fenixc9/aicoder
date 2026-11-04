@@ -1621,7 +1621,9 @@ impl TurnExecutorBuilder {
             dispatcher = dispatcher.with_artifact_store(store)?;
         }
         if let Some(extensions) = &self.extensions {
-            dispatcher = dispatcher.with_tool_hooks(extensions.tool_hooks());
+            dispatcher = dispatcher
+                .with_tool_hooks(extensions.tool_hooks())
+                .with_interception(extensions.call_hooks(), extensions.result_hooks());
         }
         let mut executor = TurnExecutor::new_with_verifier(
             self.provider,

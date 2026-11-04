@@ -203,6 +203,8 @@ impl ToolDispatcher {
             };
             let mut program = ProgramOwner(program);
             let child = Self {
+                call_hooks: self.call_hooks.clone(),
+                result_hooks: self.result_hooks.clone(),
                 counting: self.counting.clone(),
                 hooks: self.hooks.clone(),
                 registry: self.registry.clone(),

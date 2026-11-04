@@ -1,5 +1,33 @@
 # API migrations
 
+## S7: tool argument and delivered-result interception
+
+Extension adds tool_call_hook and tool_result_hook registrations with existing HookSpec ordering,
+limits and cancellation. New core ToolCallHook/ToolResultHook traits use owned bounded edits.
+Existing ToolHook signatures remain compatible; they now see effective arguments after any
+explicitly installed ToolCallHook chain. No new callbacks are installed by default.
+Tool IDs/names/capabilities and owned plans remain immutable through approval/execution.
+
+RunJournal adds record_interception(), rejecting by default. Implement it before installing
+argument edits or result callbacks in a custom durable journal. Unit journals explicitly
+support ephemeral SDK runs. Session v3 stores aicoder.interception.v1 Extension records; eval
+journals retain the same receipts. Existing history needs no rewrite and never restores code
+or authority. Argument records are proposals, while ResultPending precedes execution. Final
+receipts separate actual execution/completion/capture status from delivered result edits.
+
+Tool result envelopes may add compact interception metadata when callbacks are selected.
+Original assistant arguments stay canonical, with arguments_changed and inert proposal
+records marking effective changes. Result callbacks can change delivered payload/error status
+and narrow existing artifact references; they cannot fabricate or restore exposed artifacts.
+ToolExecutionEnded describes delivered status; inspect the immutable interception receipt for
+original execution status. Redaction is of the new delivered view, not deletion of earlier
+raw archives or source files. Metadata consumes parent output and complete model-view counts.
+
+No package versions, dependencies, default features, event enum variants or session versions
+changed. See [contract](tool-interception.md), [offline example](../crates/aicoder-runtime/examples/offline_tool_interception.rs)
+and [acceptance](s7-tool-interception-acceptance.md). Provider/request transformations and
+additional lifecycle actions remain open in the Pi audit.
+
 ## S7: native image-generation tasks
 
 Core adds AuxiliaryModel, retaining ClassifierModel as a source-compatible type alias with
