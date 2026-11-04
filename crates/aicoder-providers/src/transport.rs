@@ -132,6 +132,11 @@ fn reserved_field(s: &str) -> bool {
             | "reasoning"
             | "thinking"
             | "enable_thinking"
+            | "state"
+            | "questions"
+            | "images"
+            | "assets"
+            | "modalities"
             | "n"
             | "api_key"
             | "authorization"
@@ -154,6 +159,7 @@ fn protected_header(s: &str) -> bool {
                 | "transfer-encoding"
                 | "connection"
                 | "content-type"
+                | "typesafe-danger-zone-images"
                 | "accept"
                 | "cookie"
                 | "set-cookie"
@@ -213,9 +219,49 @@ impl TransportHooks {
         self.hooks.is_empty()
     }
 }
+/// Immutable host-selected callbacks plus a bounded monitor shared across explicit clients.
+#[derive(Clone)]
+pub struct TransportBinding {
+    pub(crate) hooks: Arc<TransportHooks>,
+    pub(crate) report: Arc<Mutex<Diagnostics>>,
+}
+impl TransportBinding {
+    pub fn new(hooks: TransportHooks) -> Self {
+        Self::shared(Arc::new(hooks))
+    }
+    pub fn shared(hooks: Arc<TransportHooks>) -> Self {
+        Self {
+            hooks,
+            report: Arc::new(Mutex::new(Diagnostics::default())),
+        }
+    }
+    pub fn catalog(&self) -> Vec<TransportHookInfo> {
+        self.hooks.catalog()
+    }
+    pub fn payload_fields(&self) -> Vec<String> {
+        self.hooks.payload_fields()
+    }
+    pub fn report(&self) -> TransportReport {
+        self.report
+            .lock()
+            .expect("transport report poisoned")
+            .snapshot()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.hooks.is_empty()
+    }
+    pub(crate) fn active(&self) -> bool {
+        !self.hooks.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransportDiagnostic {
     pub request_id: String,
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub model: String,
     pub owner: String,
     pub hook: String,
     pub phase: String,
@@ -328,6 +374,8 @@ impl TransportSession {
             .expect("transport report poisoned")
             .add(TransportDiagnostic {
                 request_id: self.info.id.clone(),
+                provider: self.info.provider.clone(),
+                model: self.info.model.clone(),
                 owner: registration
                     .map(|h| h.info.owner.clone())
                     .unwrap_or_default(),

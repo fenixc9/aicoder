@@ -40,12 +40,16 @@ impl Runtime {
                 provider: route.config.provider_id.clone(),
             });
             if !route.models.is_empty() {
-                let provider = Arc::new(SystemOneClient::new(
+                let mut provider = SystemOneClient::new(
                     route.config.clone(),
                     credentials.clone(),
                     route.models.clone(),
                     route.images,
-                )?);
+                )?;
+                if let Some(binding) = &self.model_transport {
+                    provider = provider.with_transport_binding(binding.clone());
+                }
+                let provider = Arc::new(provider);
                 for model in &route.models {
                     entries.push(Entry {
                         model: model.clone(),
@@ -55,13 +59,15 @@ impl Runtime {
                 }
             }
             if !route.image_models.is_empty() {
-                let provider = Arc::new(
-                    aicoder_providers::image_generation::OpenRouterImageClient::new(
-                        route.config.clone(),
-                        credentials,
-                        route.image_models.clone(),
-                    )?,
-                );
+                let mut provider = aicoder_providers::image_generation::OpenRouterImageClient::new(
+                    route.config.clone(),
+                    credentials,
+                    route.image_models.clone(),
+                )?;
+                if let Some(binding) = &self.model_transport {
+                    provider = provider.with_transport_binding(binding.clone());
+                }
+                let provider = Arc::new(provider);
                 for model in &route.image_models {
                     image_entries.push(images::Entry {
                         model: model.clone(),

@@ -750,3 +750,7 @@ async fn observer_panic_is_reported_without_repeating_a_successful_request() {
             .any(|r| r.failure == "panicked")
     );
 }
+
+#[cfg(feature = "auxiliary-models")]
+#[path = "support/transport_auxiliary.rs"]
+mod auxiliary;

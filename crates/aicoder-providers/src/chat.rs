@@ -94,8 +94,7 @@ fn emit_retry(
 
 /// OpenAI 兼容 API 客户端
 pub struct ChatClient {
-    pub(crate) transport_hooks: Option<Arc<crate::transport::TransportHooks>>,
-    pub(crate) transport_report: Arc<std::sync::Mutex<crate::transport::Diagnostics>>,
+    pub(crate) transport_binding: Option<crate::transport::TransportBinding>,
     pub(crate) config: ClientConfig,
     http_client: Client,
     credentials: Arc<dyn CredentialProvider>,
@@ -129,21 +128,14 @@ impl ChatClient {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(config.timeout))
             .connect_timeout(Duration::from_secs(config.connect_timeout));
-        let proxy_secrets = if matches!(config.proxy, crate::ProxyMode::Auto) {
-            crate::config::system_proxy_secrets(|name| std::env::var(name).ok())
-        } else {
-            Vec::new()
-        };
+        let proxy_secrets = crate::transport_client::proxy_secrets(&config);
         let http_client = config
             .proxy
             .apply(builder)?
             .build()
             .map_err(|_| crate::config::invalid("Failed to create HTTP client"))?;
         Ok(Self {
-            transport_hooks: None,
-            transport_report: Arc::new(std::sync::Mutex::new(
-                crate::transport::Diagnostics::default(),
-            )),
+            transport_binding: None,
             config,
             http_client,
             credentials,
@@ -169,8 +161,7 @@ impl ChatClient {
         let mut config = self.config.clone();
         config.model = model.to_string();
         Ok(Self {
-            transport_hooks: self.transport_hooks.clone(),
-            transport_report: self.transport_report.clone(),
+            transport_binding: self.transport_binding.clone(),
             config,
             http_client: self.http_client.clone(),
             credentials: self.credentials.clone(),

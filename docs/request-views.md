@@ -5,8 +5,8 @@ compaction decisions and generation. Conversation filtering, explicit system-pre
 generation options and tool subsets use one core path for SDK/frontends/bench hosts. Canonical
 user/tool history stays unchanged. This covers the pinned Pi context/context_with_system intent;
 [Compatible-client transport hooks](transport-hooks.md) add safe headers/service controls and
-response/parsed-stream observations. Auxiliary transport binding and actionable lifecycle hooks
-remain separate open audit items.
+response/parsed-stream observations. [Shared auxiliary transport binding](auxiliary-transport.md) now covers Runtime-created native
+models. Actionable lifecycle hooks remain separate open audit items.
 
 ## Register a bounded transformation
 

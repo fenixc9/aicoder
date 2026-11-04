@@ -109,6 +109,12 @@ project image artifacts using the existing scoped preview mechanism. Code Mode l
 retain raw references, but only explicit await image(block) selects pixels for the next outer
 model request. Filtering generated output does not refund execution, storage or usage.
 
+## Shared native transport
+
+The image client and Runtime-created image routes support [shared native transport bindings](auxiliary-transport.md).
+Approved input/modalities and private credentials remain protected; allowed tracing/service
+controls and safe response observers use the common driver. No retries or new grants are added.
+
 ## Metering and failure
 
 Image and classifier tasks share four per-run slots, the hard 128-task ceiling, configured

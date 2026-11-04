@@ -37,6 +37,8 @@ approval and result transformations with explicit execution receipts and artifac
 admission, preserving canonical history and raw summary checkpoints.
 [Transport hooks](docs/transport-hooks.md) add explicit compatible-client headers/service
 controls and bounded response/parsed-stream observation without exposing auth or changing normalization.
+[Shared native bindings](docs/auxiliary-transport.md) cover runtime-created chat/classifier/image
+clients, preserve reload snapshots and retain the same parent approvals/usage.
 [Explicit host launch files](docs/host-extensions.md) enable process/MCP tools in CLI, TUI and Web.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime

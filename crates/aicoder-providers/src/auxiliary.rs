@@ -6,6 +6,8 @@ use futures::StreamExt;
 use serde_json::{Value, json};
 use std::{sync::Arc, time::Duration};
 pub struct SystemOneClient {
+    transport_binding: Option<crate::transport::TransportBinding>,
+    proxy_secrets: Vec<String>,
     config: ClientConfig,
     http: reqwest::Client,
     endpoint: reqwest::Url,
@@ -53,7 +55,10 @@ impl SystemOneClient {
             .apply(builder)?
             .build()
             .map_err(|_| anyhow::anyhow!("classifier HTTP client could not be created"))?;
+        let proxy_secrets = crate::transport_client::proxy_secrets(&config);
         Ok(Self {
+            transport_binding: None,
+            proxy_secrets,
             config,
             http,
             endpoint,
@@ -61,6 +66,41 @@ impl SystemOneClient {
             models,
             images,
         })
+    }
+    pub fn with_transport_hooks(self, hooks: crate::transport::TransportHooks) -> Self {
+        self.with_transport_binding(crate::transport::TransportBinding::new(hooks))
+    }
+    pub fn with_shared_transport_hooks(self, hooks: Arc<crate::transport::TransportHooks>) -> Self {
+        self.with_transport_binding(crate::transport::TransportBinding::shared(hooks))
+    }
+    pub fn with_transport_binding(mut self, binding: crate::transport::TransportBinding) -> Self {
+        self.transport_binding = binding.active().then_some(binding);
+        self
+    }
+    pub fn transport_hook_catalog(&self) -> Vec<crate::transport::TransportHookInfo> {
+        self.transport_binding
+            .as_ref()
+            .map(|b| b.catalog())
+            .unwrap_or_default()
+    }
+    pub fn transport_payload_fields(&self) -> Vec<String> {
+        self.transport_binding
+            .as_ref()
+            .map(|b| b.payload_fields())
+            .unwrap_or_default()
+    }
+    pub fn transport_report(&self) -> crate::transport::TransportReport {
+        self.transport_binding
+            .as_ref()
+            .map(|b| b.report())
+            .unwrap_or_default()
+    }
+    fn transport_driver(&self) -> crate::transport_client::Driver<'_> {
+        crate::transport_client::Driver {
+            config: &self.config,
+            binding: self.transport_binding.as_ref(),
+            proxy_secrets: &self.proxy_secrets,
+        }
     }
     fn error(&self, kind: ProviderErrorKind, message: &str) -> ProviderError {
         ProviderError::new(&self.config.provider_id, kind, message)
@@ -189,6 +229,24 @@ impl ClassifierProvider for SystemOneClient {
                     return Err(error);
                 }
             };
+            let mut headers = std::collections::BTreeMap::from([(
+                "content-type".into(),
+                "application/json".into(),
+            )]);
+            if !context.images.is_empty() && matches!(self.images, ClassifierImageInput::Assets) {
+                headers.insert("typesafe-danger-zone-images".into(), "true".into());
+            }
+            let driver = self.transport_driver();
+            let prepared = match driver.prepare(payload, headers, None).await {
+                Ok(v) => v,
+                Err(_) => {
+                    usage.record(ModelUsage::zero());
+                    return Err(self.error(
+                        ProviderErrorKind::InvalidRequest,
+                        "native transport preparation failed; no provider was invoked",
+                    ));
+                }
+            };
             let token = match self.credentials.bearer_token().await {
                 Ok(token) => token,
                 Err(_) => {
@@ -199,20 +257,45 @@ impl ClassifierProvider for SystemOneClient {
                     ));
                 }
             };
-            let mut request = self
+            if driver
+                .transport_ready(prepared.session.as_ref())
+                .await
+                .is_err()
+            {
+                usage.record(ModelUsage::zero());
+                return Err(self.error(
+                    ProviderErrorKind::InvalidRequest,
+                    "native transport admission expired; no provider was invoked",
+                ));
+            }
+            let request = self
                 .http
                 .post(self.endpoint.clone())
                 .header(reqwest::header::AUTHORIZATION, token.header())
-                .json(&payload);
-            if !context.images.is_empty() && matches!(self.images, ClassifierImageInput::Assets) {
-                request = request.header("TypeSafe-Danger-Zone-Images", "true");
-            }
+                .headers(
+                    prepared
+                        .headers
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.parse::<reqwest::header::HeaderName>()
+                                    .expect("validated header"),
+                                v.parse::<reqwest::header::HeaderValue>()
+                                    .expect("validated header"),
+                            )
+                        })
+                        .collect(),
+                )
+                .json(&prepared.payload);
             let response = request.send().await.map_err(|_| {
                 self.error(
                     ProviderErrorKind::Transport,
                     "classifier transport failed; request completion is uncertain",
                 )
             })?;
+            driver
+                .observe_transport_response(prepared.session.as_ref(), 1, &response, &token)
+                .await;
             if !response.status().is_success() {
                 let mut error = self.error(
                     if response.status() == reqwest::StatusCode::UNAUTHORIZED {

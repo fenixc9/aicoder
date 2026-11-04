@@ -10,6 +10,9 @@
   framing and admitted core fields. Observers cannot mutate normalization or trigger retries.
   Publish known usage before awaiting stream observers, bound diagnostics/whole observations,
   and cancel dropped callback children without relying on runtime shutdown.
+  Runtime transport bindings are explicit immutable host objects shared by created clients;
+  preserve them on reload, never serialize or restore them from config/history. Native task
+  state/questions/images/modalities and protocol opt-ins remain owned-plan fields after approval.
 - `crates/aicoder-runtime` owns layered application settings, credential references,
   default coding tools, filesystem session stores and Git completion verification.
   Keep terminal/Web types out; core must not depend on it.

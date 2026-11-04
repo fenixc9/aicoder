@@ -67,6 +67,13 @@ jobs:
           cargo test --locked -p aicoder-runtime --no-default-features --test transport_hooks
           cargo run --locked -p aicoder-runtime --example offline_transport_hooks
           cargo run --locked -p aicoder-runtime --example offline_transport_hooks -- --stream
+          cargo test --locked -p aicoder-providers --all-features --test transport
+          cargo test --locked -p aicoder-runtime --no-default-features --features auxiliary-models --test auxiliary_transport
+          cargo run --locked -p aicoder-runtime --features auxiliary-models --example offline_auxiliary_transport
+          cargo run --locked -p aicoder-runtime --features auxiliary-models --example offline_auxiliary_transport -- --observer-error
+          cargo run --locked -p aicoder-runtime --features auxiliary-models --example offline_auxiliary_transport -- --deny
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_auxiliary_transport -- --code-mode
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_auxiliary_transport -- --code-mode --deny
       - name: Planning, protected paths and read-only worker Agent extensions
         run: cargo run --locked -p aicoder-runtime --example coding_extensions
       - name: Versioned process tools and owned-plan approval

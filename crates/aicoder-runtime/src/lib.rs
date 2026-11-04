@@ -50,6 +50,7 @@ use std::{
 
 /// Immutable effective settings plus request-time credentials. Reload creates a new snapshot.
 pub struct Runtime {
+    model_transport: Option<aicoder_providers::transport::TransportBinding>,
     config: RuntimeConfig,
     extension_snapshot: Option<Arc<aicoder_core::extensions::ExtensionSet>>,
     environment: Arc<dyn Environment>,
@@ -89,6 +90,7 @@ impl Runtime {
         )?;
         Ok(Self {
             config,
+            model_transport: None,
             extension_snapshot: None,
             environment,
             overrides,
@@ -115,6 +117,34 @@ impl Runtime {
     pub fn extensions(&self) -> Option<Arc<aicoder_core::extensions::ExtensionSet>> {
         self.extension_snapshot.clone()
     }
+    /// Explicit immutable host authority; project settings and session state cannot install it.
+    pub fn with_model_transport_hooks(
+        self,
+        hooks: aicoder_providers::transport::TransportHooks,
+    ) -> Self {
+        self.with_model_transport_binding(aicoder_providers::transport::TransportBinding::new(
+            hooks,
+        ))
+    }
+    pub fn with_model_transport_binding(
+        mut self,
+        binding: aicoder_providers::transport::TransportBinding,
+    ) -> Self {
+        self.model_transport = (!binding.is_empty()).then_some(binding);
+        self
+    }
+    pub fn model_transport_catalog(&self) -> Vec<aicoder_providers::transport::TransportHookInfo> {
+        self.model_transport
+            .as_ref()
+            .map(|b| b.catalog())
+            .unwrap_or_default()
+    }
+    pub fn model_transport_report(&self) -> aicoder_providers::transport::TransportReport {
+        self.model_transport
+            .as_ref()
+            .map(|b| b.report())
+            .unwrap_or_default()
+    }
     pub fn config(&self) -> &RuntimeConfig {
         &self.config
     }
@@ -126,6 +156,7 @@ impl Runtime {
             self.environment.clone(),
         )
         .map(|mut runtime| {
+            runtime.model_transport = self.model_transport.clone();
             runtime.extension_snapshot = self.extension_snapshot.clone();
             runtime
         })
@@ -190,6 +221,7 @@ impl Runtime {
         let snapshot = Arc::new(state.validate(&self.package_store()?)?);
         let next = Self {
             config: self.config.clone(),
+            model_transport: self.model_transport.clone(),
             extension_snapshot: self.extension_snapshot.clone(),
             environment: self.environment.clone(),
             overrides: self.overrides.clone(),
@@ -238,6 +270,7 @@ impl Runtime {
     pub fn reload_resources(&self) -> Result<Self> {
         let next = Self {
             config: self.config.clone(),
+            model_transport: self.model_transport.clone(),
             extension_snapshot: self.extension_snapshot.clone(),
             environment: self.environment.clone(),
             overrides: self.overrides.clone(),
@@ -311,6 +344,9 @@ impl Runtime {
         let mut client = ChatClient::with_credentials(self.config.provider.clone(), credentials)?;
         for spec in &self.config.models {
             client.register_model(spec.clone())?;
+        }
+        if let Some(binding) = &self.model_transport {
+            client = client.with_transport_binding(binding.clone());
         }
         Ok(client)
     }

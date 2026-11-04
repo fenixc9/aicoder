@@ -167,5 +167,6 @@ precedence and snapshot source metadata are documented in the runtime contract.
 Explicit Rust hosts can bind [TransportHooks](transport-hooks.md) to ChatClient before runtime
 assembly. Safe tracing headers, allowlisted service controls and bounded response/parsed-stream
 observers preserve core request fields and private authentication. for_model/SessionModelClient
-retain the binding. No setting/history record loads native callbacks; default clients retain
+retain the binding. [Runtime shared bindings](auxiliary-transport.md) explicitly cover newly
+created chat and native auxiliary clients across reload. No setting/history record loads native callbacks; default clients retain
 existing behavior. Core semantic prompt/options edits use [request views](request-views.md).

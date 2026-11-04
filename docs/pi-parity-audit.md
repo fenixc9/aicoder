@@ -20,7 +20,7 @@ It does not certify all Pi convenience features or arbitrary third-party extensi
 | Tree sessions, branches/labels/recovery | Canonical v3 branches, bounded archive windows, navigation leases, opaque checkpoints; [sessions](sessions.md) | Verified within named scope |
 | Steer and queued follow-up | Root controls/approvals, queue limits, current mutation ownership and skipped remaining calls; run_control and terminal tests | Verified within named scope |
 | Interactive, print/JSON, RPC, SDK | Shared core/runtime with real PTY/browser and normalized SDK/CLI/RPC/Web case; [S5 acceptance](s5-images-acceptance.md) | Verified basic flows; no shortcut/ABI equivalence claim |
-| Extension tools/hooks/commands/UI | Immutable native registration; process/MCP tool adapters; [explicit stock launch](host-extensions.md); TUI/Web native UI examples; [S6 acceptance](s6-ui-acceptance.md) | Partial: stock activation, tool/request/compatible-HTTP hooks verified; auxiliary/lifecycle binding remains |
+| Extension tools/hooks/commands/UI | Immutable native registration; process/MCP tool adapters; [explicit stock launch](host-extensions.md); TUI/Web native UI examples; [S6 acceptance](s6-ui-acceptance.md) | Partial: supported tool/request/HTTP drivers and native bindings verified; actionable lifecycle remains |
 | Resource package discovery/install/pins/reload | Content-addressed local imports, locks/trust/dependencies and public branch state; [packages](packages.md) | Verified scoped Git HTTPS/npm native closures and activation; no JS/TS ABI claim |
 | Themes, export/share | TUI themes and inert canonical JSON/HTML exports, explicit publication adapter; [exports](session-exports.md) | Verified scoped local/custom-host path; no third-party hosted sharing deployment |
 | MCP and Code Mode | Actual modern/legacy stdio, [stock stdio hosts](host-extensions.md), real JS composition with leaf approvals/budgets/journal, CLI opt-in; [Code Mode](code-mode.md), [MCP](mcp.md) | Verified scoped MCP, JS and native auxiliary models; protocol/limit differences remain |
@@ -92,8 +92,10 @@ that full product parity has already been achieved.
    response metadata and parsed-stream observers with bounded diagnostics, usage-before-observer
    publication and unchanged normalization; see [transport acceptance](s7-transport-hooks-acceptance.md).
    Core semantic fields remain in counted request views; transport callbacks cannot alter them
-   after admission. Native classifier/image transport clients are not yet automatically bound.
-   Provider wrappers can cover some
+   after admission. Explicit immutable Runtime bindings now reach native classifier/image and
+   created primary clients, survive reload, preserve approval/usage, and share bounded diagnostics;
+   see [native transport acceptance](s7-aux-transport-acceptance.md). Arbitrary new provider drivers
+   still require explicit integration. Provider wrappers can cover some
    host integrations, but no exhaustive executable equivalence check exists. Observation-only
    events must not quietly become mutation channels or rewrite canonical facts.
 
@@ -112,5 +114,5 @@ passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /
 incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
 original score/release requirements stay open; local scripted scores cannot substitute for them.
 
-The next implementation items are native auxiliary transport binding and actionable lifecycle coverage. The final audit must rerun the matrix
+The next implementation item is actionable lifecycle coverage. The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.

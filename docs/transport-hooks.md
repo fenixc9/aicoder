@@ -6,10 +6,9 @@ to its existing compatible chat transport. SessionModelClient retains it through
 Runtime can use that already-bound provider without a second execution loop. Core stays HTTP
 independent. Settings, project data, resource records and restored sessions cannot load callbacks.
 
-This is the initial compatible chat driver. Native System One classifiers/image-generation
-clients do not yet bind the snapshot automatically; the public TransportSession interface is
-available for explicit additional JSON-object drivers. Their integration and actionable
-lifecycle stages remain in the Pi audit.
+The driver also supports [native classifier/image bindings](auxiliary-transport.md) through
+an explicit Runtime host snapshot. The public TransportSession interface remains available
+for additional JSON-object drivers. Actionable lifecycle stages remain in the Pi audit.
 
 ## Assembly and authority
 
@@ -111,8 +110,8 @@ and reports remain observations, not an invoice or a hard monetary cap.
 
 transport_report returns at most 128 recent failure/omission records plus a dropped count.
 Each contains request ID, owner/hook IDs, phase and fixed failure class, with no bodies or raw
-errors. It is cumulative across for_model clones; use request IDs to distinguish concurrent
-calls. Reports are inert data and never reinstall hooks or credentials. Native state and private
+errors. It is cumulative across for_model clones and explicitly shared bindings; use provider/model and request IDs to
+distinguish concurrent calls. Reports are inert data and never reinstall hooks or credentials. Native state and private
 payloads are not serialized or automatically recorded for replay. Hosts can explicitly bind a
 separate bounded recorder when private IO evidence is required.
 
@@ -120,8 +119,8 @@ TransportSession::start/prepare/response/event/ensure_active/cancel/report provi
 owned stages for other JSON-object adapters. The driver owns actual IO, credential redaction,
 usage publication before observation, and validation/attempt admission. Session Drop cancels
 private children; cancellation input never gives a callback the session owner. Diagnostics and
-whole-event bounds also apply to this path. This does not automatically add hooks to every
-existing auxiliary client or turn observations into execution authority.
+whole-event bounds also apply to this path. Runtime now explicitly [binds the supported native auxiliary clients](auxiliary-transport.md);
+custom driver use still does not turn observations into execution authority.
 
 The runnable example composes core request views, the real compatible HTTP codec and a
 SessionModelClient with tracing headers/allowlisted metadata. It verifies JSON/SSE, redacted

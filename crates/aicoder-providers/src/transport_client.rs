@@ -11,32 +11,47 @@ pub(crate) struct Prepared {
     pub headers: BTreeMap<String, String>,
     pub session: Option<Arc<Session>>,
 }
+pub(crate) struct Driver<'a> {
+    pub config: &'a crate::ClientConfig,
+    pub binding: Option<&'a TransportBinding>,
+    pub proxy_secrets: &'a [String],
+}
 impl ChatClient {
-    /// Explicit host assembly; scripts, settings and session records cannot install callbacks.
+    /// Explicit host assembly, never settings or restored history.
     pub fn with_transport_hooks(self, hooks: TransportHooks) -> Self {
-        self.with_shared_transport_hooks(Arc::new(hooks))
+        self.with_transport_binding(TransportBinding::new(hooks))
     }
-    pub fn with_shared_transport_hooks(mut self, hooks: Arc<TransportHooks>) -> Self {
-        self.transport_hooks = (!hooks.is_empty()).then_some(hooks);
+    pub fn with_shared_transport_hooks(self, hooks: Arc<TransportHooks>) -> Self {
+        self.with_transport_binding(TransportBinding::shared(hooks))
+    }
+    pub fn with_transport_binding(mut self, binding: TransportBinding) -> Self {
+        self.transport_binding = binding.active().then_some(binding);
         self
     }
     pub fn transport_hook_catalog(&self) -> Vec<TransportHookInfo> {
-        self.transport_hooks
+        self.transport_binding
             .as_ref()
-            .map(|h| h.catalog())
+            .map(|b| b.catalog())
             .unwrap_or_default()
     }
     pub fn transport_payload_fields(&self) -> Vec<String> {
-        self.transport_hooks
+        self.transport_binding
             .as_ref()
-            .map(|h| h.payload_fields())
+            .map(|b| b.payload_fields())
             .unwrap_or_default()
     }
     pub fn transport_report(&self) -> TransportReport {
-        self.transport_report
-            .lock()
-            .expect("transport report poisoned")
-            .snapshot()
+        self.transport_binding
+            .as_ref()
+            .map(|b| b.report())
+            .unwrap_or_default()
+    }
+    fn transport_driver(&self) -> Driver<'_> {
+        Driver {
+            config: &self.config,
+            binding: self.transport_binding.as_ref(),
+            proxy_secrets: &self.proxy_secrets,
+        }
     }
     pub(crate) async fn prepare_transport(
         &self,
@@ -48,7 +63,58 @@ impl ChatClient {
         if stream {
             headers.insert("accept".into(), "text/event-stream".into());
         }
-        let Some(hooks) = &self.transport_hooks else {
+        self.transport_driver()
+            .prepare(payload, headers, events)
+            .await
+    }
+    pub(crate) fn transport_admit(&self, session: Option<&Arc<Session>>) -> Result<()> {
+        self.transport_driver().transport_admit(session)
+    }
+    pub(crate) async fn transport_ready(&self, session: Option<&Arc<Session>>) -> Result<()> {
+        self.transport_driver().transport_ready(session).await
+    }
+    pub(crate) async fn observe_transport_response(
+        &self,
+        session: Option<&Arc<Session>>,
+        attempt: u32,
+        response: &reqwest::Response,
+        token: &BearerToken,
+    ) {
+        self.transport_driver()
+            .observe_transport_response(session, attempt, response, token)
+            .await;
+    }
+    pub(crate) fn transport_usage_before_observation(
+        &self,
+        session: Option<&Arc<Session>>,
+        usage: Option<&crate::wire::Usage>,
+        events: Option<&dyn ProviderEventSink>,
+    ) {
+        self.transport_driver()
+            .transport_usage_before_observation(session, usage, events);
+    }
+    pub(crate) async fn observe_transport_event(
+        &self,
+        session: Option<&Arc<Session>>,
+        attempt: u32,
+        sequence: u64,
+        data: &str,
+        token: &BearerToken,
+        events: Option<&dyn ProviderEventSink>,
+    ) -> Result<()> {
+        self.transport_driver()
+            .observe_transport_event(session, attempt, sequence, data, token, events)
+            .await
+    }
+}
+impl Driver<'_> {
+    pub(crate) async fn prepare(
+        &self,
+        payload: Value,
+        headers: BTreeMap<String, String>,
+        events: Option<&dyn ProviderEventSink>,
+    ) -> Result<Prepared> {
+        let Some(binding) = self.binding else {
             return Ok(Prepared {
                 payload,
                 headers,
@@ -58,8 +124,8 @@ impl ChatClient {
         let session = Session::new(
             &self.config.provider_id,
             &payload,
-            hooks.clone(),
-            self.transport_report.clone(),
+            binding.hooks.clone(),
+            binding.report.clone(),
             Duration::from_secs(self.config.timeout),
         );
         let prepared = session.prepare(&payload, headers).await.and_then(|v| {
@@ -155,7 +221,7 @@ impl ChatClient {
     fn redact_transport_text(&self, token: &BearerToken, text: &str) -> String {
         let mut text = crate::credentials::redact_value(text, token.expose_secret(), false);
         text = self.config.proxy.redact(&text);
-        for secret in &self.proxy_secrets {
+        for secret in self.proxy_secrets {
             text = crate::credentials::redact_value(&text, secret, false);
         }
         text
@@ -243,5 +309,13 @@ impl ChatClient {
         }
         session.event(attempt, sequence, &value, redacted).await;
         Ok(())
+    }
+}
+
+pub(crate) fn proxy_secrets(config: &crate::ClientConfig) -> Vec<String> {
+    if matches!(config.proxy, crate::ProxyMode::Auto) {
+        crate::config::system_proxy_secrets(|name| std::env::var(name).ok())
+    } else {
+        Vec::new()
     }
 }

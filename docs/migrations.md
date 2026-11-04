@@ -1,5 +1,32 @@
 # API migrations
 
+## S7: shared Runtime and native auxiliary transport binding
+
+Providers adds TransportBinding as a cloneable immutable callback snapshot/shared monitor.
+ChatClient, SystemOneClient and OpenRouterImageClient accept with_transport_binding;
+with_transport_hooks/with_shared_transport_hooks create fresh bindings. for_model clones keep
+the selected binding. Replacing/clearing a binding affects newly created clients; previously
+created clients keep their snapshot and diagnostic history. No default callback is installed.
+
+Runtime adds with_model_transport_hooks/with_model_transport_binding and read-only
+model_transport_catalog/report. Bind before constructing primary/session clients and default
+auxiliary registries. Arbitrary externally supplied ModelProvider objects are not implicitly
+replaced. Reload/resource reload/package-state adoption clone the current host binding;
+RuntimeConfig/history cannot serialize/install/restore it. New loads remain unbound.
+
+Native state/questions/images/assets/modalities aliases and the TypeSafe experimental image
+opt-in header are now protected transport fields. Existing host allowlists using these names
+must move semantic changes to typed preparation APIs. Native clients preserve one-attempt
+semantics, zero preflight usage and reported usage before output validation. The shared driver
+also preserves proxy redaction, response bounds, scoped storage and parent metering.
+
+TransportDiagnostic adds provider/model with serde defaults for older JSON; update direct Rust
+struct literals with those fields. Native client catalog/field/report getters mirror chat.
+No new dependencies, package versions, event/session formats or default features changed.
+See [contract](auxiliary-transport.md), [mixed-client example](../crates/aicoder-runtime/examples/offline_auxiliary_transport.rs)
+and [acceptance](s7-aux-transport-acceptance.md). Actionable lifecycle and final isolated
+Spark/Pi/release acceptance remain roadmap work.
+
 ## S7: compatible-client native transport hooks
 
 Providers exports TransportHooks/TransportHook and bounded header/payload/response/parsed-stream

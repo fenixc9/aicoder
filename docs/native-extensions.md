@@ -47,8 +47,8 @@ generation options and narrower tool declarations before admission. Explicit ful
 prepared executor-bound snapshots, raw-history compaction/rebuild and safe scalar receipts
 keep these views separate from canonical facts. Explicit [provider transport hooks](transport-hooks.md)
 are assembled on a compatible client before registering/selecting its provider route. They do
-not introduce HTTP types into core or load from extension catalogs. Auxiliary transport binding
-and actionable lifecycle stages remain open.
+not introduce HTTP types into core or load from extension catalogs. [Shared Runtime binding](auxiliary-transport.md) covers its native auxiliary clients; actionable
+lifecycle stages remain open.
 
 HookSpec defines local ID, signed priority and a 1 ms–30 s timeout (default two seconds).
 Lower priority runs first; ties preserve extension installation/contribution order. Calls

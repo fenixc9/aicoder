@@ -77,3 +77,7 @@ required-features = ["mcp-stdio"]
 [[example]]
 name = "offline_code_mode"
 required-features = ["code-mode"]
+
+[[example]]
+name = "offline_auxiliary_transport"
+required-features = ["auxiliary-models"]

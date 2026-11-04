@@ -105,6 +105,13 @@ within the declared level range and answer IDs/types must match. Invalid output 
 a fabricated valid answer. Complete result JSON must fit the current tool budget; oversized
 completed results report delivery failure rather than repeating inference.
 
+## Shared native transport
+
+[Runtime transport bindings](auxiliary-transport.md) explicitly select the same immutable
+HTTP callback snapshot for created primary/classifier/image clients. Native input and image
+protocol opt-ins stay owned by the approved plan; response observations cannot alter usage
+or normalization. Bindings remain host objects, never profile/history configuration.
+
 ## Usage, limits and history
 
 Classifier calls are conservative Command tools, independently approved even under Code Mode.
