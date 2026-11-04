@@ -69,6 +69,25 @@ globalThis.models = Object.freeze({
   async getModelOfType(type, provider, id) {
     return (await models.getModelsOfType(type,provider)).find(model=>model.id===id);
   },
+  async generateImages(model, context) {
+    const identity={provider:model.provider,id:model.id};
+    try {
+      if (typeof tools.model_generate_images !== 'function') throw new Error('No host image task tool is available');
+      const input=context.input.map(block=>{
+        if(block.type==='text') return {type:'text',text:block.text};
+        if(block.type!=='image') throw new TypeError('Invalid image generation input');
+        if(block.artifact) return {type:'image',source:{type:'artifact',reference:block.artifact}};
+        if(block.source) return {type:'image',source:block.source};
+        return {type:'image',source:{type:'base64',data:block.data,media_type:block.mimeType || block.media_type}};
+      });
+      return await tools.model_generate_images({model:identity,context:{input}});
+    } catch(error) {
+      const result={provider:identity.provider,model:identity.id,output:[],stopReason:'error',errorMessage:typeof error.message==='string'?error.message:'Image task failed'};
+      const usage=error.details?.error?.details?.usage;
+      if(usage!==undefined) result.usage=usage;
+      return result;
+    }
+  },
   async classify(model, context) {
     const identity={provider:model.provider,id:model.id};
     try {

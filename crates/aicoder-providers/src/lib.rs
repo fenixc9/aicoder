@@ -10,6 +10,8 @@ mod config;
 mod credentials;
 mod error;
 mod event_sink;
+#[cfg(feature = "auxiliary-models")]
+pub mod image_generation;
 mod model;
 mod stream;
 

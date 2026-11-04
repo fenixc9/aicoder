@@ -147,6 +147,7 @@ jobs:
           python3 scripts/check_file_images.py --code-mode
           python3 scripts/check_file_images.py --only
           python3 scripts/check_file_images.py --classifier
+          python3 scripts/check_file_images.py --generate-images
       - name: Optional Web documentation
         env:
           RUSTDOCFLAGS: -D warnings

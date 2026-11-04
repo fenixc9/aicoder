@@ -97,6 +97,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "base64",
  "futures",
  "httpdate",
  "reqwest",

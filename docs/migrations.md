@@ -1,5 +1,33 @@
 # API migrations
 
+## S7: native image-generation tasks
+
+Core adds AuxiliaryModel, retaining ClassifierModel as a source-compatible type alias with
+unchanged classifier JSON fields. ImageGenerationModel flattens its specification in JSON
+and adds text_output; Rust hosts use its typed specification field. New ImageGenerationContext,
+GeneratedBlock, ImageGenerationProvider and ImageGenerationOperation define native image
+requests/raw output and immutable delivery. PreparedTool adds default
+image_generation_operation() returning None. Declare exactly one native operation per plan;
+ambiguous classifier/image plans reject. Both kinds share existing auxiliary admission,
+usage, records and cancellation; no new persisted record or session version is introduced.
+
+ProviderProfile adds image_models, empty when absent; Rust literals need Vec::new(). The
+existing auxiliary-models build feature adds the OpenRouter native modality adapter, reusing
+the already locked optional base64 package. Cargo.lock adds only that local dependency edge;
+no package versions or default features change. Selected profiles may contain classifiers,
+images or both, with shared route/time/response settings. Image profiles default to 120-second
+HTTP and 24 MiB response limits; classifiers keep their 2 MiB response cap. The registered
+model_generate_images name is reserved; add it and model_catalog to explicit leaf allowlists.
+
+models.generateImages returns text and scoped image artifact blocks, unlike Pi's in-memory
+base64 output. Use await image(block) for explicit selection, or pass the block as edit/reference
+input with the optional images decoder. Do not assume an output image has data/mimeType.
+SDK GeneratedBlock preserves raw bytes for host-owned storage. Storage is required before
+inference; --no-session has no implicit output store. Failed staging/publishing retains known
+usage and incomplete-delivery receipts without repeating completed inference. Raw response
+bytes never become canonical history, while legitimate input calls/scripts are preserved.
+See [contract](image-generation.md) and [acceptance](s7-image-generation-acceptance.md).
+
 ## S7: native auxiliary classifiers
 
 Core adds the auxiliary module for typed native classifier models, questions/answers,
@@ -34,8 +62,9 @@ in explicit leaf allowlists. No default features, package versions or dependenci
 models.getModelsOfType/getAvailableOfType/getModelOfType and models.classify use typed native
 System One requests, not generic chat inference. Missing usage is estimated with uncertainty;
 reported usage survives invalid output. Completed tasks are not retried after failed delivery.
-Native classifier/image input protocols are explicit host settings. Image generation remains
-pending. See [contract](auxiliary-models.md) and [acceptance](s7-classifiers-acceptance.md).
+Native classifier/image input protocols are explicit host settings. Image generation has a
+separate [contract](image-generation.md). See [classifier contract](auxiliary-models.md) and
+[acceptance](s7-classifiers-acceptance.md).
 
 ## S7: Code Mode only and root tool catalogs
 

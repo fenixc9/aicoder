@@ -147,6 +147,8 @@ pub struct ProviderProfile {
     #[serde(default)]
     pub classifiers: Vec<aicoder_core::auxiliary::ClassifierModel>,
     #[serde(default)]
+    pub image_models: Vec<aicoder_core::auxiliary::ImageGenerationModel>,
+    #[serde(default)]
     pub classifier_image_input: aicoder_providers::ClassifierImageInput,
     #[serde(default)]
     pub models: Vec<aicoder_core::model::ModelSpec>,

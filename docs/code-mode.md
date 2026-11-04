@@ -25,7 +25,7 @@ charges the parent run. Unawaited calls are cancelled when a script ends; comple
 are not undone. Cancellation/timeout/steering closes the program, expires its intents and
 awaits bounded engine cleanup. Dropping a future still signals stop independently of Tokio.
 
-The VM exposes tools, text/console/return, explicit image output, typed classifier helpers,
+The VM exposes tools, text/console/return, explicit image output, typed classifier/image-generation helpers,
 discovery and bounded store/load. It has no Node,
 filesystem, network, timers, module loader, credential lookup or direct model-service client.
 Memory, stack, interrupt checks, wall time, calls, queues, JSON and output have explicit limits.
@@ -207,7 +207,7 @@ Trusted SDK hosts can adjust validated CodeModeConfig/CompositionLimits within h
 model input cannot raise them. Parent tool-call accounting includes the outer call plus every
 admitted leaf. Parent output accounting includes leaf results even when the script filters
 them away; filtering saves subsequent model context, not execution budget. Provider usage
-continues to charge actual model requests. The composition engine creates no independent run budget. Native classifier helpers emit
+continues to charge actual model requests. The composition engine creates no independent run budget. Native classifier/image-generation helpers emit
 ordinary metered host-tool calls; their native usage/reservations count toward the same parent
 run. The image helper emits provided/captured media through existing tools. The existing calls-per-round setting bounds the provider's outer batch and also caps
 parallel leaf execution; sequential leaf totals use the separate program/root call limits.
@@ -215,7 +215,8 @@ parallel leaf execution; sequential leaf totals use the separate program/root ca
 Atomic admission covers ordinary siblings in the same batch: a program cannot spend the
 remaining root quota and then let a later mutation escape it. Read-only status comes from
 trusted host registrations, never JS/schema/MCP annotations. Command tools, including
-scripts, retain conservative approval and execute serialization.
+scripts, retain conservative approval and default execution serialization. Host-declared
+independent native classifier/image tasks share four auxiliary slots without relaxing approval.
 
 Composition facts use the existing session-v3 Extension record with namespace
 `aicoder.composition.v1`; the branch store uses `aicoder.codemode.store.v1`. Started/Call/Result/
@@ -230,10 +231,11 @@ these unknown extension records without projecting their payload as model instru
 ## Pi comparison and limits
 
 This covers the S6 bounded JavaScript composition item: actual promises, loops, parallel
-reads, filtering, discovery, explicit output and branch state over existing tools. The pinned
-Native classifier catalog/execution helpers now use [shared auxiliary task metering](auxiliary-models.md).
-Pi also describes image-model generation, source pragma/options syntax and TypeScript extension
-ABI; those remain outside the implemented paths listed here. Call available media tools through their normal result/artifact contracts.
+reads, filtering, discovery, explicit output and branch state over existing tools.
+Native classifier helpers use [shared auxiliary task metering](auxiliary-models.md), and
+models.generateImages performs [native image generation](image-generation.md) with scoped
+artifact output and explicit image() selection. Source pragma/options syntax and identical
+TypeScript extension ABI remain protocol/distribution differences.
 This is functional coverage, not evidence of equal coding success or performance. S7 retains
 the full matrix review and comparison under identical models/tasks/budgets.
 

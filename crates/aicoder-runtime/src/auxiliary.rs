@@ -1,8 +1,10 @@
 //! Trusted model catalogs and immutable prepared non-chat operations.
+mod images;
 use crate::*;
 use aicoder_core::{auxiliary::*, model::*, tools::*};
 use aicoder_providers::auxiliary::SystemOneClient;
 use async_trait::async_trait;
+pub use images::{MODEL_GENERATE_IMAGES_TOOL, PreparedImageGeneration};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -16,6 +18,7 @@ struct Entry {
 struct Catalog {
     entries: Vec<Entry>,
     chat: Vec<Value>,
+    images: Vec<images::Entry>,
 }
 impl Runtime {
     pub(crate) fn register_auxiliary_tools(&self, registry: &mut ToolRegistry) -> Result<()> {
@@ -23,6 +26,7 @@ impl Runtime {
             return Ok(());
         }
         let mut entries = Vec::new();
+        let mut image_entries = Vec::new();
         for route in &self.config.classifier_routes {
             let variable = route
                 .config
@@ -35,22 +39,40 @@ impl Runtime {
                 variable,
                 provider: route.config.provider_id.clone(),
             });
-            let provider = Arc::new(SystemOneClient::new(
-                route.config.clone(),
-                credentials,
-                route.models.clone(),
-                route.images,
-            )?);
-            for model in &route.models {
-                entries.push(Entry {
-                    model: model.clone(),
-                    provider: provider.clone(),
-                    available,
-                });
+            if !route.models.is_empty() {
+                let provider = Arc::new(SystemOneClient::new(
+                    route.config.clone(),
+                    credentials.clone(),
+                    route.models.clone(),
+                    route.images,
+                )?);
+                for model in &route.models {
+                    entries.push(Entry {
+                        model: model.clone(),
+                        provider: provider.clone(),
+                        available,
+                    });
+                }
+            }
+            if !route.image_models.is_empty() {
+                let provider = Arc::new(
+                    aicoder_providers::image_generation::OpenRouterImageClient::new(
+                        route.config.clone(),
+                        credentials,
+                        route.image_models.clone(),
+                    )?,
+                );
+                for model in &route.image_models {
+                    image_entries.push(images::Entry {
+                        model: model.clone(),
+                        provider: provider.clone(),
+                        available,
+                    });
+                }
             }
         }
         anyhow::ensure!(
-            entries.len() <= 128,
+            entries.len() + image_entries.len() <= 128,
             "auxiliary catalog exceeds 128 entries"
         );
         let mut chat = Vec::new();
@@ -69,11 +91,16 @@ impl Runtime {
         }) {
             chat.push(json!({"type":"chat","provider":self.config.provider.provider_id,"id":self.config.provider.model,"name":self.config.provider.model,"input":["text"],"available":available}));
         }
-        let catalog = Arc::new(Catalog { entries, chat });
+        let catalog = Arc::new(Catalog {
+            entries,
+            chat,
+            images: image_entries,
+        });
         registry.register(CatalogTool(catalog.clone()))?;
         if !catalog.entries.is_empty() {
-            registry.register(ClassifyTool(catalog))?;
+            registry.register(ClassifyTool(catalog.clone()))?;
         }
+        images::register(catalog, registry)?;
         Ok(())
     }
 }
@@ -111,6 +138,7 @@ impl ExecutableTool for CatalogTool {
         }
         let mut models = self.0.chat.clone();
         models.extend(self.0.entries.iter().map(|entry|json!({"type":"classifier","provider":entry.model.provider,"id":entry.model.id,"name":entry.model.name,"input":if entry.model.images{vec!["text","image"]}else{vec!["text"]},"contextWindow":entry.model.context_tokens,"api":"system_one","available":entry.available})));
+        models.extend(self.0.images.iter().map(images::Entry::metadata));
         models.retain(|m| {
             query.kind.as_ref().is_none_or(|kind| m["type"] == *kind)
                 && query
@@ -185,37 +213,14 @@ impl ExecutableTool for ClassifyTool {
             ToolFailure::new("invalid_arguments", "Invalid bounded classifier input")
         })?;
         for source in &mut context.images {
-            if let ImageSource::Artifact { reference } = source {
-                #[cfg(feature = "images")]
-                {
-                    use aicoder_core::tool_images::ToolImageResolver;
-                    let store = tool_context.artifact_store().ok_or_else(|| {
-                        ToolFailure::new(
-                            "artifact_store_unavailable",
-                            "Classifier image needs current host storage",
-                        )
-                    })?;
-                    let image = crate::images::ArtifactImageResolver::new(store.clone())
-                        .resolve(reference, aicoder_core::TurnExecutionContext::new())
-                        .await
-                        .map_err(|_| {
-                            ToolFailure::new(
-                                "classifier_image",
-                                "Classifier image could not be captured",
-                            )
-                        })?;
-                    *source = image.source().clone();
-                }
-                #[cfg(not(feature = "images"))]
-                {
-                    let _ = (reference, tool_context);
-                    return Err(ToolFailure::new(
-                        "classifier_image",
-                        "Artifact image input requires the images feature",
-                    ));
-                }
-            }
+            resolve_source(source, tool_context).await?;
         }
+        context.validate(&entry.model).map_err(|_| {
+            ToolFailure::new(
+                "invalid_arguments",
+                "Captured classifier image exceeds bounds",
+            )
+        })?;
         let mut preview=json!({"provider":entry.model.provider,"model":entry.model.id,"state":context.state,"questions":context.questions,"images":context.images.len()}).to_string();
         let truncated = preview.len() > 24000;
         if truncated {
@@ -282,4 +287,36 @@ impl AuxiliaryOperation for PreparedClassification {
         }
         Ok(ToolSuccess::new(output))
     }
+}
+
+async fn resolve_source(
+    source: &mut ImageSource,
+    tool_context: &ToolContext,
+) -> Result<(), ToolFailure> {
+    if let ImageSource::Artifact { reference } = source {
+        #[cfg(feature = "images")]
+        {
+            use aicoder_core::tool_images::ToolImageResolver;
+            let store = tool_context.artifact_store().ok_or_else(|| {
+                ToolFailure::new(
+                    "artifact_store_unavailable",
+                    "Image input needs current host storage",
+                )
+            })?;
+            let image = crate::images::ArtifactImageResolver::new(store.clone())
+                .resolve(reference, aicoder_core::TurnExecutionContext::new())
+                .await
+                .map_err(|_| ToolFailure::new("auxiliary_image", "Image could not be captured"))?;
+            *source = image.source().clone();
+        }
+        #[cfg(not(feature = "images"))]
+        {
+            let _ = (reference, tool_context);
+            return Err(ToolFailure::new(
+                "auxiliary_image",
+                "Artifact image input requires the images feature",
+            ));
+        }
+    }
+    Ok(())
 }

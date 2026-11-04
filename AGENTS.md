@@ -129,6 +129,9 @@
   Auxiliary models use immutable native task plans, explicit host routes and parent token
   reservations. Charge failed/cancelled attempts, retain uncertainty, never infer free usage
   or retry completed requests; keep primary/auxiliary usage separate for pricing.
+  Generated images use bounded native modality requests and scoped raw artifacts. Stage the
+  complete image set before publication, retain partial receipts on delivery failure, and
+  select model previews explicitly without serializing response base64 into domain history.
 - Keep public APIs and persisted session formats compatible when practical.
   Document intentional breaking changes and provide a migration path.
 

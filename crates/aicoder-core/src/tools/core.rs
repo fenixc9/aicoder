@@ -91,6 +91,13 @@ pub enum PreparedToolEffects<'a> {
 /// An immutable operation prepared before approval and consumed once after approval.
 #[async_trait]
 pub trait PreparedTool: Send + Sync {
+    /// Optional immutable image task, sharing auxiliary admission and usage accounting.
+    fn image_generation_operation(
+        &self,
+    ) -> Option<&dyn crate::auxiliary::ImageGenerationOperation> {
+        None
+    }
+
     /// Optional non-chat model operation, invoked only by a metered Agent dispatcher.
     fn auxiliary_operation(&self) -> Option<&dyn crate::auxiliary::AuxiliaryOperation> {
         None

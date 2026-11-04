@@ -8,9 +8,10 @@ rust-version.workspace = true
 workspace = true
 
 [features]
-auxiliary-models = []
+auxiliary-models = ["dep:base64"]
 
 [dependencies]
+base64 = { version = "0.22", optional = true }
 aicoder-core.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true

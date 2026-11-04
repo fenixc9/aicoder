@@ -67,5 +67,6 @@ impl CodeModePolicy {
 pub(crate) struct ClassifierRoute {
     pub config: aicoder_providers::ClientConfig,
     pub models: Vec<aicoder_core::auxiliary::ClassifierModel>,
+    pub image_models: Vec<aicoder_core::auxiliary::ImageGenerationModel>,
     pub images: aicoder_providers::ClassifierImageInput,
 }

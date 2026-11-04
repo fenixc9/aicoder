@@ -972,33 +972,73 @@ pub(crate) fn resolve(
                 .context("selected auxiliary profile is not defined in trusted user settings")?;
             profile_variables(Some(profile), false)?;
             ensure!(
-                !profile.classifiers.is_empty() && profile.classifiers.len() <= 64,
-                "auxiliary profile needs a bounded classifier catalog"
+                (1..=64).contains(&(profile.classifiers.len() + profile.image_models.len())),
+                "auxiliary profile needs a bounded native model catalog"
             );
             let provider = profile.provider_id.clone().unwrap_or_else(|| name.clone());
             for model in &profile.classifiers {
                 model.validate()?;
                 ensure!(
                     model.provider == provider
-                        && classifier_ids.insert((model.provider.clone(), model.id.clone())),
+                        && classifier_ids.insert((
+                            "classifier",
+                            model.provider.clone(),
+                            model.id.clone()
+                        )),
                     "duplicate or mismatched classifier route"
+                );
+            }
+            for model in &profile.image_models {
+                let model = &model.specification;
+                model.validate()?;
+                ensure!(
+                    model.provider == provider
+                        && classifier_ids.insert((
+                            "image",
+                            model.provider.clone(),
+                            model.id.clone()
+                        )),
+                    "duplicate or mismatched image route"
                 );
             }
             let route = ClientConfig {
                 provider_id: provider,
                 base_url: profile.base_url.clone(),
                 api_key_env: Some(profile.api_key_env.clone()),
-                model: profile.classifiers[0].id.clone(),
-                timeout: profile.timeout.unwrap_or(30),
+                model: profile
+                    .classifiers
+                    .first()
+                    .map(|m| m.id.clone())
+                    .or_else(|| {
+                        profile
+                            .image_models
+                            .first()
+                            .map(|m| m.specification.id.clone())
+                    })
+                    .expect("nonempty auxiliary catalog"),
+                timeout: profile
+                    .timeout
+                    .unwrap_or(if profile.image_models.is_empty() {
+                        30
+                    } else {
+                        120
+                    }),
                 connect_timeout: profile.connect_timeout.unwrap_or(5),
                 max_retries: 0,
                 proxy: profile.proxy.as_deref().unwrap_or("auto").parse()?,
-                max_response_bytes: profile.max_response_bytes.unwrap_or(2 * 1024 * 1024),
+                max_response_bytes: profile.max_response_bytes.unwrap_or(
+                    if profile.image_models.is_empty() {
+                        2 * 1024 * 1024
+                    } else {
+                        24 * 1024 * 1024
+                    },
+                ),
                 ..Default::default()
             };
             classifier_routes.push(crate::code_mode::ClassifierRoute {
                 config: route,
                 models: profile.classifiers.clone(),
+                image_models: profile.image_models.clone(),
                 images: profile.classifier_image_input,
             });
         }

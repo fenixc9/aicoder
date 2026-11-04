@@ -1,4 +1,5 @@
 //! Typed non-chat model tasks. Host routes and credentials never come from task input/history.
+mod images;
 use crate::{
     TurnExecutionContext,
     model::*,
@@ -6,6 +7,7 @@ use crate::{
     tools::{ToolContext, ToolFailure, ToolSuccess},
 };
 use async_trait::async_trait;
+pub use images::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -16,7 +18,7 @@ pub const AUXILIARY_NAMESPACE: &str = "aicoder.auxiliary.v1";
 pub const MAX_AUXILIARY_CALLS: usize = 128;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ClassifierModel {
+pub struct AuxiliaryModel {
     pub provider: String,
     pub id: String,
     #[serde(default)]
@@ -34,7 +36,8 @@ fn default_context() -> u64 {
 fn default_reservation() -> u32 {
     1024
 }
-impl ClassifierModel {
+pub type ClassifierModel = AuxiliaryModel;
+impl AuxiliaryModel {
     pub fn validate(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             [&self.provider, &self.id]
@@ -43,7 +46,7 @@ impl ClassifierModel {
                 && self.name.len() <= 256
                 && (1..=1024 * 1024).contains(&self.context_tokens)
                 && self.output_reservation <= 8192,
-            "invalid classifier specification"
+            "invalid auxiliary model specification"
         );
         Ok(())
     }
@@ -123,21 +126,7 @@ impl ClassifierContext {
             anyhow::ensure!(valid, "invalid classifier criteria");
         }
         for image in &self.images {
-            match image {
-                ImageSource::Base64 { media_type, data } => anyhow::ensure!(
-                    crate::media::image_media_type(media_type).is_some()
-                        && crate::agent_input::inline_base64(data)
-                        && data.len() <= 2 * 1024 * 1024,
-                    "invalid classifier image"
-                ),
-                ImageSource::Artifact { reference } => anyhow::ensure!(
-                    reference.validate().is_ok() && reference.is_image(),
-                    "invalid classifier image reference"
-                ),
-                ImageSource::Url { .. } => {
-                    anyhow::bail!("classifier tasks do not fetch image URLs")
-                }
-            }
+            validate_image_source(image)?;
         }
         #[derive(Serialize)]
         struct Metadata<'a> {
@@ -294,4 +283,21 @@ pub enum AuxiliaryRecord {
     Finished {
         attempt: AuxiliaryAttempt,
     },
+}
+
+fn validate_image_source(image: &ImageSource) -> anyhow::Result<()> {
+    match image {
+        ImageSource::Base64 { media_type, data } => anyhow::ensure!(
+            crate::media::image_media_type(media_type).is_some()
+                && crate::agent_input::inline_base64(data)
+                && data.len() <= 2 * 1024 * 1024,
+            "invalid auxiliary image"
+        ),
+        ImageSource::Artifact { reference } => anyhow::ensure!(
+            reference.validate().is_ok() && reference.is_image(),
+            "invalid auxiliary image reference"
+        ),
+        ImageSource::Url { .. } => anyhow::bail!("auxiliary tasks do not fetch image URLs"),
+    }
+    Ok(())
 }

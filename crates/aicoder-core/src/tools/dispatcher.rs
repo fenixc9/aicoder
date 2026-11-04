@@ -741,14 +741,12 @@ impl ToolDispatcher {
         } else {
             let execution = timeout(self.config.tool_timeout, async {
                 match prepared {
-                    Some(ref plan) if plan.auxiliary_operation().is_some() => {
-                        self.execute_auxiliary(
-                            plan.auxiliary_operation().expect("auxiliary plan"),
-                            call,
-                            tool_context,
-                            scope,
-                        )
-                        .await
+                    Some(ref plan)
+                        if plan.auxiliary_operation().is_some()
+                            || plan.image_generation_operation().is_some() =>
+                    {
+                        self.execute_auxiliary(plan.as_ref(), call, tool_context, scope)
+                            .await
                     }
                     Some(plan) => plan.execute(tool_context).await,
                     None => tool.execute(tool_context, arguments).await,

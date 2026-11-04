@@ -3,8 +3,9 @@
 Auxiliary classifiers answer typed bool/choice/score questions about bounded JSON state.
 They use their native System One endpoint, not an arbitrary chat request or a second agent
 loop. Core owns typed contracts, token admission, cancellation and usage records. Providers
-own HTTP/credentials; runtime owns trusted model routes and immutable prepared tools. The
-image-model generation API remains a separate open roadmap item.
+own HTTP/credentials; runtime owns trusted model routes and immutable prepared tools.
+[Image generation](image-generation.md) uses the same meter through a separate typed
+request/provider/delivery contract.
 
 ## Host configuration
 
@@ -40,7 +41,7 @@ define routes, credentials or storage. Nothing is loaded from session state as a
 ```
 
 The main agent still uses its independently selected chat profile. model_profiles defaults
-to empty and admits at most 16 trusted profiles / 128 classifier entries. Native route settings
+to empty and admits at most 16 trusted profiles / 128 native classifier/image entries. Native route settings
 are private and omitted from RuntimeConfig serialization; snapshots contain only selected
 profile names and normal credential reference names. Values never enter previews/errors.
 AICODER_MODEL_PROFILES is a JSON list equivalent; AICODER_MAX_AUXILIARY_CALLS controls the
@@ -69,8 +70,8 @@ Runtime registers model_catalog and model_classify when selected routes exist; C
 also offers the read-only catalog when no classifiers are selected. Model catalog entries
 contain type/provider/id/name/input metadata and configured credential availability, never
 URLs or keys. Available means the configured reference is nonempty, not a live service probe.
-Chat models can be listed but cannot be executed as classifiers. An empty image-model list
-is not an implementation of generation. Registry collisions fail closed.
+Chat models can be listed but cannot be executed as classifiers. Image models use the separate
+[image-generation contract](image-generation.md). Registry collisions fail closed.
 
 ```js
 const judge = await models.getModelOfType("classifier", "typesafe", "jev-latest");

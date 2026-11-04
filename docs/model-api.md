@@ -16,7 +16,8 @@ and [run outcomes and budgets](run-outcomes.md) are shared across hosts.
 Optional [auxiliary classifiers](auxiliary-models.md) use the separate core
 ClassifierProvider/ClassifierContext contract for native typed questions. Prepared tasks
 share parent admission, cancellation and usage accounting without a nested chat loop.
-Provider routes remain explicit host configuration; image generation is not yet implemented.
+[ImageGenerationProvider](image-generation.md) adds native image tasks and typed raw output
+under the same auxiliary meter. Provider routes remain explicit host configuration.
 
 ## Types and ownership
 
