@@ -97,6 +97,11 @@
   recheck grants and steering after awaited receipts. Result transformations retain actual
   execution/capture status, narrow artifact exposure, and cannot retry completed effects.
   Capture known completion before output normalization can replace error details with previews.
+  Request hooks own ephemeral views, never canonical edits or routing authority. Admit/count the
+  transformed view, summarize raw context before rebuilding it, and journal before provider IO.
+  Freeze prepared views per executor; applied controls invalidate them. Record safe effective
+  options with explicit omissions, never private view text, stop strings or schema bodies.
+  Recheck elapsed budgets after callback/receipt work and before summary or main provider IO.
 - Process tools use explicit host launch settings and conservative capabilities. Keep remote
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership

@@ -114,6 +114,12 @@ impl EvaluationJournal {
 }
 #[async_trait]
 impl RunJournal for EvaluationJournal {
+    async fn record_request_view(
+        &self,
+        record: &aicoder_core::extensions::RequestViewRecord,
+    ) -> Result<()> {
+        self.record(json!({"kind":"request_view","data":record}))
+    }
     async fn record_interception(
         &self,
         record: &aicoder_core::extensions::InterceptionRecord,

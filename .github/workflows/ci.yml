@@ -60,6 +60,9 @@ jobs:
           cargo run --locked -p aicoder-runtime --example offline_tool_interception -- --deny
           cargo run --locked -p aicoder-runtime --features code-mode --example offline_tool_interception -- --code-mode
           cargo run --locked -p aicoder-runtime --features code-mode --example offline_tool_interception -- --code-mode --deny
+          cargo test --locked -p aicoder-runtime --no-default-features --test request_views
+          cargo run --locked -p aicoder-runtime --example offline_request_views
+          cargo run --locked -p aicoder-runtime --example offline_request_views -- --stream
       - name: Planning, protected paths and read-only worker Agent extensions
         run: cargo run --locked -p aicoder-runtime --example coding_extensions
       - name: Versioned process tools and owned-plan approval

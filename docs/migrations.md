@@ -1,5 +1,39 @@
 # API migrations
 
+## S7: provider-neutral request views
+
+Extension adds request_hook(HookSpec, RequestHookScope, Arc<dyn RequestHook>). New typed
+RequestEdit/RequestMessages own bounded message/option/tool-subset changes; identity, routing,
+stream mode and definition schemas remain host controlled. Conversation scope preserves the
+declared prefix; SystemAndConversation explicitly replaces it. No hooks are installed by default.
+Each view validates complete tool units/capabilities and is counted before window admission.
+
+prepare_input now freezes a private executor-bound first view when request hooks exist.
+validate_model_selection requires this async preparation with installed hooks and validates that
+view before session/model writes; request-only effort does not become branch selection. Applied
+controls invalidate snapshots. ExecutionInput's public constructors/getters remain compatible;
+its new private cache is neither serialized nor history-restored. Default paths keep borrowed
+preflight measurement. Each round starts from the original host options/catalog.
+
+Automatic compaction receives raw context/history and retains its ordinary checkpoints/usage,
+then reapplies hooks to the reduced view before final validation, counting and parent clamping.
+Native hooks must be read-only/idempotent across preparation/admission/post-compaction passes.
+A final view still requiring compaction rejects rather than starting an unbounded retry loop.
+
+RunJournal gains record_request_view(), rejecting by default. Custom journals must implement it
+before enabling request hooks, including callbacks returning None. Unit journals explicitly
+support ephemeral runs; session-v3/eval journals store inert RequestViewRecord observations.
+The new aicoder.request-view.v1 namespace does not shift transcript indices or restore authority.
+No session/event version, package, dependency or default feature changes are introduced.
+
+Receipts observe effective tool names/choice, counts and safe generation scalars. Stop text,
+schema names/bodies and view messages are not stored; RequestOptionSummary.complete marks
+omissions. These are not full-payload fingerprints. ModelContextInfo's selected effort stays the
+host preference while receipts identify effective request effort. See [contract](request-views.md),
+[HTTP example](../crates/aicoder-runtime/examples/offline_request_views.rs) and
+[acceptance](s7-request-views-acceptance.md). Raw HTTP/provider and actionable lifecycle stages
+remain open in the Pi audit.
+
 ## S7: tool argument and delivered-result interception
 
 Extension adds tool_call_hook and tool_result_hook registrations with existing HookSpec ordering,

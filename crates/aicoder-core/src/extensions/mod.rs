@@ -2,12 +2,19 @@
 mod commands;
 mod hooks;
 mod interception;
+mod request;
 pub use interception::{
     INTERCEPTION_NAMESPACE, InterceptionChange, InterceptionRecord, MAX_INTERCEPTION_BYTES,
     MAX_INTERCEPTION_CHAIN_BYTES, ToolCallEdit, ToolCallHook, ToolCallHookInput,
     ToolExecutionStatus, ToolResultEdit, ToolResultHook, ToolResultHookInput,
 };
 pub(crate) use interception::{ordered, replace_result};
+pub use request::{
+    MAX_REQUEST_VIEW_BYTES, REQUEST_VIEW_NAMESPACE, RequestChange, RequestEdit, RequestHook,
+    RequestHookInput, RequestHookPass, RequestHookScope, RequestMessages, RequestOptionSummary,
+    RequestViewRecord, RequestViewStage,
+};
+pub(crate) use request::{PreparedRequestView, RequestRegistration, apply_edit};
 pub mod process_protocol;
 mod registry;
 pub use commands::{CommandContext, CommandOutput, CommandRequest, CommandSpec, ExtensionCommand};

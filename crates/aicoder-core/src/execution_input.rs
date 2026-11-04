@@ -38,6 +38,7 @@ pub struct ExecutionInput {
     pub(crate) history: Vec<Message>,
     pub(crate) system_prefix_len: usize,
     pub(crate) source: Option<SessionContextSource>,
+    pub(crate) prepared_request: Option<crate::extensions::PreparedRequestView>,
     pub(crate) prepared_context: Option<serde_json::Value>,
     pub(crate) started: Option<tokio::time::Instant>,
 }
@@ -53,6 +54,7 @@ impl ExecutionInput {
             request,
             system_prefix_len: prefix,
             source: None,
+            prepared_request: None,
             prepared_context: None,
             started: None,
         }
@@ -88,6 +90,7 @@ impl ExecutionInput {
             history,
             system_prefix_len,
             source: None,
+            prepared_request: None,
             prepared_context: None,
             started: None,
         })

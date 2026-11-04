@@ -50,6 +50,7 @@ pub struct Extension {
     tools: Vec<Arc<dyn ExecutableTool>>,
     providers: Vec<(String, Arc<dyn ModelProvider>)>,
     policies: Vec<(String, Arc<dyn ContextPolicy>)>,
+    requests: Vec<RequestRegistration>,
     contexts: Vec<Registered<dyn ContextHook>>,
     guards: Vec<Registered<dyn ToolHook>>,
     call_hooks: Vec<Registered<dyn ToolCallHook>>,
@@ -79,6 +80,7 @@ impl Extension {
             tools: Vec::new(),
             providers: Vec::new(),
             policies: Vec::new(),
+            requests: Vec::new(),
             contexts: Vec::new(),
             guards: Vec::new(),
             call_hooks: Vec::new(),
@@ -197,6 +199,28 @@ impl Extension {
             owner: self.manifest.id.clone(),
             spec,
             callback: hook,
+        });
+        Ok(self)
+    }
+    pub fn request_hook(
+        &mut self,
+        spec: HookSpec,
+        scope: RequestHookScope,
+        hook: Arc<dyn RequestHook>,
+    ) -> Result<&mut Self> {
+        spec.validate()?;
+        let kind = match scope {
+            RequestHookScope::Conversation => "request_hook_conversation",
+            RequestHookScope::SystemAndConversation => "request_hook_system",
+        };
+        self.register(kind, &spec.id, Some(spec.priority), size(&spec, 1024)?)?;
+        self.requests.push(RequestRegistration {
+            hook: Registered {
+                owner: self.manifest.id.clone(),
+                spec,
+                callback: hook,
+            },
+            scope,
         });
         Ok(self)
     }
@@ -468,6 +492,15 @@ impl ExtensionSet {
             .flat_map(|e| e.guards.iter().cloned())
             .collect();
         hooks.sort_by_key(|h| h.spec.priority);
+        hooks
+    }
+    pub(crate) fn request_hooks(&self) -> Vec<RequestRegistration> {
+        let mut hooks = self
+            .extensions
+            .iter()
+            .flat_map(|e| e.requests.iter().cloned())
+            .collect::<Vec<_>>();
+        hooks.sort_by_key(|r| r.hook.spec.priority);
         hooks
     }
     pub(crate) fn call_hooks(&self) -> Vec<Registered<dyn ToolCallHook>> {

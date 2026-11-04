@@ -19,7 +19,7 @@ preempt a blocking callback or recover from process exit/abort/allocation failur
 ## Registration and authority
 
 Contributions include ExecutableTool, ModelProvider routes, named ContextPolicy objects,
-ContextHook, ToolHook, ToolCallHook/ToolResultHook, AgentEventHandler observers and ExtensionCommand. Existing public
+ContextHook, RequestHook, ToolHook, ToolCallHook/ToolResultHook, AgentEventHandler observers and ExtensionCommand. Existing public
 traits stay authoritative; no parallel execution loop or provider-specific core types appear.
 
 - IDs/names are 1–64 ASCII letters/digits/dot/underscore/hyphen; versions are 1–128 graphic
@@ -41,6 +41,11 @@ traits stay authoritative; no parallel execution loop or provider-specific core 
   command reply or stored catalog into an approval or restored session grant.
 
 ## Interception
+
+[RequestHook](request-views.md) additionally owns request-local conversation/system views,
+generation options and narrower tool declarations before admission. Explicit full-prefix scope,
+prepared executor-bound snapshots, raw-history compaction/rebuild and safe scalar receipts
+keep these views separate from canonical facts. HTTP payload/header stages remain open.
 
 HookSpec defines local ID, signed priority and a 1 ms–30 s timeout (default two seconds).
 Lower priority runs first; ties preserve extension installation/contribution order. Calls

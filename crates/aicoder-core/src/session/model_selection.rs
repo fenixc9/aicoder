@@ -57,6 +57,28 @@ impl TurnExecutor {
                 input.request.messages.extend(messages);
                 input.prepared_context = Some(prepared.provenance);
             }
+            if self.has_request_hooks()
+                && input
+                    .prepared_request
+                    .as_ref()
+                    .is_none_or(|v| v.owner != self.request_owner)
+            {
+                let spec = self.provider.model_spec(&input.request.model)?;
+                let mut request = input.request.clone();
+                request.messages =
+                    crate::tokens::model_messages(&request.messages, &spec).into_owned();
+                input.prepared_request = Some(
+                    self.prepare_request_view(
+                        request,
+                        input.system_prefix_len,
+                        &input.history,
+                        1,
+                        crate::extensions::RequestHookPass::Preparation,
+                        context,
+                    )
+                    .await?,
+                );
+            }
             Ok::<_, anyhow::Error>(())
         };
         if let Some(deadline) = deadline {
@@ -154,9 +176,18 @@ impl TurnExecutor {
                     .any(char::is_control),
             "invalid model selection identity"
         );
-        let mut request = std::borrow::Cow::Borrowed(&input.request);
+        let prepared = input
+            .prepared_request
+            .as_ref()
+            .filter(|v| v.owner == self.request_owner);
+        ensure!(
+            !self.has_request_hooks() || prepared.is_some(),
+            "prepare_input must freeze request hooks before validating model selection"
+        );
+        let mut request =
+            std::borrow::Cow::Borrowed(prepared.map_or(&input.request, |v| &v.request));
         let definitions = self.model_tool_definitions();
-        if request.tools.is_empty() && !definitions.is_empty() {
+        if prepared.is_none() && request.tools.is_empty() && !definitions.is_empty() {
             request.to_mut().tools = definitions;
         } else {
             ensure!(
@@ -177,7 +208,7 @@ impl TurnExecutor {
                 .count()
         };
         if let std::borrow::Cow::Owned(projected) =
-            crate::tokens::model_messages(&input.request.messages, &spec)
+            crate::tokens::model_messages(&request.messages, &spec)
         {
             request.to_mut().messages = projected;
         }
@@ -206,7 +237,7 @@ impl TurnExecutor {
             anyhow::bail!("context policy rejected model selection: {code}");
         }
         Ok(ModelSelectionReport {
-            reasoning_effort: request.options.reasoning_effort,
+            reasoning_effort: input.request.options.reasoning_effort,
             context_limit: spec.context_tokens,
             spec,
             input_token_estimate: estimate,

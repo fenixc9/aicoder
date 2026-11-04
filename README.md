@@ -33,6 +33,8 @@ context/guard hooks, observers and commands explicitly in Rust hosts; the same c
 retains approval, cancellation, budgets and canonical sessions.
 [Tool interception](docs/tool-interception.md) adds ordered argument normalization before owned
 approval and result transformations with explicit execution receipts and artifact narrowing.
+[Request views](docs/request-views.md) transform outgoing context/options/tool subsets before
+admission, preserving canonical history and raw summary checkpoints.
 [Explicit host launch files](docs/host-extensions.md) enable process/MCP tools in CLI, TUI and Web.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime

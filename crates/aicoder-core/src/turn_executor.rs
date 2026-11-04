@@ -1,4 +1,5 @@
 //! Executes one agent turn through its model, tool, and completion-verification rounds.
+mod request_view;
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -46,6 +47,8 @@ pub(crate) struct RunScope {
     state: AgentRunStateMachine,
 }
 pub struct TurnExecutor {
+    pub(crate) request_owner: uuid::Uuid,
+    request_hooks: Vec<crate::extensions::RequestRegistration>,
     model_tools: Option<Vec<String>>,
     extensions: Option<Arc<crate::extensions::ExtensionSet>>,
     tool_image_resolver: Option<Arc<dyn crate::tool_images::ToolImageResolver>>,
@@ -95,6 +98,8 @@ impl TurnExecutor {
         config: TurnExecutionConfig,
     ) -> Self {
         Self {
+            request_owner: uuid::Uuid::new_v4(),
+            request_hooks: Vec::new(),
             model_tools: None,
             extensions: None,
             tool_image_resolver: None,
@@ -380,6 +385,7 @@ impl TurnExecutor {
             system_prefix_len,
             source,
             prepared_context,
+            prepared_request,
             started,
         } = input;
         let context = context.child();
@@ -420,7 +426,7 @@ impl TurnExecutor {
             }
             Ok(()) => {
                 let inner = self.run_inner(
-                    (request, system_prefix_len),
+                    (request, system_prefix_len, prepared_request),
                     &events,
                     &mut state,
                     &context,
@@ -567,7 +573,11 @@ impl TurnExecutor {
 
     async fn run_inner(
         &self,
-        (mut request, system_prefix_len): (ModelRequest, usize),
+        (mut request, system_prefix_len, mut prepared_request): (
+            ModelRequest,
+            usize,
+            Option<crate::extensions::PreparedRequestView>,
+        ),
         events: &AgentEventEmitter,
         state: &mut AgentRunStateMachine,
         context: &TurnExecutionContext,
@@ -580,6 +590,7 @@ impl TurnExecutor {
         }
         limits.check()?;
 
+        let mut context_prefix_len = system_prefix_len;
         let mut context_messages = std::mem::take(&mut request.messages);
         if progress.input_context.is_none()
             && let Some(provider) = &self.input_context
@@ -592,6 +603,7 @@ impl TurnExecutor {
             crate::input_context::validate_prefix(&prepared.system_prefix)?;
             let history = progress.messages.split_off(system_prefix_len);
             let projected_history = context_messages.split_off(system_prefix_len);
+            context_prefix_len = prepared.system_prefix.len();
             context_messages = prepared.system_prefix.clone();
             context_messages.extend(projected_history);
             progress.messages = prepared.system_prefix;
@@ -621,31 +633,83 @@ impl TurnExecutor {
             info.initial_context_messages = context_messages.len();
         }
 
+        let base_request = request;
         for round in 1..=self.config.max_rounds {
             limits.check()?;
             progress.rounds = round;
             let round_events = events.for_round(round);
             round_events.emit(AgentRawEvent::RoundStarted);
             transition_state(state, &round_events, AgentRunState::AwaitingModel { round })?;
-            apply_inputs(
+            let inputs_changed = apply_inputs(
                 &mut context_messages,
                 progress,
                 context,
                 journal,
                 InputBoundary::BeforeModel,
                 &round_events,
-                |messages, message| self.validate_control_input(&request, messages, message),
+                |messages, message| self.validate_control_input(&base_request, messages, message),
             )
             .await?;
+            if inputs_changed {
+                prepared_request = None;
+            }
             progress.stage = RunStage::Compaction;
-            let context_spec = self.provider.model_spec(&request.model)?;
-            let decision_messages = crate::tokens::model_messages(&context_messages, &context_spec);
-            let measured = self
-                .counting
-                .request_view(&request, &context_spec, &decision_messages);
+            let context_spec = self.provider.model_spec(&base_request.model)?;
+            let mut request = base_request.clone();
+            let mut source_projection = Some(crate::tokens::model_messages(
+                &context_messages,
+                &context_spec,
+            ));
+            if self.has_request_hooks() {
+                request.messages = source_projection.take().expect("source view").into_owned();
+            }
+            let mut view = if round == 1 && !inputs_changed {
+                match prepared_request
+                    .take()
+                    .filter(|p| p.owner == self.request_owner)
+                {
+                    Some(view) => view,
+                    None => {
+                        self.prepare_request_view(
+                            request,
+                            context_prefix_len,
+                            &progress.messages,
+                            round,
+                            crate::extensions::RequestHookPass::Admission,
+                            context,
+                        )
+                        .await?
+                    }
+                }
+            } else {
+                self.prepare_request_view(
+                    request,
+                    context_prefix_len,
+                    &progress.messages,
+                    round,
+                    crate::extensions::RequestHookPass::Admission,
+                    context,
+                )
+                .await?
+            };
+            if self.has_request_hooks() {
+                self.validate_request_view(&view.request, view.pass)?;
+            }
+            limits.check()?;
+            let decision_messages = if self.has_request_hooks() {
+                view.request.messages.as_slice()
+            } else {
+                source_projection
+                    .as_ref()
+                    .expect("borrowed source view")
+                    .as_ref()
+            };
+            let measured =
+                self.counting
+                    .request_view(&view.request, &context_spec, decision_messages);
             let decision = match self.decide_context_view(
-                &request,
-                &decision_messages,
+                &view.request,
+                decision_messages,
                 &context_spec,
                 &measured,
             ) {
@@ -668,7 +732,19 @@ impl TurnExecutor {
                 });
                 anyhow::bail!("context policy rejected request: {code}");
             }
-            drop(decision_messages);
+            self.request_view_record(
+                &view,
+                crate::extensions::RequestViewStage::Admission,
+                context_messages.len(),
+                measured.clone(),
+                journal,
+                context,
+            )
+            .await?;
+            limits.check()?;
+            drop(source_projection);
+            let mut request = std::mem::replace(&mut view.request, base_request.clone());
+            let mut compacted_this_round = false;
             if let Some(compactor) = &self.context_compactor {
                 let input = ContextCompactionInput {
                     model: &request.model,
@@ -677,7 +753,14 @@ impl TurnExecutor {
                     max_output_tokens: request.options.max_output_tokens,
                 };
                 let estimated_tokens = if compactor.supports_counting() {
-                    measured.tokens.min(usize::MAX as u64) as usize
+                    self.counting
+                        .request_view(
+                            &request,
+                            &context_spec,
+                            &crate::tokens::model_messages(&context_messages, &context_spec),
+                        )
+                        .tokens
+                        .min(usize::MAX as u64) as usize
                 } else {
                     compactor.estimate_tokens(input)
                 };
@@ -694,18 +777,13 @@ impl TurnExecutor {
                     if compactor.uses_model() && !compactor.manages_budget() {
                         ensure_token_capacity(limits, estimated_tokens as u64)?;
                     }
+                    limits.check()?;
                     let recorded = compactor
                         .compact_counted(
                             crate::summary::CompactionRequest {
                                 input,
                                 history: &progress.messages,
-                                system_prefix_len: progress
-                                    .messages
-                                    .iter()
-                                    .take_while(|message| {
-                                        message.role == crate::model::MessageRole::System
-                                    })
-                                    .count(),
+                                system_prefix_len: context_prefix_len,
                                 force: false,
                                 token_budget: limits.remaining_tokens(),
                                 archived_messages: progress
@@ -725,13 +803,7 @@ impl TurnExecutor {
                         )
                         .await
                         .and_then(|recorded| {
-                            let prefix = progress
-                                .messages
-                                .iter()
-                                .take_while(|message| {
-                                    message.role == crate::model::MessageRole::System
-                                })
-                                .count();
+                            let prefix = context_prefix_len;
                             let validated =
                                 ensure_valid_compaction(&recorded.compaction, target_tokens)
                                     .and_then(|()| {
@@ -904,6 +976,7 @@ impl TurnExecutor {
                         }
                     }
                     context_messages = compacted.messages;
+                    compacted_this_round = true;
                     if let Some(info) = &mut progress.model_context {
                         info.compactions += 1;
                     }
@@ -921,8 +994,26 @@ impl TurnExecutor {
                 .provider
                 .model_spec(&request.model)
                 .map_err(anyhow::Error::from)?;
-            request.messages =
-                crate::tokens::model_messages(&context_messages, &model_spec).into_owned();
+            if compacted_this_round && self.has_request_hooks() {
+                let mut fresh = base_request.clone();
+                fresh.messages =
+                    crate::tokens::model_messages(&context_messages, &model_spec).into_owned();
+                view = self
+                    .prepare_request_view(
+                        fresh,
+                        context_prefix_len,
+                        &progress.messages,
+                        round,
+                        crate::extensions::RequestHookPass::AfterCompaction,
+                        context,
+                    )
+                    .await?;
+                request = std::mem::replace(&mut view.request, base_request.clone());
+            }
+            if !self.has_request_hooks() {
+                request.messages =
+                    crate::tokens::model_messages(&context_messages, &model_spec).into_owned();
+            }
             self.provider.validate_request(&request)?;
             crate::tool_images::materialize(
                 &mut request.messages,
@@ -952,6 +1043,14 @@ impl TurnExecutor {
                     <= window),
                 "materialized request exceeds model context window"
             );
+            if self.has_request_hooks() {
+                match self.decide_context(&request, &model_spec, &input_count)? {
+                    crate::context_policy::ContextDecision::Keep => {}
+                    _ => anyhow::bail!(
+                        "final request hook view is not admitted after compaction/materialization"
+                    ),
+                }
+            }
             ensure_token_capacity(limits, input_estimate)?;
             let original_output_limit = request.options.max_output_tokens;
             let mut budget_clamped = false;
@@ -969,6 +1068,20 @@ impl TurnExecutor {
                     budget_clamped = output < model_limit;
                 }
             }
+            if self.has_request_hooks() {
+                view.request = std::mem::replace(&mut request, base_request.clone());
+                self.request_view_record(
+                    &view,
+                    crate::extensions::RequestViewStage::Ready,
+                    context_messages.len(),
+                    input_count.clone(),
+                    journal,
+                    context,
+                )
+                .await?;
+                request = std::mem::replace(&mut view.request, base_request.clone());
+            }
+            limits.check()?;
             let sink = Arc::new(crate::events::RunModelEventSink::with_limits(
                 round_events.clone(),
                 limits.clone(),
@@ -1633,6 +1746,11 @@ impl TurnExecutorBuilder {
             input_context,
             self.execution_config,
         );
+        executor.request_hooks = self
+            .extensions
+            .as_ref()
+            .map(|e| e.request_hooks())
+            .unwrap_or_default();
         executor.extensions = self.extensions;
         executor.model_tools = self.model_tools;
         executor.tool_image_resolver = self.tool_image_resolver;

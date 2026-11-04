@@ -30,6 +30,12 @@ pub trait RunJournal: Send + Sync {
     ) -> anyhow::Result<()> {
         anyhow::bail!("journal does not support canonical tool composition records")
     }
+    async fn record_request_view(
+        &self,
+        _record: &crate::extensions::RequestViewRecord,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support request view records")
+    }
     async fn record_interception(
         &self,
         _record: &crate::extensions::InterceptionRecord,
@@ -61,6 +67,12 @@ pub trait RunJournal: Send + Sync {
 }
 #[async_trait]
 impl RunJournal for () {
+    async fn record_request_view(
+        &self,
+        _: &crate::extensions::RequestViewRecord,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn record_interception(
         &self,
         _: &crate::extensions::InterceptionRecord,
