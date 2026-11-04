@@ -94,6 +94,9 @@ complete unit, counts must agree, and automatic accounting must name the active 
 The latest valid checkpoint on an ancestry supplies its model context. Selecting an older
 leaf or sibling excludes checkpoints outside that branch. Legacy `Compaction` records and
 unrecognized extensions remain metadata; their text is not activated automatically.
+Explicit [native context messages](boundary-hooks.md) are recognized recorded source data and
+participate in summaries; their system role does not make them a recovery-only marker.
+Inert boundary data is excluded and summary/restore never reinstalls callbacks or grants.
 
 Interruption notices and synthetic missing results remain context-only. A fixed recovery
 notice accompanies summaries of uncertain operations, including after restore. Pruning

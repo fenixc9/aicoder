@@ -2067,6 +2067,40 @@
             "type",
             "usage"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "lifecycle_boundary_committed"
+            },
+            "boundary": {
+              "enum": [
+                "turn_end",
+                "before_settle"
+              ]
+            },
+            "entries": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32
+            },
+            "messages": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 32
+            },
+            "continue_run": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "boundary",
+            "entries",
+            "messages",
+            "continue_run"
+          ]
         }
       ]
     },

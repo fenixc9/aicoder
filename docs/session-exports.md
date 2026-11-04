@@ -5,6 +5,8 @@ complete canonical tree of one workspace-scoped session. It exports recorded ent
 parent links, selected leaf/revision, tool results, summaries, navigation and interruption
 records. It does not export a repaired/provider-projected model transcript, restore grants,
 run a model/tool, migrate storage or silently omit older branches.
+Explicit [native context](boundary-hooks.md) retains its extension provenance and inert HTML
+preview; the JSON form uses the compatible reserved Extension wire representation.
 
 ```sh
 aicoder --workspace . export-session SESSION_ID --format json --output session.json

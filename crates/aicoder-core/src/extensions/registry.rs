@@ -50,6 +50,7 @@ pub struct Extension {
     tools: Vec<Arc<dyn ExecutableTool>>,
     providers: Vec<(String, Arc<dyn ModelProvider>)>,
     policies: Vec<(String, Arc<dyn ContextPolicy>)>,
+    boundaries: Vec<Registered<dyn BoundaryHook>>,
     requests: Vec<RequestRegistration>,
     contexts: Vec<Registered<dyn ContextHook>>,
     guards: Vec<Registered<dyn ToolHook>>,
@@ -80,6 +81,7 @@ impl Extension {
             tools: Vec::new(),
             providers: Vec::new(),
             policies: Vec::new(),
+            boundaries: Vec::new(),
             requests: Vec::new(),
             contexts: Vec::new(),
             guards: Vec::new(),
@@ -196,6 +198,25 @@ impl Extension {
             size(&spec, 1024)?,
         )?;
         self.guards.push(Registered {
+            owner: self.manifest.id.clone(),
+            spec,
+            callback: hook,
+        });
+        Ok(self)
+    }
+    pub fn boundary_hook(
+        &mut self,
+        spec: HookSpec,
+        hook: Arc<dyn BoundaryHook>,
+    ) -> Result<&mut Self> {
+        spec.validate()?;
+        self.register(
+            "boundary_hook",
+            &spec.id,
+            Some(spec.priority),
+            size(&spec, 1024)?,
+        )?;
+        self.boundaries.push(Registered {
             owner: self.manifest.id.clone(),
             spec,
             callback: hook,
@@ -493,6 +514,13 @@ impl ExtensionSet {
             .collect();
         hooks.sort_by_key(|h| h.spec.priority);
         hooks
+    }
+    pub(crate) fn boundary_hooks(&self) -> Vec<Registered<dyn BoundaryHook>> {
+        ordered(
+            self.extensions
+                .iter()
+                .flat_map(|e| e.boundaries.iter().cloned()),
+        )
     }
     pub(crate) fn request_hooks(&self) -> Vec<RequestRegistration> {
         let mut hooks = self

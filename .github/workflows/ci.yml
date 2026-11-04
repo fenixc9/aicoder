@@ -74,6 +74,13 @@ jobs:
           cargo run --locked -p aicoder-runtime --features auxiliary-models --example offline_auxiliary_transport -- --deny
           cargo run --locked -p aicoder-runtime --features code-mode --example offline_auxiliary_transport -- --code-mode
           cargo run --locked -p aicoder-runtime --features code-mode --example offline_auxiliary_transport -- --code-mode --deny
+      - name: Actionable round and settlement boundaries
+        run: |
+          cargo test --locked -p aicoder-runtime --no-default-features --test boundary_hooks
+          cargo run --locked -p aicoder-runtime --example offline_boundary_hooks
+          cargo run --locked -p aicoder-runtime --example offline_boundary_hooks -- --deny
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_boundary_hooks -- --code-mode
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_boundary_hooks -- --code-mode --deny
       - name: Planning, protected paths and read-only worker Agent extensions
         run: cargo run --locked -p aicoder-runtime --example coding_extensions
       - name: Versioned process tools and owned-plan approval

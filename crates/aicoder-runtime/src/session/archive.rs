@@ -117,6 +117,9 @@ fn line(reader: &mut BufReader<File>, limit: usize) -> Result<Vec<u8>> {
 }
 fn descriptor(entry: &SessionEntry) -> SessionEntry {
     let data = match &entry.data {
+        SessionEntryData::NativeContext { source, .. } => {
+            SessionEntryData::native_context(source.clone(), "").expect("validated native source")
+        }
         SessionEntryData::Message { message } => SessionEntryData::Message {
             message: Message {
                 role: message.role,
@@ -493,7 +496,7 @@ fn materialize(index: &ArchiveIndex, limits: &SessionLoadLimits) -> Result<Sessi
     let mut bytes = 0usize;
     let mut messages = 0usize;
     for entry in selected.iter().rev() {
-        if !matches!(&entry.data, SessionEntryData::Message { .. })
+        if entry.data.as_message().is_none()
             && !matches!(&entry.data,SessionEntryData::Extension {namespace,..} if namespace==SUMMARY_NAMESPACE)
         {
             continue;
@@ -504,7 +507,7 @@ fn materialize(index: &ArchiveIndex, limits: &SessionLoadLimits) -> Result<Sessi
             .expect("indexed entry");
         let real = reader.entry(index.locations[ordinal])?;
         let size = serde_json::to_vec(&real)?.len();
-        let is_message = matches!(real.data, SessionEntryData::Message { .. });
+        let is_message = real.data.as_message().is_some();
         if bytes.saturating_add(size) > limits.max_window_bytes
             || messages + usize::from(is_message) > limits.max_window_messages
         {
@@ -529,23 +532,28 @@ fn materialize(index: &ArchiveIndex, limits: &SessionLoadLimits) -> Result<Sessi
     loaded.reverse();
     // An unpaired leading result is omitted together with its whole older call unit.
     if summary_start.is_none() {
-        while loaded.first().is_some_and(|entry|!matches!(&entry.data,SessionEntryData::Message {message} if message.role!=MessageRole::Tool)){loaded.remove(0);}
+        while loaded.first().is_some_and(|entry| {
+            !entry
+                .data
+                .as_message()
+                .is_some_and(|message| message.role != MessageRole::Tool)
+        }) {
+            loaded.remove(0);
+        }
     }
     ensure!(
         index.session.messages().is_empty()
-            || loaded
-                .iter()
-                .any(|entry| matches!(entry.data, SessionEntryData::Message { .. })),
+            || loaded.iter().any(|entry| entry.data.as_message().is_some()),
         "newest complete message unit exceeds the window budget"
     );
     let first = loaded
         .iter()
-        .find(|entry| matches!(entry.data, SessionEntryData::Message { .. }))
+        .find(|entry| entry.data.as_message().is_some())
         .map(|entry| entry.id.clone());
     let total = branch.messages().count();
     let loaded_messages = loaded
         .iter()
-        .filter(|entry| matches!(entry.data, SessionEntryData::Message { .. }))
+        .filter(|entry| entry.data.as_message().is_some())
         .count();
     let mut projection_entries = index.session.entries().to_vec();
     for entry in &loaded {
@@ -860,7 +868,7 @@ pub(super) fn tree(
     for row in &mut page.rows {
         let ordinal = index.session.entry_position(&row.id).expect("tree entry");
         let real = reader.entry(index.locations[ordinal])?;
-        if let SessionEntryData::Message { message } = &real.data {
+        if let Some(message) = real.data.as_message() {
             row.preview = message
                 .content
                 .iter()

@@ -31,9 +31,45 @@ pub struct SessionEntry {
     pub created_at: u64,
     pub data: SessionEntryData,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum SessionEntryData {
+    NativeContext {
+        source: super::NativeContextSource,
+        message: Message,
+    },
+    Message {
+        message: Message,
+    },
+    ModelChanged {
+        provider: String,
+        model: String,
+    },
+    Compaction {
+        strategy: String,
+        summary: String,
+        preserve_from: Option<String>,
+        usage: ModelUsage,
+    },
+    Extension {
+        namespace: String,
+        data: Value,
+    },
+    TurnStart {
+        turn_id: String,
+    },
+    TurnEnd {
+        turn_id: String,
+        record: Box<TurnRecord>,
+    },
+}
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "SessionEntryData", tag = "kind", rename_all = "snake_case")]
+pub(super) enum StoredSessionEntryData {
+    #[serde(skip)]
+    NativeContext {
+        source: super::NativeContextSource,
+        message: Message,
+    },
     Message {
         message: Message,
     },
@@ -246,7 +282,8 @@ impl Session {
         self.active_entries()
             .into_iter()
             .filter_map(|entry| match &entry.data {
-                SessionEntryData::Message { message } => Some(SessionMessage {
+                SessionEntryData::Message { message }
+                | SessionEntryData::NativeContext { message, .. } => Some(SessionMessage {
                     id: &entry.id,
                     parent_id: entry.parent_id.as_deref(),
                     created_at: entry.created_at,
@@ -336,6 +373,12 @@ impl Session {
                 "session parent must precede its child"
             );
             match &entry.data {
+                SessionEntryData::Extension { namespace, .. }
+                    if namespace == super::NATIVE_CONTEXT_NAMESPACE =>
+                {
+                    anyhow::bail!("native context namespace requires typed NativeContext")
+                }
+                SessionEntryData::NativeContext { source, message } => source.validate(message)?,
                 SessionEntryData::Message { message } => ensure!(
                     message.role != MessageRole::System,
                     "System messages are runtime context and cannot be stored in a session"

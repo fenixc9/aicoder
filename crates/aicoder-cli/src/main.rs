@@ -544,6 +544,7 @@ fn handle_session_command(cli: &Cli, repository: &JsonlSessionRepository) -> Res
                 for entry in session.entries() {
                     let kind = match &entry.data {
                         SessionEntryData::Message { message } => format!("{:?}", message.role),
+                        SessionEntryData::NativeContext { .. } => "NativeContext".into(),
                         SessionEntryData::ModelChanged { provider, model } => {
                             format!("model {provider}/{model}")
                         }

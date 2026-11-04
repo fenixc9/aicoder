@@ -114,6 +114,18 @@ impl EvaluationJournal {
 }
 #[async_trait]
 impl RunJournal for EvaluationJournal {
+    async fn record_lifecycle(
+        &self,
+        record: &aicoder_core::extensions::LifecycleRecord,
+    ) -> Result<()> {
+        self.record(json!({"kind":"lifecycle","data":record}))
+    }
+    async fn commit_boundary(
+        &self,
+        commit: &aicoder_core::extensions::BoundaryCommit,
+    ) -> Result<()> {
+        self.record(json!({"kind":"lifecycle_boundary","data":commit}))
+    }
     async fn record_request_view(
         &self,
         record: &aicoder_core::extensions::RequestViewRecord,

@@ -39,6 +39,8 @@ admission, preserving canonical history and raw summary checkpoints.
 controls and bounded response/parsed-stream observation without exposing auth or changing normalization.
 [Shared native bindings](docs/auxiliary-transport.md) cover runtime-created chat/classifier/image
 clients, preserve reload snapshots and retain the same parent approvals/usage.
+[Boundary hooks](docs/boundary-hooks.md) append explicitly sourced context or inert data and
+continue the same budgeted run at successful round/settlement boundaries.
 [Explicit host launch files](docs/host-extensions.md) enable process/MCP tools in CLI, TUI and Web.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime

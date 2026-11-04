@@ -30,6 +30,19 @@ pub trait RunJournal: Send + Sync {
     ) -> anyhow::Result<()> {
         anyhow::bail!("journal does not support canonical tool composition records")
     }
+    async fn record_lifecycle(
+        &self,
+        _record: &crate::extensions::LifecycleRecord,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support lifecycle records")
+    }
+    /// Atomically commit the record and all sourced messages at their canonical positions.
+    async fn commit_boundary(
+        &self,
+        _commit: &crate::extensions::BoundaryCommit,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support lifecycle boundary commits")
+    }
     async fn record_request_view(
         &self,
         _record: &crate::extensions::RequestViewRecord,
@@ -67,6 +80,13 @@ pub trait RunJournal: Send + Sync {
 }
 #[async_trait]
 impl RunJournal for () {
+    async fn record_lifecycle(&self, _: &crate::extensions::LifecycleRecord) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn commit_boundary(&self, _: &crate::extensions::BoundaryCommit) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn record_request_view(
         &self,
         _: &crate::extensions::RequestViewRecord,

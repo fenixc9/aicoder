@@ -165,7 +165,8 @@ impl Session {
             .enumerate()
             .map(|(local, entry)| {
                 let (kind, preview) = match &entry.data {
-                    SessionEntryData::Message { message } => (
+                    SessionEntryData::Message { message }
+                    | SessionEntryData::NativeContext { message, .. } => (
                         format!("{:?}", message.role).to_ascii_lowercase(),
                         message
                             .content
@@ -289,7 +290,7 @@ pub fn search_archive_entries<'a>(
     {
         let entry = read(index)?;
         page.scanned_entries += 1;
-        if let SessionEntryData::Message { message } = &entry.data {
+        if let Some(message) = entry.data.as_message() {
             ensure!(block <= message.content.len(), "invalid search block");
             while block < message.content.len() {
                 if blocks >= 4096 || page.scanned_bytes >= 256 * 1024 {

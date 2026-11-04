@@ -15,12 +15,12 @@ pub use handler::{
     AgentStartedEvent, AgentStateChangedEvent, AgentStoppedEvent, CompletionVerificationEndedEvent,
     CompletionVerificationStartedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
     ContextCompactionCompletedEvent, ContextCompactionFailedEvent, ContextCompactionStartedEvent,
-    ModelRequestStartedEvent, ModelResponseCompletedEvent, ModelResponseFailedEvent,
-    ModelResponseStartedEvent, ModelRetryScheduledEvent, ReasoningChunkEvent, ReasoningEndedEvent,
-    ReasoningStartedEvent, RoundCompletedEvent, RoundStartedEvent, RunApprovalRequestedEvent,
-    RunInputAppliedEvent, SessionBoundEvent, ToolApprovalRequestedEvent, ToolApprovalResolvedEvent,
-    ToolCallChunkEvent, ToolCallEndedEvent, ToolCallStartedEvent, ToolExecutionEndedEvent,
-    ToolExecutionStartedEvent, UsageUpdatedEvent,
+    LifecycleBoundaryCommittedEvent, ModelRequestStartedEvent, ModelResponseCompletedEvent,
+    ModelResponseFailedEvent, ModelResponseStartedEvent, ModelRetryScheduledEvent,
+    ReasoningChunkEvent, ReasoningEndedEvent, ReasoningStartedEvent, RoundCompletedEvent,
+    RoundStartedEvent, RunApprovalRequestedEvent, RunInputAppliedEvent, SessionBoundEvent,
+    ToolApprovalRequestedEvent, ToolApprovalResolvedEvent, ToolCallChunkEvent, ToolCallEndedEvent,
+    ToolCallStartedEvent, ToolExecutionEndedEvent, ToolExecutionStartedEvent, UsageUpdatedEvent,
 };
 pub(crate) use model::RunModelEventSink;
 pub use subscription::{

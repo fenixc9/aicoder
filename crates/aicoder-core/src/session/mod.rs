@@ -1,4 +1,6 @@
 //! Conversation session management and persistence.
+mod native_context;
+pub use native_context::{NATIVE_CONTEXT_NAMESPACE, NativeContextSource};
 
 mod journal;
 pub(crate) use journal::SessionJournal;

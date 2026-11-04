@@ -1,4 +1,5 @@
 //! Executes one agent turn through its model, tool, and completion-verification rounds.
+mod lifecycle;
 mod request_view;
 
 use std::{path::PathBuf, sync::Arc};
@@ -47,6 +48,7 @@ pub(crate) struct RunScope {
     state: AgentRunStateMachine,
 }
 pub struct TurnExecutor {
+    boundary_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::BoundaryHook>>,
     pub(crate) request_owner: uuid::Uuid,
     request_hooks: Vec<crate::extensions::RequestRegistration>,
     model_tools: Option<Vec<String>>,
@@ -98,6 +100,7 @@ impl TurnExecutor {
         config: TurnExecutionConfig,
     ) -> Self {
         Self {
+            boundary_hooks: Vec::new(),
             request_owner: uuid::Uuid::new_v4(),
             request_hooks: Vec::new(),
             model_tools: None,
@@ -625,6 +628,7 @@ impl TurnExecutor {
             }
         }
 
+        self.start_lifecycle(journal, context).await?;
         request.stream = self.config.stream;
         self.prepare_model_tools(&mut request)?;
 
@@ -1186,6 +1190,7 @@ impl TurnExecutor {
             let assistant_message = response.message;
             let tool_calls = assistant_message.tool_calls().cloned().collect::<Vec<_>>();
             progress.messages.push(assistant_message.clone());
+            let assistant_index = progress.messages.len() - 1;
             anyhow::ensure!(
                 tool_calls.is_empty()
                     || (model_spec.capabilities.tools
@@ -1228,6 +1233,29 @@ impl TurnExecutor {
                     &round_events,
                     AgentRunState::VerifyingCompletion { round },
                 )?;
+                if !self.boundary_hooks.is_empty() {
+                    checkpoint(journal, assistant_index, &assistant_message, context).await?;
+                    if self
+                        .run_boundary(
+                            lifecycle::BoundaryScope {
+                                kind: crate::extensions::BoundaryKind::TurnEnd,
+                                events: &round_events,
+                                request: &request,
+                                context,
+                                limits,
+                                journal,
+                            },
+                            progress,
+                            &mut context_messages,
+                        )
+                        .await?
+                    {
+                        round_events.emit(AgentRawEvent::RoundCompleted {
+                            outcome: RoundOutcome::FinalAnswer,
+                        });
+                        continue;
+                    }
+                }
                 round_events.emit(AgentRawEvent::CompletionVerificationStarted);
                 let verification = self.completion_verifier.verify(CompletionContext {
                     workspace: self.workspace_root(),
@@ -1249,18 +1277,12 @@ impl TurnExecutor {
                             feedback: None,
                         });
                         limits.check()?;
-                        let more_input = context
-                            .control
-                            .as_ref()
-                            .is_some_and(|control| control.next(true, true).is_some());
+                        let more_input = context.control.as_ref().is_some_and(|control| {
+                            control.next(true, self.boundary_hooks.is_empty()).is_some()
+                        });
                         if more_input {
-                            checkpoint(
-                                journal,
-                                progress.messages.len() - 1,
-                                &assistant_message,
-                                context,
-                            )
-                            .await?;
+                            checkpoint(journal, assistant_index, &assistant_message, context)
+                                .await?;
                         }
                         if more_input
                             && apply_inputs(
@@ -1283,6 +1305,54 @@ impl TurnExecutor {
                             });
                             continue;
                         }
+                        let boundary_again = if self.boundary_hooks.is_empty() {
+                            false
+                        } else {
+                            self.run_boundary(
+                                lifecycle::BoundaryScope {
+                                    kind: crate::extensions::BoundaryKind::BeforeSettle,
+                                    events: &round_events,
+                                    request: &request,
+                                    context,
+                                    limits,
+                                    journal,
+                                },
+                                progress,
+                                &mut context_messages,
+                            )
+                            .await?
+                        };
+                        let queued_after_boundary = if !self.boundary_hooks.is_empty()
+                            && context
+                                .control
+                                .as_ref()
+                                .is_some_and(|c| c.next(true, !boundary_again).is_some())
+                        {
+                            checkpoint(journal, assistant_index, &assistant_message, context)
+                                .await?;
+                            apply_inputs(
+                                &mut context_messages,
+                                progress,
+                                context,
+                                journal,
+                                InputBoundary::AfterCompletion {
+                                    round_limit: self.config.max_rounds,
+                                },
+                                &round_events,
+                                |messages, message| {
+                                    self.validate_control_input(&base_request, messages, message)
+                                },
+                            )
+                            .await?
+                        } else {
+                            false
+                        };
+                        if boundary_again || queued_after_boundary {
+                            round_events.emit(AgentRawEvent::RoundCompleted {
+                                outcome: RoundOutcome::FinalAnswer,
+                            });
+                            continue;
+                        }
                         round_events.emit(AgentRawEvent::RoundCompleted {
                             outcome: RoundOutcome::FinalAnswer,
                         });
@@ -1295,13 +1365,7 @@ impl TurnExecutor {
                             feedback: Some(feedback.clone().into()),
                         });
                         let feedback = completion_feedback_message(feedback);
-                        checkpoint(
-                            journal,
-                            progress.messages.len() - 1,
-                            &assistant_message,
-                            context,
-                        )
-                        .await?;
+                        checkpoint(journal, assistant_index, &assistant_message, context).await?;
                         progress.messages.push(feedback.clone());
                         checkpoint(journal, progress.messages.len() - 1, &feedback, context)
                             .await?;
@@ -1385,6 +1449,22 @@ impl TurnExecutor {
             };
             context_messages.extend(tool_messages);
             limits.check()?;
+            if !self.boundary_hooks.is_empty() {
+                let _ = self
+                    .run_boundary(
+                        lifecycle::BoundaryScope {
+                            kind: crate::extensions::BoundaryKind::TurnEnd,
+                            events: &round_events,
+                            request: &request,
+                            context,
+                            limits,
+                            journal,
+                        },
+                        progress,
+                        &mut context_messages,
+                    )
+                    .await?;
+            }
             round_events.emit(AgentRawEvent::RoundCompleted {
                 outcome: RoundOutcome::ToolCalls {
                     count: tool_calls.len(),
@@ -1746,6 +1826,11 @@ impl TurnExecutorBuilder {
             input_context,
             self.execution_config,
         );
+        executor.boundary_hooks = self
+            .extensions
+            .as_ref()
+            .map(|e| e.boundary_hooks())
+            .unwrap_or_default();
         executor.request_hooks = self
             .extensions
             .as_ref()

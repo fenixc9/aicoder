@@ -95,7 +95,11 @@ that full product parity has already been achieved.
    after admission. Explicit immutable Runtime bindings now reach native classifier/image and
    created primary clients, survive reload, preserve approval/usage, and share bounded diagnostics;
    see [native transport acceptance](s7-aux-transport-acceptance.md). Arbitrary new provider drivers
-   still require explicit integration. Provider wrappers can cover some
+   still require explicit integration. [Actionable round/settlement boundaries](boundary-hooks.md)
+   now stage inert data, source-labelled canonical context and continuation in the same metered
+   loop, with atomic JSONL and queue rechecks. Context-edit/compaction boundary drafts,
+   input/before-agent-start/message transforms and session lifecycle/navigation veto remain open.
+   Provider wrappers can cover some
    host integrations, but no exhaustive executable equivalence check exists. Observation-only
    events must not quietly become mutation channels or rewrite canonical facts.
 

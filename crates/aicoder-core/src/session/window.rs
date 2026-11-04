@@ -86,7 +86,7 @@ impl SessionWindow {
         );
         let loaded = entries
             .iter()
-            .filter(|entry| matches!(entry.data, SessionEntryData::Message { .. }))
+            .filter(|entry| entry.data.as_message().is_some())
             .count();
         ensure!(
             loaded.saturating_add(source.archived_messages) == source.recorded_messages,
@@ -129,7 +129,8 @@ impl SessionWindow {
         self.entries
             .iter()
             .filter_map(|entry| match &entry.data {
-                SessionEntryData::Message { message } => Some(SessionMessage {
+                SessionEntryData::Message { message }
+                | SessionEntryData::NativeContext { message, .. } => Some(SessionMessage {
                     id: &entry.id,
                     parent_id: entry.parent_id.as_deref(),
                     created_at: entry.created_at,
@@ -221,7 +222,7 @@ impl SessionWindow {
         self.source.recorded_messages = self.source.recorded_messages.saturating_add(
             entries
                 .iter()
-                .filter(|entry| matches!(entry.data, SessionEntryData::Message { .. }))
+                .filter(|entry| entry.data.as_message().is_some())
                 .count(),
         );
         self.source.revision = metadata.revision;

@@ -1,5 +1,34 @@
 # API migrations
 
+## S7: actionable round and settlement boundaries
+
+Extension adds boundary_hook with BoundaryHook/BoundaryAction and typed TurnEnd/BeforeSettle
+stages. They stage inert Data or explicitly sourced Context entries and may request continuation
+inside the same budgeted loop. No hook is installed by default. Native registration metadata,
+ordering, cancellation and scoped UI remain unchanged. See [contract](boundary-hooks.md).
+
+RunJournal adds record_lifecycle and atomic commit_boundary, with default unsupported errors.
+Custom persistent journals must implement both before installing boundary hooks. The Started
+receipt probes support before provider IO; commit_boundary must persist its receipt and derived
+messages together. The built-in session/eval journals implement them; () explicitly accepts
+ephemeral runs. Existing journals without installed hooks need no change.
+
+SessionEntryData adds NativeContext { source, message }; update exhaustive Rust matches or use
+as_message() to read both ordinary and native messages. Use native_context(source, text) for
+validated construction. Ordinary Message/System remains invalid. The existing session version
+and JSONL extension shape are preserved: namespace aicoder.context-message.v1 contains version 1,
+source and message. Upgraded readers validate it; older readers retain it as inert extension
+data and therefore do not include that context in model views. Upgrade readers before resuming
+a branch that relies on native context. Generic Extension values using the reserved namespace
+now reject; do not use that namespace for unrelated application metadata. Historical receipts
+never reinstall callbacks or continue runs.
+
+AgentRawEvent adds LifecycleBoundaryCommitted and the handler adds a default no-op callback.
+Update exhaustive event matches and schema consumers for lifecycle_boundary_committed in the
+v1 schema. It is emitted only for explicitly installed hooks and carries metadata counts, not
+private entry text. No dependencies, default features or credential routes were added.
+
+
 ## S7: shared Runtime and native auxiliary transport binding
 
 Providers adds TransportBinding as a cloneable immutable callback snapshot/shared monitor.

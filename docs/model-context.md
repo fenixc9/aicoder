@@ -3,6 +3,8 @@
 Execution now has two inputs: canonical recorded history for results/journaling, and a
 separate provider-facing message view. Recovery repair, pruning and capability adaptation
 can change the provider view without turning synthetic output into a historical fact.
+Explicit [native boundary context](boundary-hooks.md) is a recorded message with source provenance;
+it remains in canonical history and summaries. Inert boundary Data receipts remain metadata.
 This completes S4's history/context separation item. Semantic summaries, output artifacts,
 full session navigation and tokenizer policies remain separate S4 work.
 

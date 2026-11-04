@@ -858,9 +858,7 @@ impl App {
                 self.usage = window.accounting().usage.clone();
                 self.timeline.push(TimelineItem::Notice(format!("Showing a bounded archive tail; {} older messages remain available through archive pages.",window.source().archived_messages)));
                 for entry in window.entries() {
-                    if let aicoder_core::session::SessionEntryData::Message { message } =
-                        &entry.data
-                    {
+                    if let Some(message) = entry.data.as_message() {
                         push_message(&mut self.timeline, message);
                     }
                 }
@@ -902,7 +900,10 @@ impl App {
             .unwrap_or_else(|_| ModelUsage::zero());
         for entry in session.active_entries() {
             match &entry.data {
-                SessionEntryData::Message { message } => push_message(&mut self.timeline, message),
+                SessionEntryData::Message { message }
+                | SessionEntryData::NativeContext { message, .. } => {
+                    push_message(&mut self.timeline, message)
+                }
                 SessionEntryData::TurnEnd { record, .. } => {
                     for input in &record.pending_inputs {
                         self.timeline.push(TimelineItem::Notice(format!(

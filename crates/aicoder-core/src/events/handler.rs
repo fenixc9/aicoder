@@ -248,6 +248,15 @@ pub struct ToolExecutionEndedEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct LifecycleBoundaryCommittedEvent {
+    pub meta: AgentEventMeta,
+    pub boundary: crate::extensions::BoundaryKind,
+    pub entries: usize,
+    pub messages: usize,
+    pub continue_run: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct UsageUpdatedEvent {
     pub meta: AgentEventMeta,
     pub usage: Arc<ModelUsage>,
@@ -323,6 +332,7 @@ pub trait AgentEventHandler: Send + Sync + 'static {
     fn on_tool_execution_started(&self, _event: ToolExecutionStartedEvent) {}
     fn on_tool_execution_ended(&self, _event: ToolExecutionEndedEvent) {}
 
+    fn on_lifecycle_boundary_committed(&self, _event: LifecycleBoundaryCommittedEvent) {}
     fn on_usage_updated(&self, _event: UsageUpdatedEvent) {}
 }
 
@@ -589,6 +599,18 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
             call_id: Arc::clone(call_id),
             name: Arc::clone(name),
             outcome: Arc::clone(outcome),
+        }),
+        AgentRawEvent::LifecycleBoundaryCommitted {
+            boundary,
+            entries,
+            messages,
+            continue_run,
+        } => handler.on_lifecycle_boundary_committed(LifecycleBoundaryCommittedEvent {
+            meta,
+            boundary: *boundary,
+            entries: *entries,
+            messages: *messages,
+            continue_run: *continue_run,
         }),
         AgentRawEvent::UsageUpdated { usage } => handler.on_usage_updated(UsageUpdatedEvent {
             meta,

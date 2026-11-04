@@ -445,7 +445,9 @@ impl SemanticContextCompactor {
                     .iter()
                     .enumerate()
                     .filter(|(index, message)| {
-                        *index < request.system_prefix_len || message.role != MessageRole::System
+                        *index < request.system_prefix_len
+                            || message.role != MessageRole::System
+                            || crate::extensions::explicit_context_message(message)
                     })
                     .map(|(_, message)| message.clone())
                     .collect(),

@@ -1,5 +1,12 @@
 //! Explicit native extension registration. Native code is trusted host code, not a sandbox.
+mod boundary;
 mod commands;
+pub(crate) use boundary::explicit_context_message;
+pub use boundary::{
+    BoundaryAction, BoundaryChange, BoundaryCommit, BoundaryEntry, BoundaryHook, BoundaryInput,
+    BoundaryKind, BoundaryProposal, BoundaryStatistics, LIFECYCLE_NAMESPACE, LifecycleRecord,
+    MAX_BOUNDARY_BYTES,
+};
 mod hooks;
 mod interception;
 mod request;

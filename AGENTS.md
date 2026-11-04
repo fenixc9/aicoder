@@ -109,6 +109,10 @@
   Freeze prepared views per executor; applied controls invalidate them. Record safe effective
   options with explicit omissions, never private view text, stop strings or schema bodies.
   Recheck elapsed budgets after callback/receipt work and before summary or main provider IO.
+  Actionable boundaries stage bounded owned entries, atomically journal before projection, and
+  preserve extension provenance. Inert data never becomes instructions or restored authority.
+  Continue in the existing metered loop; recheck controls after settle waits, retain acknowledged
+  facts on deadline expiry, and never override verifier rejection or repeat completed effects.
 - Process tools use explicit host launch settings and conservative capabilities. Keep remote
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership

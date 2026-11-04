@@ -236,6 +236,12 @@ pub enum AgentRawEvent {
         name: Arc<str>,
         outcome: Arc<ToolExecutionOutcome>,
     },
+    LifecycleBoundaryCommitted {
+        boundary: crate::extensions::BoundaryKind,
+        entries: usize,
+        messages: usize,
+        continue_run: bool,
+    },
     UsageUpdated {
         usage: Arc<ModelUsage>,
     },

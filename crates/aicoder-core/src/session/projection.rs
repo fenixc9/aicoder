@@ -103,7 +103,8 @@ impl<'a> SessionBranch<'a> {
     }
     pub fn messages(&self) -> impl Iterator<Item = SessionMessage<'a>> + '_ {
         self.entries.iter().filter_map(|entry| match &entry.data {
-            SessionEntryData::Message { message } => Some(SessionMessage {
+            SessionEntryData::Message { message }
+            | SessionEntryData::NativeContext { message, .. } => Some(SessionMessage {
                 id: &entry.id,
                 parent_id: entry.parent_id.as_deref(),
                 created_at: entry.created_at,
@@ -217,7 +218,8 @@ impl<'a> SessionBranch<'a> {
                     )?;
                     open = Some(turn_id.as_str());
                 }
-                SessionEntryData::Message { message } => {
+                SessionEntryData::Message { message }
+                | SessionEntryData::NativeContext { message, .. } => {
                     output.source.recorded_messages += 1;
                     if message.role == MessageRole::Tool {
                         let tools = pending.as_mut().ok_or_else(|| {

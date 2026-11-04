@@ -58,6 +58,7 @@ pub(super) fn document(
                     b"<article>"
                 })?;
                 let kind = match &entry.data {
+                    SessionEntryData::NativeContext { .. } => "native extension context",
                     SessionEntryData::Message { message } => match message.role {
                         aicoder_core::model::MessageRole::System => "system",
                         aicoder_core::model::MessageRole::User => "user",
@@ -161,7 +162,7 @@ fn json_preview(out: &mut dyn Write, value: &serde_json::Value) -> Result<()> {
 fn preview(out: &mut dyn Write, data: &SessionEntryData) -> Result<()> {
     use aicoder_core::model::ContentBlock;
     match data {
-        SessionEntryData::Message { message } => {
+        SessionEntryData::Message { message } | SessionEntryData::NativeContext { message, .. } => {
             for block in &message.content {
                 match block {
                 ContentBlock::Text{text}=>text_preview(out,text)?,

@@ -23,8 +23,15 @@ JSON, and turn start/end records. Metadata stores the selected leaf and revision
 Appending chains new entries from that leaf; `checkout` selects an existing entry
 or the empty root. It preserves other branches. IDs are unique within a session;
 parent references cannot form cycles. A compaction preservation reference must
-be an ancestor. Compaction/extension records are storage primitives; semantic
-summaries and extension execution remain roadmap work.
+be an ancestor. Legacy compaction and unrecognized extension records remain metadata;
+validated [semantic-summary checkpoints](semantic-summary.md) provide reduced model views.
+
+[Boundary hooks](boundary-hooks.md) additionally commit typed `NativeContext` entries with
+extension/hook/kind provenance. `as_message()` reads both ordinary and native messages; native
+messages count toward archive windows and retain actual entry IDs. Their compatible wire form
+is the reserved `aicoder.context-message.v1` Extension record. Ordinary Message/System entries
+remain forbidden. Restoring native context does not reinstall callbacks or continuation;
+older readers retain inert extension data and require upgrading for prompt-equivalent resume.
 
 ```rust,ignore
 let mut session = repository.open(id)?;

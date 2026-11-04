@@ -73,7 +73,13 @@ impl RunJournal for SessionJournal<'_> {
         let mut state = self.state.lock().expect("session journal poisoned");
         if let Some(entry_id) = state.saved.get(&index) {
             ensure!(
-                matches!(&state.session.entry(entry_id).expect("saved checkpoint").data,SessionEntryData::Message {message:saved} if saved==message),
+                state
+                    .session
+                    .entry(entry_id)
+                    .expect("saved checkpoint")
+                    .data
+                    .as_message()
+                    == Some(message),
                 "checkpoint position changed"
             );
             return Ok(());
@@ -144,6 +150,61 @@ impl RunJournal for SessionJournal<'_> {
                 data,
             }],
         )
+    }
+    async fn record_lifecycle(&self, record: &crate::extensions::LifecycleRecord) -> Result<()> {
+        crate::extensions::size(record, 128 * 1024)?;
+        let mut state = self.state.lock().expect("session journal poisoned");
+        self.write(
+            &mut state,
+            vec![SessionEntryData::Extension {
+                namespace: crate::extensions::LIFECYCLE_NAMESPACE.into(),
+                data: serde_json::to_value(record)?,
+            }],
+        )
+    }
+    async fn commit_boundary(&self, commit: &crate::extensions::BoundaryCommit) -> Result<()> {
+        crate::extensions::size(commit, 128 * 1024)?;
+        let messages = commit.messages();
+        let mut state = self.state.lock().expect("session journal poisoned");
+        let end = commit
+            .base_index
+            .checked_add(messages.len())
+            .ok_or_else(|| anyhow::anyhow!("boundary index overflow"))?;
+        ensure!(
+            (commit.base_index..end).all(|i| !state.saved.contains_key(&i)),
+            "boundary canonical positions already saved"
+        );
+        let mut entries = vec![SessionEntryData::Extension {
+            namespace: crate::extensions::LIFECYCLE_NAMESPACE.into(),
+            data: serde_json::to_value(crate::extensions::LifecycleRecord::Applied {
+                commit: commit.clone(),
+            })?,
+        }];
+        for proposal in &commit.entries {
+            if let crate::extensions::BoundaryEntry::Context { kind, text } = &proposal.entry {
+                entries.push(SessionEntryData::native_context(
+                    super::NativeContextSource {
+                        extension: proposal.extension.clone(),
+                        hook: proposal.hook.clone(),
+                        kind: kind.clone(),
+                    },
+                    text,
+                )?);
+            }
+        }
+        self.write(&mut state, entries)?;
+        let ids = state
+            .session
+            .messages()
+            .into_iter()
+            .rev()
+            .take(messages.len())
+            .map(|m| m.id.to_string())
+            .collect::<Vec<_>>();
+        for (offset, id) in ids.into_iter().rev().enumerate() {
+            state.saved.insert(commit.base_index + offset, id);
+        }
+        Ok(())
     }
     async fn record_request_view(
         &self,
@@ -332,7 +393,13 @@ impl RunJournal for SessionJournal<'_> {
             };
             if let Some(entry_id) = state.saved.get(&key) {
                 ensure!(
-                    matches!(&state.session.entry(entry_id).expect("saved checkpoint").data,SessionEntryData::Message {message:saved} if saved==message),
+                    state
+                        .session
+                        .entry(entry_id)
+                        .expect("saved checkpoint")
+                        .data
+                        .as_message()
+                        == Some(message),
                     "checkpoint differs from final transcript"
                 );
                 matched += 1;
