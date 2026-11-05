@@ -174,24 +174,7 @@ impl RunJournal for SessionJournal<'_> {
             (commit.base_index..end).all(|i| !state.saved.contains_key(&i)),
             "boundary canonical positions already saved"
         );
-        let mut entries = vec![SessionEntryData::Extension {
-            namespace: crate::extensions::LIFECYCLE_NAMESPACE.into(),
-            data: serde_json::to_value(crate::extensions::LifecycleRecord::Applied {
-                commit: commit.clone(),
-            })?,
-        }];
-        for proposal in &commit.entries {
-            if let crate::extensions::BoundaryEntry::Context { kind, text } = &proposal.entry {
-                entries.push(SessionEntryData::native_context(
-                    super::NativeContextSource {
-                        extension: proposal.extension.clone(),
-                        hook: proposal.hook.clone(),
-                        kind: kind.clone(),
-                    },
-                    text,
-                )?);
-            }
-        }
+        let entries = commit.session_entries()?;
         self.write(&mut state, entries)?;
         let ids = state
             .session

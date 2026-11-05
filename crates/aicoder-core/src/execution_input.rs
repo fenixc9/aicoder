@@ -34,6 +34,8 @@ pub struct ModelContextInfo {
 }
 #[derive(Debug, Clone)]
 pub struct ExecutionInput {
+    pub(crate) start_requested: bool,
+    pub(crate) prepared_start: Option<crate::extensions::PreparedStartup>,
     pub(crate) request: ModelRequest,
     pub(crate) history: Vec<Message>,
     pub(crate) system_prefix_len: usize,
@@ -54,6 +56,8 @@ impl ExecutionInput {
             request,
             system_prefix_len: prefix,
             source: None,
+            start_requested: false,
+            prepared_start: None,
             prepared_request: None,
             prepared_context: None,
             started: None,
@@ -90,6 +94,8 @@ impl ExecutionInput {
             history,
             system_prefix_len,
             source: None,
+            start_requested: false,
+            prepared_start: None,
             prepared_request: None,
             prepared_context: None,
             started: None,

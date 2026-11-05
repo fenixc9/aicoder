@@ -451,7 +451,7 @@ impl Agent {
             let mut request = self.completion_request(initial.clone());
             request.model = requested_model;
             self.apply_session_reasoning(&mut request, &session)?;
-            let mut input = crate::ExecutionInput::from_run_session(request, &session)?;
+            let mut input = crate::ExecutionInput::from_run_session(request, &session)?.for_run();
             input.started = Some(started);
             let mut input = self.turn_executor.prepare_input(input, &context).await?;
             let report = self.turn_executor.validate_model_selection(&input)?;
@@ -482,12 +482,22 @@ impl Agent {
                 turn_id: turn_id.clone(),
             });
             entries.push(SessionEntryData::Message { message: user });
+            let startup_messages = input
+                .prepared_start
+                .as_ref()
+                .map_or(0, |s| s.commit.messages().len());
+            if let Some(start) = &input.prepared_start {
+                entries.extend(start.commit.session_entries()?);
+            }
             preparation_stage = RunStage::Persistence;
             session.append(repository, entries)?;
+            if let Some(start) = &mut input.prepared_start {
+                start.committed = true;
+            }
             if let Some(source) = &mut input.source {
                 source.revision = session.metadata().revision;
                 source.leaf_id = session.metadata().leaf_id.clone();
-                source.recorded_messages += 1;
+                source.recorded_messages += 1 + startup_messages;
             }
             Ok::<_, anyhow::Error>((
                 SessionJournal::new(repository, session, turn_id),

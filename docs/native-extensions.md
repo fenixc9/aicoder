@@ -49,7 +49,8 @@ keep these views separate from canonical facts. Explicit [provider transport hoo
 are assembled on a compatible client before registering/selecting its provider route. They do
 not introduce HTTP types into core or load from extension catalogs. [Shared Runtime binding](auxiliary-transport.md) covers its native auxiliary clients. [Boundary hooks](boundary-hooks.md) stage inert data or
 explicit context at successful round/settlement boundaries and can continue the same metered run.
-Input/start/message transforms and session navigation veto remain open.
+[Startup hooks](startup-hooks.md) additionally freeze run-level prefix/tool/context changes before
+turn validation. Raw-input/message transforms and session navigation veto remain open.
 
 HookSpec defines local ID, signed priority and a 1 ms–30 s timeout (default two seconds).
 Lower priority runs first; ties preserve extension installation/contribution order. Calls

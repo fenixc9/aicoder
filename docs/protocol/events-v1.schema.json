@@ -2077,7 +2077,8 @@
             "boundary": {
               "enum": [
                 "turn_end",
-                "before_settle"
+                "before_settle",
+                "before_start"
               ]
             },
             "entries": {

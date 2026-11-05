@@ -1,6 +1,7 @@
 //! Executes one agent turn through its model, tool, and completion-verification rounds.
 mod lifecycle;
 mod request_view;
+mod startup;
 
 use std::{path::PathBuf, sync::Arc};
 
@@ -48,6 +49,7 @@ pub(crate) struct RunScope {
     state: AgentRunStateMachine,
 }
 pub struct TurnExecutor {
+    startup_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::BeforeStartHook>>,
     boundary_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::BoundaryHook>>,
     pub(crate) request_owner: uuid::Uuid,
     request_hooks: Vec<crate::extensions::RequestRegistration>,
@@ -100,6 +102,7 @@ impl TurnExecutor {
         config: TurnExecutionConfig,
     ) -> Self {
         Self {
+            startup_hooks: Vec::new(),
             boundary_hooks: Vec::new(),
             request_owner: uuid::Uuid::new_v4(),
             request_hooks: Vec::new(),
@@ -389,6 +392,8 @@ impl TurnExecutor {
             source,
             prepared_context,
             prepared_request,
+            prepared_start,
+            start_requested: _,
             started,
         } = input;
         let context = context.child();
@@ -429,7 +434,7 @@ impl TurnExecutor {
             }
             Ok(()) => {
                 let inner = self.run_inner(
-                    (request, system_prefix_len, prepared_request),
+                    (request, system_prefix_len, prepared_request, prepared_start),
                     &events,
                     &mut state,
                     &context,
@@ -576,10 +581,11 @@ impl TurnExecutor {
 
     async fn run_inner(
         &self,
-        (mut request, system_prefix_len, mut prepared_request): (
+        (mut request, system_prefix_len, mut prepared_request, prepared_start): (
             ModelRequest,
             usize,
             Option<crate::extensions::PreparedRequestView>,
+            Option<crate::extensions::PreparedStartup>,
         ),
         events: &AgentEventEmitter,
         state: &mut AgentRunStateMachine,
@@ -630,7 +636,23 @@ impl TurnExecutor {
 
         self.start_lifecycle(journal, context).await?;
         request.stream = self.config.stream;
-        self.prepare_model_tools(&mut request)?;
+        if prepared_start.is_none() {
+            self.prepare_model_tools(&mut request)?;
+        }
+        self.apply_startup(
+            (prepared_start, &mut prepared_request),
+            startup::StartupScope {
+                request: &mut request,
+                messages: &mut context_messages,
+                prefix: &mut context_prefix_len,
+                progress,
+                context,
+                limits,
+                journal,
+                events,
+            },
+        )
+        .await?;
 
         if let Some(info) = &mut progress.model_context {
             info.initial_history_messages = progress.messages.len();
@@ -1826,6 +1848,11 @@ impl TurnExecutorBuilder {
             input_context,
             self.execution_config,
         );
+        executor.startup_hooks = self
+            .extensions
+            .as_ref()
+            .map(|e| e.startup_hooks())
+            .unwrap_or_default();
         executor.boundary_hooks = self
             .extensions
             .as_ref()

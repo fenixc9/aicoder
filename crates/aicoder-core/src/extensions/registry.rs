@@ -50,6 +50,7 @@ pub struct Extension {
     tools: Vec<Arc<dyn ExecutableTool>>,
     providers: Vec<(String, Arc<dyn ModelProvider>)>,
     policies: Vec<(String, Arc<dyn ContextPolicy>)>,
+    startups: Vec<Registered<dyn BeforeStartHook>>,
     boundaries: Vec<Registered<dyn BoundaryHook>>,
     requests: Vec<RequestRegistration>,
     contexts: Vec<Registered<dyn ContextHook>>,
@@ -81,6 +82,7 @@ impl Extension {
             tools: Vec::new(),
             providers: Vec::new(),
             policies: Vec::new(),
+            startups: Vec::new(),
             boundaries: Vec::new(),
             requests: Vec::new(),
             contexts: Vec::new(),
@@ -198,6 +200,25 @@ impl Extension {
             size(&spec, 1024)?,
         )?;
         self.guards.push(Registered {
+            owner: self.manifest.id.clone(),
+            spec,
+            callback: hook,
+        });
+        Ok(self)
+    }
+    pub fn before_start_hook(
+        &mut self,
+        spec: HookSpec,
+        hook: Arc<dyn BeforeStartHook>,
+    ) -> Result<&mut Self> {
+        spec.validate()?;
+        self.register(
+            "before_start_hook",
+            &spec.id,
+            Some(spec.priority),
+            size(&spec, 1024)?,
+        )?;
+        self.startups.push(Registered {
             owner: self.manifest.id.clone(),
             spec,
             callback: hook,
@@ -512,6 +533,15 @@ impl ExtensionSet {
             .iter()
             .flat_map(|e| e.guards.iter().cloned())
             .collect();
+        hooks.sort_by_key(|h| h.spec.priority);
+        hooks
+    }
+    pub(crate) fn startup_hooks(&self) -> Vec<Registered<dyn BeforeStartHook>> {
+        let mut hooks = self
+            .extensions
+            .iter()
+            .flat_map(|e| e.startups.clone())
+            .collect::<Vec<_>>();
         hooks.sort_by_key(|h| h.spec.priority);
         hooks
     }

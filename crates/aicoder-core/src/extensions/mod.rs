@@ -1,4 +1,9 @@
 //! Explicit native extension registration. Native code is trusted host code, not a sandbox.
+mod startup;
+pub(crate) use startup::PreparedStartup;
+pub use startup::{
+    BeforeStartAction, BeforeStartHook, BeforeStartInput, StartupChange, StartupMetadata,
+};
 mod boundary;
 mod commands;
 pub(crate) use boundary::explicit_context_message;

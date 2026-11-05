@@ -81,6 +81,13 @@ jobs:
           cargo run --locked -p aicoder-runtime --example offline_boundary_hooks -- --deny
           cargo run --locked -p aicoder-runtime --features code-mode --example offline_boundary_hooks -- --code-mode
           cargo run --locked -p aicoder-runtime --features code-mode --example offline_boundary_hooks -- --code-mode --deny
+      - name: Once-per-run startup preparation
+        run: |
+          cargo test --locked -p aicoder-runtime --no-default-features --test startup_hooks
+          cargo run --locked -p aicoder-runtime --example offline_startup_hooks
+          cargo run --locked -p aicoder-runtime --example offline_startup_hooks -- --deny
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_startup_hooks -- --code-mode
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_startup_hooks -- --code-mode --deny
       - name: Planning, protected paths and read-only worker Agent extensions
         run: cargo run --locked -p aicoder-runtime --example coding_extensions
       - name: Versioned process tools and owned-plan approval

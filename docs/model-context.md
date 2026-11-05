@@ -5,6 +5,8 @@ separate provider-facing message view. Recovery repair, pruning and capability a
 can change the provider view without turning synthetic output into a historical fact.
 Explicit [native boundary context](boundary-hooks.md) is a recorded message with source provenance;
 it remains in canonical history and summaries. Inert boundary Data receipts remain metadata.
+[Startup hooks](startup-hooks.md) may replace only the declared runtime prefix for a run; private
+prefix text and active-tool selections are not restored from session metadata.
 This completes S4's history/context separation item. Semantic summaries, output artifacts,
 full session navigation and tokenizer policies remain separate S4 work.
 

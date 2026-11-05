@@ -113,6 +113,10 @@
   preserve extension provenance. Inert data never becomes instructions or restored authority.
   Continue in the existing metered loop; recheck controls after settle waits, retain acknowledged
   facts on deadline expiry, and never override verifier rejection or repeat completed effects.
+  Startup edits are once-per-run snapshots, separate from model-selection previews and raw
+  input interception. Preserve original user/history facts, count the final prefix and tool
+  selection, keep empty catalogs empty, and commit sourced context with the initial turn batch.
+  Runtime prompt overrides are run-local; prepared startup snapshots never restore from history.
 - Process tools use explicit host launch settings and conservative capabilities. Keep remote
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership

@@ -10,6 +10,7 @@ pub const MAX_BOUNDARY_BYTES: usize = 64 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BoundaryKind {
+    BeforeStart,
     TurnEnd,
     BeforeSettle,
 }
@@ -90,6 +91,8 @@ pub struct BoundaryChange {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoundaryCommit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub startup: Option<StartupMetadata>,
     pub kind: BoundaryKind,
     pub round: usize,
     pub base_index: usize,
@@ -98,6 +101,28 @@ pub struct BoundaryCommit {
     pub changes: Vec<BoundaryChange>,
 }
 impl BoundaryCommit {
+    pub(crate) fn session_entries(&self) -> anyhow::Result<Vec<crate::session::SessionEntryData>> {
+        use crate::session::{NativeContextSource, SessionEntryData};
+        let mut entries = vec![SessionEntryData::Extension {
+            namespace: LIFECYCLE_NAMESPACE.into(),
+            data: serde_json::to_value(LifecycleRecord::Applied {
+                commit: self.clone(),
+            })?,
+        }];
+        for proposal in &self.entries {
+            if let BoundaryEntry::Context { kind, text } = &proposal.entry {
+                entries.push(SessionEntryData::native_context(
+                    NativeContextSource {
+                        extension: proposal.extension.clone(),
+                        hook: proposal.hook.clone(),
+                        kind: kind.clone(),
+                    },
+                    text,
+                )?);
+            }
+        }
+        Ok(entries)
+    }
     /// Canonical messages delivered by this explicitly sourced host action, not metadata replay.
     pub fn messages(&self) -> Vec<Message> {
         self.entries

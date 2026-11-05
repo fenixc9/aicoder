@@ -1,5 +1,29 @@
 # API migrations
 
+## S7: once-per-run startup preparation
+
+Extension adds before_start_hook with BeforeStartHook/Input/Action. It can replace the current
+run's declared System prefix, select admitted root tools (including empty), and append bounded
+inert data or sourced native context. Later handlers see preceding edits. No default hook,
+settings route, dependency or default feature was added. See [contract](startup-hooks.md).
+
+ExecutionInput adds for_run(): prepare_input(input.for_run(), context) freezes startup before
+turn validation/persistence. Plain prepare_input remains a selection preview. Agent session turn
+entry points opt in automatically; direct execution prepares an unprepared startup. The private
+snapshot rejects another executor, cannot serialize/restore and expires with its explicit input.
+It does not replace raw-input transformation or handled-input outcomes.
+
+BoundaryKind adds BeforeStart, and BoundaryCommit adds optional startup metadata. Update exhaustive
+Rust matches and direct struct literals (startup: None for ordinary boundaries). Serde defaults
+and omits None, preserving older receipts byte-for-byte in value form. The optional metadata
+contains actors, counts and tool names, never prompt text. Startup uses round 0 in its stored
+receipt and no event round scope; the v1 event schema extends the boundary discriminator.
+RunJournal's existing record_lifecycle/commit_boundary contract applies. Custom journals must
+support both before installing startup; no new journal method is required. Prepared session
+turns commit the original input, receipt and context in one initial transaction. Existing readers
+retain opaque receipts without restoring prompt overrides or tool authority.
+
+
 ## S7: actionable round and settlement boundaries
 
 Extension adds boundary_hook with BoundaryHook/BoundaryAction and typed TurnEnd/BeforeSettle

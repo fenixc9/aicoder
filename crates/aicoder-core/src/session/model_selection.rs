@@ -28,7 +28,14 @@ impl TurnExecutor {
             return Err(context.error().into());
         }
         input.request.stream = self.config.stream;
-        self.prepare_model_tools(&mut input.request)?;
+        if let Some(start) = &input.prepared_start {
+            ensure!(
+                start.owner == self.request_owner,
+                "startup snapshot belongs to another executor"
+            );
+        } else {
+            self.prepare_model_tools(&mut input.request)?;
+        }
         input.started.get_or_insert_with(tokio::time::Instant::now);
         let deadline = if let Some(duration) = self.config.budget.max_duration {
             Some(
@@ -56,6 +63,9 @@ impl TurnExecutor {
                 input.request.messages = prepared.system_prefix;
                 input.request.messages.extend(messages);
                 input.prepared_context = Some(prepared.provenance);
+            }
+            if input.start_requested && input.prepared_start.is_none() && self.has_startup_hooks() {
+                self.prepare_startup(&mut input, context).await?;
             }
             if self.has_request_hooks()
                 && input
@@ -176,6 +186,13 @@ impl TurnExecutor {
                     .any(char::is_control),
             "invalid model selection identity"
         );
+        ensure!(
+            input
+                .prepared_start
+                .as_ref()
+                .is_none_or(|s| s.owner == self.request_owner),
+            "startup snapshot belongs to another executor"
+        );
         let prepared = input
             .prepared_request
             .as_ref()
@@ -187,7 +204,11 @@ impl TurnExecutor {
         let mut request =
             std::borrow::Cow::Borrowed(prepared.map_or(&input.request, |v| &v.request));
         let definitions = self.model_tool_definitions();
-        if prepared.is_none() && request.tools.is_empty() && !definitions.is_empty() {
+        if prepared.is_none()
+            && input.prepared_start.is_none()
+            && request.tools.is_empty()
+            && !definitions.is_empty()
+        {
             request.to_mut().tools = definitions;
         } else {
             ensure!(

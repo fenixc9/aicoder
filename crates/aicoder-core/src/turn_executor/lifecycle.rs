@@ -15,7 +15,7 @@ impl TurnExecutor {
         journal: &dyn crate::RunJournal,
         context: &TurnExecutionContext,
     ) -> Result<()> {
-        if self.boundary_hooks.is_empty() {
+        if self.boundary_hooks.is_empty() && self.startup_hooks.is_empty() {
             return Ok(());
         }
         let record = LifecycleRecord::Started {
@@ -23,6 +23,11 @@ impl TurnExecutor {
                 .boundary_hooks
                 .iter()
                 .map(|h| format!("{}/{}", h.owner, h.spec.id))
+                .chain(
+                    self.startup_hooks
+                        .iter()
+                        .map(|h| format!("{}/{}", h.owner, h.spec.id)),
+                )
                 .collect(),
         };
         tokio::select! {biased;cancelled=context.cancelled()=>Err(cancelled.into()),result=tokio::time::timeout(Duration::from_secs(30),journal.record_lifecycle(&record))=>result.map_err(|_|anyhow::anyhow!("lifecycle journal timed out")).and_then(|v|v).map_err(|e|RunFailure::from_error(RunStage::Persistence,&e).into())}
@@ -162,6 +167,7 @@ impl TurnExecutor {
             .into());
         }
         let commit = BoundaryCommit {
+            startup: None,
             kind,
             round: progress.rounds,
             base_index: progress.messages.len(),
