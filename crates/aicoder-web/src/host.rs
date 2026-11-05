@@ -271,7 +271,12 @@ impl WebHost {
             aicoder_core::AgentInput::from(text).with_source(aicoder_core::InputSource::Web),
         ))
     }
-    pub(crate) fn launch(&self, state: &mut State, prompt: aicoder_core::AgentInput) -> Arc<Run> {
+    pub(crate) fn launch(
+        &self,
+        state: &mut State,
+        prompt: impl Into<aicoder_core::AgentPrompt>,
+    ) -> Arc<Run> {
+        let prompt = prompt.into();
         let ui = aicoder_core::ui::UiHost::interactive();
         let (handle, control) = self
             .0
@@ -305,7 +310,7 @@ impl WebHost {
         let weak = Arc::downgrade(&self.0);
         let record = run.clone();
         let owner = tokio::spawn(async move {
-            let outcome = std::panic::AssertUnwindSafe(agent.run_with_session_controlled(
+            let outcome = std::panic::AssertUnwindSafe(agent.run_prompt_with_session_controlled(
                 repository.as_ref(),
                 selection,
                 prompt,

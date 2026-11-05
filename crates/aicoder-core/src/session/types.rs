@@ -33,6 +33,9 @@ pub struct SessionEntry {
 }
 #[derive(Debug, Clone)]
 pub enum SessionEntryData {
+    CustomMessage {
+        custom: crate::CustomMessage,
+    },
     NativeContext {
         source: super::NativeContextSource,
         message: Message,
@@ -65,6 +68,10 @@ pub enum SessionEntryData {
 #[derive(Serialize, Deserialize)]
 #[serde(remote = "SessionEntryData", tag = "kind", rename_all = "snake_case")]
 pub(super) enum StoredSessionEntryData {
+    #[serde(skip)]
+    CustomMessage {
+        custom: crate::CustomMessage,
+    },
     #[serde(skip)]
     NativeContext {
         source: super::NativeContextSource,
@@ -282,13 +289,15 @@ impl Session {
         self.active_entries()
             .into_iter()
             .filter_map(|entry| match &entry.data {
-                SessionEntryData::Message { message }
-                | SessionEntryData::NativeContext { message, .. } => Some(SessionMessage {
-                    id: &entry.id,
-                    parent_id: entry.parent_id.as_deref(),
-                    created_at: entry.created_at,
-                    message,
-                }),
+                data if data.as_message().is_some() => {
+                    let message = data.as_message().expect("message");
+                    Some(SessionMessage {
+                        id: &entry.id,
+                        parent_id: entry.parent_id.as_deref(),
+                        created_at: entry.created_at,
+                        message,
+                    })
+                }
                 _ => None,
             })
             .collect()
@@ -374,13 +383,15 @@ impl Session {
             );
             match &entry.data {
                 SessionEntryData::Extension { namespace, .. }
-                    if namespace == super::NATIVE_CONTEXT_NAMESPACE =>
+                    if namespace == super::NATIVE_CONTEXT_NAMESPACE
+                        || namespace == crate::CUSTOM_MESSAGE_NAMESPACE =>
                 {
-                    anyhow::bail!("native context namespace requires typed NativeContext")
+                    anyhow::bail!("reserved message namespace requires a typed entry")
                 }
+                SessionEntryData::CustomMessage { custom } => custom.validate()?,
                 SessionEntryData::NativeContext { source, message } => source.validate(message)?,
                 SessionEntryData::Message { message } => ensure!(
-                    message.role != MessageRole::System,
+                    !matches!(message.role, MessageRole::System | MessageRole::Custom),
                     "System messages are runtime context and cannot be stored in a session"
                 ),
                 SessionEntryData::ModelChanged { provider, model } => ensure!(

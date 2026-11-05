@@ -117,6 +117,11 @@ fn line(reader: &mut BufReader<File>, limit: usize) -> Result<Vec<u8>> {
 }
 fn descriptor(entry: &SessionEntry) -> SessionEntry {
     let data = match &entry.data {
+        SessionEntryData::CustomMessage { custom } => SessionEntryData::CustomMessage {
+            custom: aicoder_core::CustomMessage::new(custom.source(), custom.custom_type(), vec![])
+                .expect("validated custom source")
+                .with_display(custom.display()),
+        },
         SessionEntryData::NativeContext { source, .. } => {
             SessionEntryData::native_context(source.clone(), "").expect("validated native source")
         }

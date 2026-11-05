@@ -102,8 +102,11 @@ that full product parity has already been achieved.
    [Startup hooks](startup-hooks.md) now freeze run-level System prefix replacement, admitted root
    selection and sourced context before turn validation/persistence. Empty catalogs, once-only
    preparation, queueing while busy, restored context and expiring private overrides are verified.
-   The session-aware Agent still accepts user AgentInput only; idle custom-message submission
-   with trigger-turn semantics remains a separate entry-point gap despite raw executor support.
+   [Idle custom messages](custom-messages.md) now support typed source/text/images/display/details,
+   record-only and trigger-turn session paths, explicit startup trigger metadata, and native
+   TUI/Web command submission without synthetic users. Canonical custom history stays separate
+   from JSON/SSE provider projections. Custom delivery while busy (steer/follow-up/next-turn and
+   deferred no-trigger append) remains open.
    [Raw input interception](input-hooks.md) now implements ordered continue/transform/handled
    before expansion or steering notification. Explicit handled outcomes, ephemeral raw recovery,
    nonblocking RPC/TUI submission and authenticated Web initial input are exercised separately;

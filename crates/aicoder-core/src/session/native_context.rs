@@ -50,6 +50,7 @@ impl SessionEntryData {
     pub fn as_message(&self) -> Option<&Message> {
         match self {
             Self::Message { message } | Self::NativeContext { message, .. } => Some(message),
+            Self::CustomMessage { custom } => Some(custom.message()),
             _ => None,
         }
     }
@@ -61,7 +62,16 @@ impl SessionEntryData {
 }
 impl Serialize for SessionEntryData {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if let Self::NativeContext { source, message } = self {
+        if let Self::CustomMessage { custom } = self {
+            custom.validate().map_err(S::Error::custom)?;
+            StoredSessionEntryData::serialize(
+                &Self::Extension {
+                    namespace: crate::CUSTOM_MESSAGE_NAMESPACE.into(),
+                    data: serde_json::json!({"version":1,"custom":custom}),
+                },
+                serializer,
+            )
+        } else if let Self::NativeContext { source, message } = self {
             source.validate(message).map_err(S::Error::custom)?;
             let data = serde_json::to_value(Wire {
                 version: 1,
@@ -77,9 +87,10 @@ impl Serialize for SessionEntryData {
                 serializer,
             )
         } else {
-            if matches!(self,Self::Extension {namespace,..}if namespace==NATIVE_CONTEXT_NAMESPACE) {
+            if matches!(self,Self::Extension {namespace,..}if namespace==NATIVE_CONTEXT_NAMESPACE || namespace==crate::CUSTOM_MESSAGE_NAMESPACE)
+            {
                 return Err(S::Error::custom(
-                    "native context namespace requires typed NativeContext",
+                    "reserved message namespace requires a typed entry",
                 ));
             }
             StoredSessionEntryData::serialize(self, serializer)
@@ -90,6 +101,19 @@ impl<'de> Deserialize<'de> for SessionEntryData {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = StoredSessionEntryData::deserialize(deserializer)?;
         match value {
+            Self::Extension { namespace, data } if namespace == crate::CUSTOM_MESSAGE_NAMESPACE => {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct CustomWire {
+                    version: u32,
+                    custom: crate::CustomMessage,
+                }
+                let wire: CustomWire = serde_json::from_value(data).map_err(D::Error::custom)?;
+                ensure_version(wire.version).map_err(D::Error::custom)?;
+                Ok(Self::CustomMessage {
+                    custom: wire.custom,
+                })
+            }
             Self::Extension { namespace, data } if namespace == NATIVE_CONTEXT_NAMESPACE => {
                 crate::extensions::size(&data, 96 * 1024).map_err(D::Error::custom)?;
                 let wire: Wire = serde_json::from_value(data).map_err(D::Error::custom)?;

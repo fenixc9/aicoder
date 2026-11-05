@@ -126,3 +126,6 @@ The example registers provider/tool/policy/context/guard/observer/command contri
 submits a command result through Agent and proves that planning blocks mutation and leaving
 planning does not create approval authority. Runtime integration tests additionally compose
 native context with project resources and JSONL sessions. No credentials/network are used.
+
+[Custom message commands](custom-messages.md) can return SubmitCustom with a validated envelope;
+the registry binds the sender and hosts submit an AgentPrompt through the same execution core.

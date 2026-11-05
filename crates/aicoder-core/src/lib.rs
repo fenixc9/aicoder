@@ -4,6 +4,10 @@
 //! CLI, TUI, server, or embedded application can choose its own configuration and presentation.
 
 pub mod agent;
+mod agent_prompt;
+pub use agent_prompt::{
+    AgentPrompt, CUSTOM_MESSAGE_NAMESPACE, CustomMessage, MAX_CUSTOM_MESSAGE_BYTES, RunTrigger,
+};
 pub mod agent_input;
 pub use agent_input::{AgentInput, InputSource};
 pub mod cancellation;

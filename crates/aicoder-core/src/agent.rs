@@ -295,10 +295,19 @@ impl Agent {
         handler: Arc<dyn AgentEventHandler>,
         context: TurnExecutionContext,
     ) -> AgentTurnOutcome {
+        self.run_prompt_outcome(crate::AgentPrompt::User(prompt.into()), handler, context)
+            .await
+    }
+    pub async fn run_prompt_outcome(
+        &self,
+        prompt: impl Into<crate::AgentPrompt>,
+        handler: Arc<dyn AgentEventHandler>,
+        context: TurnExecutionContext,
+    ) -> AgentTurnOutcome {
         let context = context.child();
         let now = tokio::time::Instant::now();
         let prompt = prompt.into();
-        let started = prompt.prepared.as_ref().map_or(now, |p| p.started.min(now));
+        let started = prompt.prepared_user().map_or(now, |p| p.started.min(now));
         let started = context
             .control
             .as_ref()
@@ -308,24 +317,17 @@ impl Agent {
             .start_scope(&self.config.model, handler, &context);
         let mut initial = self.system_messages();
         initial.push(prompt.message().clone());
-        match self
-            .turn_executor
-            .prepare_user_input_at(
-                prompt,
-                crate::extensions::InputDelivery::Initial,
-                &context,
-                started,
-            )
-            .await
-        {
-            Ok(crate::extensions::InputPreparation::Ready(input)) => {
-                let prepared_user = input.prepared.clone();
+        match prompt.prepare(&self.turn_executor, &context, started).await {
+            Ok(crate::agent_prompt::PromptPreparation::Ready(input)) => {
+                let prepared_user = input.prepared_user().cloned();
+                let trigger = Some(input.trigger());
                 let mut messages = self.system_messages();
                 messages.push(input.into_message());
                 let mut input =
                     crate::ExecutionInput::from_request(self.completion_request(messages));
                 input.started = Some(started);
                 input.prepared_user = prepared_user;
+                input.trigger = trigger;
                 from_execution(
                     self.turn_executor
                         .run_scoped_input(input, context, &(), scope)
@@ -335,7 +337,7 @@ impl Agent {
             }
             result => {
                 let error = match result {
-                    Ok(crate::extensions::InputPreparation::Handled(handled)) => {
+                    Ok(crate::agent_prompt::PromptPreparation::Handled(handled)) => {
                         initial.pop();
                         anyhow::Error::new(handled)
                     }
@@ -364,6 +366,65 @@ impl Agent {
         }
     }
 
+    pub async fn run_prompt(
+        &self,
+        prompt: impl Into<crate::AgentPrompt>,
+        handler: Arc<dyn AgentEventHandler>,
+    ) -> Result<AgentTurnResult> {
+        self.run_prompt_outcome(prompt, handler, TurnExecutionContext::new())
+            .await
+            .into_result()
+    }
+    pub async fn run_prompt_controlled(
+        &self,
+        prompt: impl Into<crate::AgentPrompt>,
+        handler: Arc<dyn AgentEventHandler>,
+        control: crate::RunControl,
+    ) -> AgentTurnOutcome {
+        self.run_prompt_outcome(prompt, handler, control.context.clone())
+            .await
+    }
+    /// Idle append, with no model run or synthetic user message. Existing history stays intact.
+    pub async fn append_custom_message(
+        &self,
+        repository: &dyn SessionRepository,
+        id: &str,
+        custom: crate::CustomMessage,
+        context: TurnExecutionContext,
+    ) -> Result<SessionMetadata> {
+        if context.is_cancelled() {
+            return Err(context.error().into());
+        }
+        custom.validate()?;
+        let mut session = repository.open_run(id)?;
+        ensure!(
+            session.metadata().cwd == self.turn_executor.workspace_root(),
+            "session belongs to another workspace"
+        );
+        let _lease = session.acquire(repository)?;
+        ensure!(
+            session.unfinished_turn().is_none(),
+            "recover the unfinished turn before appending idle custom context"
+        );
+        let mut request = self.completion_request(self.system_messages());
+        request.model = self.selected_model(&session)?;
+        self.apply_session_reasoning(&mut request, &session)?;
+        request.messages.push(custom.message().clone());
+        let input = self
+            .turn_executor
+            .prepare_input(
+                crate::ExecutionInput::from_run_session(request, &session)?,
+                &context,
+            )
+            .await?;
+        self.turn_executor.validate_model_selection(&input)?;
+        self.turn_executor.check_preparation_budget(&input)?;
+        if context.is_cancelled() {
+            return Err(context.error().into());
+        }
+        session.append(repository, vec![SessionEntryData::CustomMessage { custom }])?;
+        Ok(session.metadata().clone())
+    }
     pub async fn compact_session(
         &self,
         repository: &dyn SessionRepository,
@@ -396,9 +457,26 @@ impl Agent {
         handler: Arc<dyn AgentEventHandler>,
         control: crate::RunControl,
     ) -> AgentTurnOutcome {
+        self.run_prompt_with_session_controlled(
+            repository,
+            selection,
+            crate::AgentPrompt::User(prompt.into()),
+            handler,
+            control,
+        )
+        .await
+    }
+    pub async fn run_prompt_with_session_controlled(
+        &self,
+        repository: &dyn SessionRepository,
+        selection: SessionSelection,
+        prompt: impl Into<crate::AgentPrompt>,
+        handler: Arc<dyn AgentEventHandler>,
+        control: crate::RunControl,
+    ) -> AgentTurnOutcome {
         control.shared.start();
         let mut outcome = self
-            .run_with_session_outcome(
+            .run_prompt_with_session_outcome(
                 repository,
                 selection,
                 prompt,
@@ -457,10 +535,27 @@ impl Agent {
         handler: Arc<dyn AgentEventHandler>,
         context: TurnExecutionContext,
     ) -> AgentTurnOutcome {
+        self.run_prompt_with_session_outcome(
+            repository,
+            selection,
+            crate::AgentPrompt::User(prompt.into()),
+            handler,
+            context,
+        )
+        .await
+    }
+    pub async fn run_prompt_with_session_outcome(
+        &self,
+        repository: &dyn SessionRepository,
+        selection: SessionSelection,
+        prompt: impl Into<crate::AgentPrompt>,
+        handler: Arc<dyn AgentEventHandler>,
+        context: TurnExecutionContext,
+    ) -> AgentTurnOutcome {
         let mut context = context.child();
         let prompt = prompt.into();
         let now = tokio::time::Instant::now();
-        let started = prompt.prepared.as_ref().map_or(now, |p| p.started.min(now));
+        let started = prompt.prepared_user().map_or(now, |p| p.started.min(now));
         let started = context
             .control
             .as_ref()
@@ -520,27 +615,21 @@ impl Agent {
             preparation_stage = RunStage::Persistence;
             let lease = session.acquire(repository)?;
             preparation_stage = RunStage::Preparing;
-            let (user, prepared_user) = match self
-                .turn_executor
-                .prepare_user_input_at(
-                    prompt,
-                    crate::extensions::InputDelivery::Initial,
-                    &context,
-                    started,
-                )
+            let prompt = match prompt
+                .prepare(&self.turn_executor, &context, started)
                 .await?
             {
-                crate::extensions::InputPreparation::Ready(input) => {
-                    let prepared = input.prepared.clone();
-                    (input.into_message(), prepared)
-                }
-                crate::extensions::InputPreparation::Handled(handled) => {
+                crate::agent_prompt::PromptPreparation::Ready(input) => input,
+                crate::agent_prompt::PromptPreparation::Handled(handled) => {
                     initial = self.system_messages();
                     return Err(handled.into());
                 }
             };
+            let prepared_user = prompt.prepared_user().cloned();
+            let trigger = Some(prompt.trigger());
+            let message = prompt.message().clone();
             initial = self.system_messages();
-            initial.push(user.clone());
+            initial.push(message);
             model?;
             let mut request = self.completion_request(initial.clone());
             request.model = requested_model;
@@ -548,6 +637,7 @@ impl Agent {
             let mut input = crate::ExecutionInput::from_run_session(request, &session)?.for_run();
             input.started = Some(started);
             input.prepared_user = prepared_user.clone();
+            input.trigger = trigger;
             let mut input = self.turn_executor.prepare_input(input, &context).await?;
             let report = self.turn_executor.validate_model_selection(&input)?;
             self.turn_executor.check_preparation_budget(&input)?;
@@ -584,7 +674,7 @@ impl Agent {
                     })?,
                 });
             }
-            entries.push(SessionEntryData::Message { message: user });
+            entries.push(prompt.entry());
             let startup_messages = input
                 .prepared_start
                 .as_ref()

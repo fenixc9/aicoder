@@ -183,11 +183,10 @@ async fn main() -> Result<()> {
                 &TurnExecutionContext::new(),
             )
             .await?;
-        let input = match command {
-            CommandOutput::Submit(input) => input,
-            CommandOutput::Notice(_) => "Attempt the example mutation".into(),
-        };
-        agent.run(input, Arc::new(())).await?;
+        let input = command
+            .into_prompt()
+            .unwrap_or_else(|| aicoder_core::AgentPrompt::from("Attempt the example mutation"));
+        agent.run_prompt(input, Arc::new(())).await?;
     }
     ensure!(
         mutations.load(Ordering::SeqCst) == 0,

@@ -17,6 +17,10 @@ run ownership. See [backend boundaries](runtime-backends.md).
 
 ## Entries and branches
 
+[Custom messages](custom-messages.md) retain their own canonical role and typed source. Idle
+append creates no run; trigger-turn appends them with the initial transaction. Their compatible
+Extension wire form, details and display flag never restore execution or approval authority.
+
 Every immutable `SessionEntry` has an ID, optional earlier parent and timestamp.
 `SessionEntryData` stores messages, model identities, compaction records, extension
 JSON, and turn start/end records. Metadata stores the selected leaf and revision.

@@ -19,10 +19,20 @@ pub struct CommandRequest<'a> {
     pub context: CommandContext<'a>,
     pub arguments: &'a Value,
 }
-/// The host displays text or explicitly submits the returned user input through its normal loop.
+/// The host displays text or submits the typed user/custom prompt through the same Agent API.
 pub enum CommandOutput {
     Notice(String),
     Submit(AgentInput),
+    SubmitCustom(crate::CustomMessage),
+}
+impl CommandOutput {
+    pub fn into_prompt(self) -> Option<crate::AgentPrompt> {
+        match self {
+            Self::Notice(_) => None,
+            Self::Submit(input) => Some(input.into()),
+            Self::SubmitCustom(custom) => Some(custom.into()),
+        }
+    }
 }
 #[async_trait]
 pub trait ExtensionCommand: Send + Sync {

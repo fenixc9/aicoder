@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 pub struct BeforeStartInput<'a> {
+    pub trigger: Option<&'a crate::RunTrigger>,
     pub workspace: &'a Path,
     pub request: &'a ModelRequest,
     pub history: &'a [Message],

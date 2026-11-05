@@ -45,6 +45,8 @@ continue the same budgeted run at successful round/settlement boundaries.
 selection and sourced context before validation and persistence.
 [Raw input hooks](docs/input-hooks.md) continue, transform or consume input before expansion
 and queueing, with ordered asynchronous controls and private recovery data.
+[Custom messages](docs/custom-messages.md) retain typed extension provenance, text/images and
+inert details, supporting idle storage and native-command-triggered runs without synthetic users.
 [Explicit host launch files](docs/host-extensions.md) enable process/MCP tools in CLI, TUI and Web.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime

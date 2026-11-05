@@ -97,3 +97,6 @@ python3 scripts/check_export_browser.py artifacts/export-demo/session.html artif
 
 Browser verification uses the optional Playwright development requirements shared with the
 Web example. Normal export and publication binaries require no browser, Python or JS runtime.
+
+[Custom messages](custom-messages.md) retain source, display intent and inert details in canonical
+exports. Hidden TUI entries are still exported explicitly; no custom image URL is fetched/rendered.

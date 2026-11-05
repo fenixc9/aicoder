@@ -754,3 +754,80 @@ async fn observer_panic_is_reported_without_repeating_a_successful_request() {
 #[cfg(feature = "auxiliary-models")]
 #[path = "support/transport_auxiliary.rs"]
 mod auxiliary;
+
+#[tokio::test]
+async fn canonical_custom_messages_project_to_compatible_json_and_sse_without_user_history_or_detail_leak()
+ {
+    use aicoder_core::{Agent, AgentConfig, CustomMessage, TurnExecutor};
+    for stream in [false, true] {
+        let body = if stream {
+            sse(vec![chunk("done", true), usage_chunk()])
+        } else {
+            success().to_string()
+        };
+        let (url, server) = server(vec![Response {
+            status: "200 OK",
+            body,
+            stream,
+            short: false,
+        }])
+        .await;
+        let mut client = ChatClient::new(config(url, 0)).unwrap();
+        let mut spec = ModelSpec::new("fixture", "m");
+        spec.capabilities.images = true;
+        spec.context_tokens = Some(16384);
+        client.register_model(spec).unwrap();
+        let agent = Agent::new(
+            TurnExecutor::builder(client)
+                .workspace(std::env::current_dir().unwrap())
+                .config(aicoder_core::TurnExecutionConfig {
+                    stream,
+                    ..Default::default()
+                })
+                .build()
+                .unwrap(),
+            AgentConfig::new("m"),
+        );
+        let message = CustomMessage::new(
+            "sender",
+            "wake",
+            vec![
+                ContentBlock::Text {
+                    text: "CUSTOM_FACT".into(),
+                },
+                ContentBlock::Image {
+                    source: ImageSource::Base64 {
+                        media_type: "image/png".into(),
+                        data: "AAAA".into(),
+                    },
+                },
+            ],
+        )
+        .unwrap()
+        .with_details(json!({"private":"DETAILS_NOT_FOR_MODEL"}))
+        .unwrap();
+        let result = agent.run_prompt(message, Arc::new(())).await.unwrap();
+        assert_eq!(result.execution_result.usage.total_tokens, Some(11));
+        assert_eq!(
+            result.execution_result.messages[0].role,
+            MessageRole::Custom
+        );
+        assert!(
+            result
+                .execution_result
+                .messages
+                .iter()
+                .all(|m| m.role != MessageRole::User)
+        );
+        let captured = server.await.unwrap();
+        let payload = &captured[0].1;
+        assert_eq!(payload["messages"][0]["role"], "user");
+        let text = payload.to_string();
+        assert!(
+            text.contains("CUSTOM_FACT")
+                && text.contains("aicoder custom sender/wake")
+                && text.contains("data:image/png;base64,AAAA")
+        );
+        assert!(!text.contains("DETAILS_NOT_FOR_MODEL"));
+    }
+}

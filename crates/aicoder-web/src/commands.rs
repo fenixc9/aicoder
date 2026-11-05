@@ -182,7 +182,8 @@ impl WebHost {
             .await;
             let output = match result {
                 Ok(Ok(CommandOutput::Notice(text))) => json!({"status":"completed","notice":text}),
-                Ok(Ok(CommandOutput::Submit(input))) => {
+                Ok(Ok(output)) => {
+                    let input = output.into_prompt().expect("submit output");
                     let result = (|| {
                         let inner = weak
                             .upgrade()
@@ -199,7 +200,12 @@ impl WebHost {
                             "Command was superseded or cancelled"
                         );
                         anyhow::ensure!(
-                            serde_json::to_vec(input.message())?.len() <= MAX_BODY,
+                            match &input {
+                                aicoder_core::AgentPrompt::User(input) =>
+                                    serde_json::to_vec(input.message())?.len(),
+                                aicoder_core::AgentPrompt::Custom(custom) =>
+                                    serde_json::to_vec(custom)?.len(),
+                            } <= MAX_BODY,
                             "Command input exceeds the Web host bound"
                         );
                         let run = host.launch(&mut state, input);

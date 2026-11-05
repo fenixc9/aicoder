@@ -123,6 +123,10 @@
   Record safe source/size/change metadata with the actual effective user message atomically.
   Handled input creates no model answer or turn. Charge preparation and waits to the same run,
   expire private UI children on drop/closure, and keep frontend command/cancel loops responsive.
+  Custom triggers are explicit sourced domain messages, never synthetic user facts. Keep inert
+  details and display intent separate from model projections; validate complete text/image
+  envelopes and compatibility before idle append or turn writes. Preserve declared runtime
+  prefixes even when recorded context starts the branch, and never restore executable authority.
 - Process tools use explicit host launch settings and conservative capabilities. Keep remote
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership

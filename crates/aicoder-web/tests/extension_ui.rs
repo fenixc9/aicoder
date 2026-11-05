@@ -194,6 +194,11 @@ impl Server {
         extension.tool_hook(spec, Arc::new(Guard)).unwrap();
         if inputs {
             extension
+                .command(Arc::new(WebCustom), Duration::from_secs(2))
+                .unwrap();
+        }
+        if inputs {
+            extension
                 .input_hook(HookSpec::new("raw"), Arc::new(WebInput))
                 .unwrap();
         }
@@ -531,5 +536,60 @@ async fn authenticated_web_runs_transform_before_templates_and_report_consumed_i
     assert_eq!(done["result"]["status"], "handled");
     assert_eq!(done["result"]["stop"]["kind"], "input_handled");
     assert_eq!(server.model.calls.load(Ordering::SeqCst), 1);
+    server.close().await;
+}
+
+struct WebCustom;
+#[async_trait]
+impl ExtensionCommand for WebCustom {
+    fn specification(&self) -> CommandSpec {
+        CommandSpec {
+            name: "custom".into(),
+            description: "custom trigger".into(),
+            parameters: json!({"type":"object"}),
+        }
+    }
+    async fn execute(
+        &self,
+        _: CommandRequest<'_>,
+        _: ExtensionCancellation,
+    ) -> anyhow::Result<CommandOutput> {
+        Ok(CommandOutput::SubmitCustom(
+            CustomMessage::text("unbound", "wake", "CUSTOM_WEB_FACT")?
+                .with_details(json!({"private":"CUSTOM_WEB_DETAILS"}))?,
+        ))
+    }
+}
+#[tokio::test]
+async fn authenticated_custom_commands_trigger_the_shared_agent_with_bound_source_and_inert_details()
+ {
+    let server = Server::with_input(false, true).await;
+    let response = server
+        .post(
+            "/api/commands",
+            json!({"id":1,"name":"custom","arguments":{}}),
+        )
+        .await;
+    assert_eq!(response.status(), 202);
+    let id = response.json::<Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let done = server
+        .wait(&format!("/api/commands/{id}"), |v| !v["result"].is_null())
+        .await;
+    assert_eq!(done["result"]["status"], "submitted");
+    let run = done["result"]["run_id"].as_str().unwrap();
+    let done = server
+        .wait(&format!("/api/runs/{run}"), |v| !v["result"].is_null())
+        .await;
+    assert_eq!(done["result"]["status"], "completed");
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 1);
+    let body = {
+        let requests = server.model.requests.lock().unwrap();
+        serde_json::to_string(&requests[0].messages).unwrap()
+    };
+    assert!(body.contains("CUSTOM_WEB_FACT") && body.contains("aicoder custom ui-test/wake"));
+    assert!(!body.contains("CUSTOM_WEB_DETAILS"));
     server.close().await;
 }

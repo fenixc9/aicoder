@@ -27,6 +27,11 @@ impl TurnExecutor {
         if context.is_cancelled() {
             return Err(context.error().into());
         }
+        for message in &input.history {
+            if message.role == MessageRole::Custom {
+                crate::agent_prompt::validate_custom_message(message)?;
+            }
+        }
         input.request.stream = self.config.stream;
         ensure!(
             input

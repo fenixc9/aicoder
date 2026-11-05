@@ -10,6 +10,7 @@ use crate::{TurnExecutionContext, redaction::sanitize_text};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageRole {
+    Custom,
     System,
     User,
     Assistant,
@@ -335,6 +336,11 @@ impl ModelRequest {
         }
         let mut pending_calls = std::collections::HashSet::new();
         for message in &self.messages {
+            if message.role == MessageRole::Custom {
+                return Err(invalid(
+                    "custom messages require canonical-to-model projection",
+                ));
+            }
             if message.content.is_empty() {
                 return Err(invalid("message content must not be empty"));
             }

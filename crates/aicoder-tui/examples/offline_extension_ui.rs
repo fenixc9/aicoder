@@ -68,6 +68,28 @@ impl ExtensionCommand for Review {
         }
     }
 }
+struct CustomWake;
+#[async_trait]
+impl ExtensionCommand for CustomWake {
+    fn specification(&self) -> CommandSpec {
+        CommandSpec {
+            name: "custom".into(),
+            description: "Start from sourced custom context".into(),
+            parameters: json!({"type":"object"}),
+        }
+    }
+    async fn execute(
+        &self,
+        _: CommandRequest<'_>,
+        _: ExtensionCancellation,
+    ) -> anyhow::Result<CommandOutput> {
+        Ok(CommandOutput::SubmitCustom(
+            CustomMessage::text("unbound", "wake", "CUSTOM_IDLE_FACT")?
+                .with_display(false)
+                .with_details(json!({"inert":"CUSTOM_DETAILS_NOT_FOR_MODEL"}))?,
+        ))
+    }
+}
 struct RawUi;
 #[async_trait]
 impl InputHook for RawUi {
@@ -180,6 +202,7 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let mut extension = Extension::new("review-example", "1")?;
     extension.command(Arc::new(Review), Duration::from_secs(300))?;
+    extension.command(Arc::new(CustomWake), Duration::from_secs(10))?;
     let mut raw = HookSpec::new("raw-input");
     raw.timeout = Duration::from_secs(10);
     extension.input_hook(raw, Arc::new(RawUi))?;

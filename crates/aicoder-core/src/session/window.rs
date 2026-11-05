@@ -129,13 +129,15 @@ impl SessionWindow {
         self.entries
             .iter()
             .filter_map(|entry| match &entry.data {
-                SessionEntryData::Message { message }
-                | SessionEntryData::NativeContext { message, .. } => Some(SessionMessage {
-                    id: &entry.id,
-                    parent_id: entry.parent_id.as_deref(),
-                    created_at: entry.created_at,
-                    message,
-                }),
+                data if data.as_message().is_some() => {
+                    let message = data.as_message().expect("message");
+                    Some(SessionMessage {
+                        id: &entry.id,
+                        parent_id: entry.parent_id.as_deref(),
+                        created_at: entry.created_at,
+                        message,
+                    })
+                }
                 _ => None,
             })
             .collect()

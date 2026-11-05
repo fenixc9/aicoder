@@ -98,6 +98,16 @@ jobs:
           cargo run --locked -p aicoder-runtime --example offline_input_hooks -- --handled
           cargo build --locked -p aicoder-tui --example offline_extension_ui
           python3 scripts/check_input_hooks.py
+      - name: Sourced custom messages and idle triggers
+        run: |
+          cargo test --locked -p aicoder-runtime --no-default-features --test custom_messages
+          cargo run --locked -p aicoder-runtime --example offline_custom_messages
+          cargo run --locked -p aicoder-runtime --example offline_custom_messages -- --deny
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_custom_messages -- --code-mode
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_custom_messages -- --code-mode --deny
+          cargo run --locked -p aicoder-runtime --example offline_custom_messages -- --record-only
+          cargo build --locked -p aicoder-tui --example offline_extension_ui
+          python3 scripts/check_custom_messages.py
       - name: Planning, protected paths and read-only worker Agent extensions
         run: cargo run --locked -p aicoder-runtime --example coding_extensions
       - name: Versioned process tools and owned-plan approval

@@ -366,9 +366,29 @@ impl App {
             "Summarizing session context...".into(),
         ));
     }
+    pub fn begin_prompt(
+        &mut self,
+        prompt: &aicoder_core::AgentPrompt,
+        context: TurnExecutionContext,
+    ) {
+        match prompt {
+            aicoder_core::AgentPrompt::User(input) => {
+                return self.begin_turn(input.message().text_content(), context);
+            }
+            aicoder_core::AgentPrompt::Custom(custom) => {
+                if custom.display() {
+                    push_message(&mut self.timeline, custom.message());
+                }
+            }
+        }
+        self.begin_execution(context);
+    }
     pub fn begin_turn(&mut self, prompt: String, context: TurnExecutionContext) {
         self.observation_incomplete = false;
         self.timeline.push(TimelineItem::User(prompt));
+        self.begin_execution(context);
+    }
+    fn begin_execution(&mut self, context: TurnExecutionContext) {
         self.active_context = Some(context);
         self.started_at = Some(Instant::now());
         self.elapsed = Duration::ZERO;
@@ -667,7 +687,10 @@ impl App {
                     Ok(aicoder_core::extensions::CommandOutput::Notice(text)) => {
                         self.timeline.push(TimelineItem::Notice(text))
                     }
-                    Ok(aicoder_core::extensions::CommandOutput::Submit(_)) => {}
+                    Ok(
+                        aicoder_core::extensions::CommandOutput::Submit(_)
+                        | aicoder_core::extensions::CommandOutput::SubmitCustom(_),
+                    ) => {}
                     Err(error) => self.timeline.push(TimelineItem::Error(error)),
                 }
             }
@@ -932,6 +955,10 @@ impl App {
                 self.usage = window.accounting().usage.clone();
                 self.timeline.push(TimelineItem::Notice(format!("Showing a bounded archive tail; {} older messages remain available through archive pages.",window.source().archived_messages)));
                 for entry in window.entries() {
+                    if matches!(&entry.data,SessionEntryData::CustomMessage{custom}if !custom.display())
+                    {
+                        continue;
+                    }
                     if let Some(message) = entry.data.as_message() {
                         push_message(&mut self.timeline, message);
                     }
@@ -974,6 +1001,11 @@ impl App {
             .unwrap_or_else(|_| ModelUsage::zero());
         for entry in session.active_entries() {
             match &entry.data {
+                SessionEntryData::CustomMessage { custom } => {
+                    if custom.display() {
+                        push_message(&mut self.timeline, custom.message());
+                    }
+                }
                 SessionEntryData::Message { message }
                 | SessionEntryData::NativeContext { message, .. } => {
                     push_message(&mut self.timeline, message)
@@ -1103,6 +1135,10 @@ fn tool_output(outcome: &ToolExecutionOutcome) -> Option<String> {
 }
 
 fn push_message(timeline: &mut Vec<TimelineItem>, message: &Message) {
+    if message.role == MessageRole::Custom {
+        timeline.push(TimelineItem::Notice(message.text_content()));
+    }
+
     for block in &message.content {
         match block {
             aicoder_core::model::ContentBlock::Reasoning { text } => {
@@ -1669,5 +1705,35 @@ mod tests {
         let result = app.input_jobs.join_next().await.unwrap().unwrap();
         app.finish_input_submission(result);
         assert_eq!(app.input.value(), "newer draft");
+    }
+    #[test]
+    fn custom_prompt_display_never_creates_a_user_row_and_hidden_context_stays_hidden_on_restore() {
+        let custom =
+            aicoder_core::CustomMessage::text("sender", "wake", "CUSTOM_VISIBLE_FACT").unwrap();
+        let mut app = App::new(vec![]);
+        app.begin_prompt(&custom.clone().into(), TurnExecutionContext::new());
+        assert!(
+            !app.timeline
+                .iter()
+                .any(|item| matches!(item, TimelineItem::User(_)))
+        );
+        assert!(app.timeline.iter().any(
+            |item| matches!(item,TimelineItem::Notice(text)if text.contains("CUSTOM_VISIBLE_FACT"))
+        ));
+        let root = tempfile::tempdir().unwrap();
+        let repo = aicoder_core::session::MemorySessionRepository::new();
+        use aicoder_core::session::SessionRepository;
+        let mut session = repo.create(root.path()).unwrap();
+        repo.append_entries(
+            &mut session,
+            vec![SessionEntryData::CustomMessage {
+                custom: custom.with_display(false),
+            }],
+        )
+        .unwrap();
+        app.load_session(&session);
+        assert!(!app.timeline.iter().any(
+            |item| matches!(item,TimelineItem::Notice(text)if text.contains("CUSTOM_VISIBLE_FACT"))
+        ));
     }
 }

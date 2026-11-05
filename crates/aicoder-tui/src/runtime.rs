@@ -605,7 +605,7 @@ impl AgentRuntime {
     pub fn start_turn(
         &self,
         selection: SessionSelection,
-        prompt: aicoder_core::AgentInput,
+        prompt: aicoder_core::AgentPrompt,
         reasoning: Option<Option<aicoder_core::model::ReasoningEffort>>,
         control: RunControl,
     ) -> Result<ActiveRun> {
@@ -618,7 +618,7 @@ impl AgentRuntime {
         let (sender, completion) = oneshot::channel();
         tokio::spawn(async move {
             let outcome = agent
-                .run_with_session_controlled(
+                .run_prompt_with_session_controlled(
                     repository.as_ref(),
                     selection,
                     prompt,

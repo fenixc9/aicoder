@@ -1,5 +1,35 @@
 # API migrations
 
+## S7: sourced custom messages and idle triggers
+
+Core adds CustomMessage, AgentPrompt and RunTrigger. Existing user entry points still accept
+Into<AgentInput>; run_prompt* variants accept typed user/custom triggers. append_custom_message
+performs an idle, validated append without running a model or synthesizing a turn. Custom paths
+skip user raw hooks/expansion. BeforeStartInput adds optional trigger; update Rust literals.
+Low-level ModelRequest histories have no inferred trigger. See [contract](custom-messages.md).
+
+MessageRole adds Custom for canonical records only. Core projects it to a labelled compatible
+User message before provider validation/counting/IO; direct unprojected requests reject. Update
+exhaustive role matches and use CustomMessage::model_message only as an ephemeral provider view.
+SessionEntryData adds CustomMessage and as_message includes it. Its storage remains a version 1
+Extension payload under aicoder.custom-message.v1; old readers retain inert data and need upgrading
+for context-equivalent continuation. The reserved namespace and ordinary Message/Custom values
+cannot bypass typed validation. No session version bump or new dependency/feature was added.
+
+CommandOutput adds SubmitCustom; update exhaustive matches or use into_prompt. Command results
+adopt their registered sender before TUI/Web submission. Display/details remain domain data;
+details never enter model requests or restore authority. Explicit exports retain them as inert
+content. Hidden TUI entries still participate in context. Busy custom-control/next-turn delivery
+remains separate work; do not represent those messages as user controls.
+
+ExecutionInput prefix validation now preserves explicit root extension context outside a declared
+host prefix, while retaining the declared prefix even when its text resembles a native label.
+Run preparation carries typed trigger metadata through preflight/startup without duplicating
+execution loops. Prepared snapshots and backend/approval authority remain ephemeral.
+See [example](../crates/aicoder-runtime/examples/offline_custom_messages.rs) and
+[acceptance](s7-custom-messages-acceptance.md).
+
+
 ## S7: raw input interception and ordered asynchronous controls
 
 Extension adds input_hook and InputAction Continue/Transform/Handled. Agent prepares fresh

@@ -58,8 +58,10 @@ pub(super) fn document(
                     b"<article>"
                 })?;
                 let kind = match &entry.data {
+                    SessionEntryData::CustomMessage { .. } => "custom extension message",
                     SessionEntryData::NativeContext { .. } => "native extension context",
                     SessionEntryData::Message { message } => match message.role {
+                        aicoder_core::model::MessageRole::Custom => "custom extension message",
                         aicoder_core::model::MessageRole::System => "system",
                         aicoder_core::model::MessageRole::User => "user",
                         aicoder_core::model::MessageRole::Assistant => "assistant",
@@ -162,7 +164,8 @@ fn json_preview(out: &mut dyn Write, value: &serde_json::Value) -> Result<()> {
 fn preview(out: &mut dyn Write, data: &SessionEntryData) -> Result<()> {
     use aicoder_core::model::ContentBlock;
     match data {
-        SessionEntryData::Message { message } | SessionEntryData::NativeContext { message, .. } => {
+        data if data.as_message().is_some() => {
+            let message = data.as_message().expect("message");
             for block in &message.content {
                 match block {
                 ContentBlock::Text{text}=>text_preview(out,text)?,
@@ -172,6 +175,12 @@ fn preview(out: &mut dyn Write, data: &SessionEntryData) -> Result<()> {
                 ContentBlock::Image{..}=>out.write_all(b"<p>Recorded image source is retained in the canonical record; no image is fetched or rendered.</p>")?,
                 ContentBlock::ProviderData{..}=>out.write_all(b"<p>Opaque provider state is retained as data in the canonical record.</p>")?,
             }
+            }
+            if let SessionEntryData::CustomMessage { custom } = data {
+                json_preview(
+                    out,
+                    &serde_json::json!({"source":custom.source(),"custom_type":custom.custom_type(),"display":custom.display(),"details":custom.details()}),
+                )?;
             }
         }
         SessionEntryData::Compaction { summary, .. } => text_preview(out, summary)?,

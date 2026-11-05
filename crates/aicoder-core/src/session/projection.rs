@@ -103,13 +103,15 @@ impl<'a> SessionBranch<'a> {
     }
     pub fn messages(&self) -> impl Iterator<Item = SessionMessage<'a>> + '_ {
         self.entries.iter().filter_map(|entry| match &entry.data {
-            SessionEntryData::Message { message }
-            | SessionEntryData::NativeContext { message, .. } => Some(SessionMessage {
-                id: &entry.id,
-                parent_id: entry.parent_id.as_deref(),
-                created_at: entry.created_at,
-                message,
-            }),
+            data if data.as_message().is_some() => {
+                let message = data.as_message().expect("message");
+                Some(SessionMessage {
+                    id: &entry.id,
+                    parent_id: entry.parent_id.as_deref(),
+                    created_at: entry.created_at,
+                    message,
+                })
+            }
             _ => None,
         })
     }
@@ -311,6 +313,18 @@ impl<'a> SessionBranch<'a> {
                             entry_id: &entry.id,
                         });
                     }
+                }
+                SessionEntryData::CustomMessage { custom } => {
+                    flush(
+                        &mut pending,
+                        &mut output,
+                        active_turn.is_some() && open == active_turn,
+                    )?;
+                    output.source.recorded_messages += 1;
+                    output.messages.push(custom.message().clone());
+                    output.origins.push(ContextOrigin::Recorded {
+                        entry_id: &entry.id,
+                    });
                 }
                 SessionEntryData::TurnEnd { turn_id, record } => {
                     flush(

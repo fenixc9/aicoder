@@ -181,6 +181,10 @@ impl Session {
                             })
                             .unwrap_or_default(),
                     ),
+                    SessionEntryData::CustomMessage { custom } => (
+                        "custom".into(),
+                        custom.message().text_content().chars().take(160).collect(),
+                    ),
                     SessionEntryData::ModelChanged { provider, model } => (
                         "model_changed".into(),
                         provider

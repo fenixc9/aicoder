@@ -517,6 +517,9 @@ impl ExtensionSet {
             CommandOutput::Notice(text) => {
                 size(text, 64 * 1024)?;
             }
+            CommandOutput::SubmitCustom(custom) => {
+                custom.validate()?;
+            }
             CommandOutput::Submit(input) => {
                 // AgentInput already owns a validated user message; bound the borrowed
                 // envelope before making any host copy of the command's output.
@@ -526,6 +529,9 @@ impl ExtensionSet {
         Ok(match output {
             CommandOutput::Submit(input) => {
                 CommandOutput::Submit(input.with_source(crate::InputSource::Extension))
+            }
+            CommandOutput::SubmitCustom(custom) => {
+                CommandOutput::SubmitCustom(custom.with_source(&command.owner)?)
             }
             other => other,
         })

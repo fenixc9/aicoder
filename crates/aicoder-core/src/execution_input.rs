@@ -34,6 +34,7 @@ pub struct ModelContextInfo {
 }
 #[derive(Debug, Clone)]
 pub struct ExecutionInput {
+    pub(crate) trigger: Option<crate::RunTrigger>,
     pub(crate) prepared_user: Option<crate::extensions::PreparedUserInput>,
     pub(crate) input_committed: bool,
     pub(crate) start_requested: bool,
@@ -58,6 +59,7 @@ impl ExecutionInput {
             request,
             system_prefix_len: prefix,
             source: None,
+            trigger: None,
             prepared_user: None,
             input_committed: false,
             start_requested: false,
@@ -79,11 +81,10 @@ impl ExecutionInput {
             "instruction prefix exceeds input length"
         );
         ensure!(
-            history
+            history[system_prefix_len..]
                 .iter()
-                .take_while(|message| message.role == MessageRole::System)
-                .count()
-                == system_prefix_len,
+                .take_while(|m| m.role == MessageRole::System)
+                .all(crate::extensions::explicit_context_message),
             "history must declare its complete runtime system prefix"
         );
         ensure!(
@@ -98,6 +99,7 @@ impl ExecutionInput {
             history,
             system_prefix_len,
             source: None,
+            trigger: None,
             prepared_user: None,
             input_committed: false,
             start_requested: false,

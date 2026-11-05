@@ -4,6 +4,7 @@ use crate::model::ToolDefinition;
 use std::time::Duration;
 
 pub(super) struct StartupScope<'a> {
+    pub trigger: Option<crate::RunTrigger>,
     pub request: &'a mut ModelRequest,
     pub messages: &'a mut Vec<Message>,
     pub prefix: &'a mut usize,
@@ -33,6 +34,7 @@ impl TurnExecutor {
                 let action = invoke(&hook.owner, &hook.spec, context.ui(), |cancellation| {
                     hook.callback.before_start(
                         BeforeStartInput {
+                            trigger: input.trigger.as_ref(),
                             workspace: self.workspace_root(),
                             request: &input.request,
                             history: &input.history,
@@ -175,6 +177,7 @@ impl TurnExecutor {
         scope: StartupScope<'_>,
     ) -> Result<()> {
         let StartupScope {
+            trigger,
             request,
             messages,
             prefix,
@@ -198,6 +201,7 @@ impl TurnExecutor {
             input.request.messages = messages.clone();
             input.history = progress.messages.clone();
             input.system_prefix_len = *prefix;
+            input.trigger = trigger;
             self.prepare_startup(&mut input, context).await?;
             let prepared = input.prepared_start.take().expect("prepared startup");
             (prepared, Some(input))

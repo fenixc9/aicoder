@@ -363,12 +363,16 @@ async fn drive(
                         .is_some_and(|context| context.is_cancelled())
                     {
                         None
-                    } else if let Ok(aicoder_core::extensions::CommandOutput::Submit(input)) =
-                        report.as_ref()
-                    {
-                        Some(input.clone())
                     } else {
-                        None
+                        match report.as_ref() {
+                            Ok(aicoder_core::extensions::CommandOutput::Submit(input)) => {
+                                Some(aicoder_core::AgentPrompt::User(input.clone()))
+                            }
+                            Ok(aicoder_core::extensions::CommandOutput::SubmitCustom(custom)) => {
+                                Some(aicoder_core::AgentPrompt::Custom(custom.clone()))
+                            }
+                            _ => None,
+                        }
                     }
                 } else {
                     None
@@ -421,12 +425,17 @@ async fn drive(
 fn start_input(
     app: &mut App,
     runtime: &AgentRuntime,
-    prompt: aicoder_core::AgentInput,
+    prompt: aicoder_core::AgentPrompt,
 ) -> Result<()> {
-    let prompt = if prompt.source() == aicoder_core::InputSource::Sdk {
-        prompt.with_source(aicoder_core::InputSource::Interactive)
-    } else {
-        prompt
+    let prompt = match prompt {
+        aicoder_core::AgentPrompt::User(input) => {
+            aicoder_core::AgentPrompt::User(if input.source() == aicoder_core::InputSource::Sdk {
+                input.with_source(aicoder_core::InputSource::Interactive)
+            } else {
+                input
+            })
+        }
+        custom => custom,
     };
     let context = app.ui_context(runtime.execution_context());
     let (handle, control) = runtime.control_channel(
@@ -445,7 +454,7 @@ fn start_input(
         control,
     )?;
     app.pending_reasoning = None;
-    app.begin_turn(prompt.message().text_content(), context);
+    app.begin_prompt(&prompt, context);
     app.active_handle = Some(handle);
     app.run = Some(run);
     Ok(())
@@ -972,7 +981,7 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                 }
                 return;
             }
-            match start_input(app, runtime, prompt) {
+            match start_input(app, runtime, prompt.into()) {
                 Ok(()) => {
                     app.history.record(&raw_prompt);
                     app.references.clear();

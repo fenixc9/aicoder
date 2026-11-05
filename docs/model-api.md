@@ -129,3 +129,7 @@ Host root tool catalogs can be selected with TurnExecutorBuilder::model_tools. T
 request declarations, preflight/context accounting and fresh direct model calls; the installed
 registry remains available to explicitly scoped compositions. Narrower per-request subsets
 also reject unadvertised registered calls before execution. See [root catalogs](code-mode.md#only-mode-and-root-declarations).
+
+[Custom messages](custom-messages.md) add a canonical-only Custom role. Core counts and sends
+a labelled compatible projection; direct adapter requests reject the unprojected role. Keep
+typed custom entries as history and treat model_message() as a request-local view.

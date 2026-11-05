@@ -342,6 +342,12 @@ fn encode_request(request: ModelRequest) -> Result<Value, ProviderError> {
         }
         flush_tool_images(&mut messages, &mut tool_images);
         let role = match message.role {
+            MessageRole::Custom => {
+                return Err(error(
+                    ProviderErrorKind::InvalidRequest,
+                    "custom messages require core projection",
+                ));
+            }
             MessageRole::System => "system",
             MessageRole::User => "user",
             MessageRole::Assistant => "assistant",

@@ -49,6 +49,15 @@ pub(crate) struct RunScope {
     pub(crate) events: AgentEventEmitter,
     state: AgentRunStateMachine,
 }
+struct RunPreparation {
+    request: ModelRequest,
+    system_prefix_len: usize,
+    prepared_request: Option<crate::extensions::PreparedRequestView>,
+    prepared_start: Option<crate::extensions::PreparedStartup>,
+    prepared_user: Option<crate::extensions::PreparedUserInput>,
+    input_committed: bool,
+    trigger: Option<crate::RunTrigger>,
+}
 pub struct TurnExecutor {
     input_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::InputHook>>,
     input_expander: Option<Arc<dyn crate::extensions::InputExpander>>,
@@ -395,6 +404,7 @@ impl TurnExecutor {
         scope: RunScope,
     ) -> RunOutcome {
         let crate::ExecutionInput {
+            trigger,
             request,
             history,
             system_prefix_len,
@@ -448,14 +458,15 @@ impl TurnExecutor {
             }
             Ok(()) => {
                 let inner = self.run_inner(
-                    (
+                    RunPreparation {
                         request,
                         system_prefix_len,
                         prepared_request,
                         prepared_start,
                         prepared_user,
                         input_committed,
-                    ),
+                        trigger,
+                    },
                     &events,
                     &mut state,
                     &context,
@@ -604,32 +615,32 @@ impl TurnExecutor {
 
     async fn run_inner(
         &self,
-        (
-            mut request,
-            system_prefix_len,
-            mut prepared_request,
-            prepared_start,
-            prepared_user,
-            input_committed,
-        ): (
-            ModelRequest,
-            usize,
-            Option<crate::extensions::PreparedRequestView>,
-            Option<crate::extensions::PreparedStartup>,
-            Option<crate::extensions::PreparedUserInput>,
-            bool,
-        ),
+        preparation: RunPreparation,
         events: &AgentEventEmitter,
         state: &mut AgentRunStateMachine,
         context: &TurnExecutionContext,
         progress: &mut RunProgress,
         control: (&Arc<RunLimiter>, &dyn crate::RunJournal),
     ) -> Result<(Message, Option<StopReason>)> {
+        let RunPreparation {
+            mut request,
+            system_prefix_len,
+            mut prepared_request,
+            prepared_start,
+            prepared_user,
+            input_committed,
+            trigger,
+        } = preparation;
         let (limits, journal) = control;
         if context.is_cancelled() {
             return Err(context.error().into());
         }
         limits.check()?;
+        for message in &progress.messages {
+            if message.role == crate::model::MessageRole::Custom {
+                crate::agent_prompt::validate_custom_message(message)?;
+            }
+        }
         self.admit_input_preparation(prepared_user, input_committed, context, journal, limits)
             .await?;
 
@@ -676,6 +687,7 @@ impl TurnExecutor {
         self.apply_startup(
             (prepared_start, &mut prepared_request),
             startup::StartupScope {
+                trigger,
                 request: &mut request,
                 messages: &mut context_messages,
                 prefix: &mut context_prefix_len,

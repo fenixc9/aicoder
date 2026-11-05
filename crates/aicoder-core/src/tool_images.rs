@@ -120,12 +120,13 @@ fn notice(message: &mut Message, reference: Option<&ArtifactRef>, status: &str) 
 /// Select the newest four tool images. User images retain their strict capability checks.
 pub(crate) fn model_messages<'a>(messages: &'a [Message], spec: &ModelSpec) -> Cow<'a, [Message]> {
     let changes = messages.iter().any(|message| {
-        (message.role == MessageRole::Assistant
-            && !spec.capabilities.reasoning_history
-            && message
-                .content
-                .iter()
-                .any(|b| matches!(b, ContentBlock::Reasoning { .. })))
+        message.role == MessageRole::Custom
+            || (message.role == MessageRole::Assistant
+                && !spec.capabilities.reasoning_history
+                && message
+                    .content
+                    .iter()
+                    .any(|b| matches!(b, ContentBlock::Reasoning { .. })))
             || (message.role == MessageRole::Tool
                 && message
                     .content
@@ -139,6 +140,9 @@ pub(crate) fn model_messages<'a>(messages: &'a [Message], spec: &ModelSpec) -> C
     let mut projected = Vec::with_capacity(messages.len());
     for original in messages.iter().rev() {
         let mut message = original.clone();
+        if message.role == MessageRole::Custom {
+            message.role = MessageRole::User;
+        }
         if message.role == MessageRole::Assistant && !spec.capabilities.reasoning_history {
             message
                 .content

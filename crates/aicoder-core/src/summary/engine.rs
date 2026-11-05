@@ -610,7 +610,10 @@ impl ContextCompactor for SemanticContextCompactor {
                 system_prefix_len: input
                     .messages
                     .iter()
-                    .take_while(|m| m.role == MessageRole::System)
+                    .take_while(|m| {
+                        m.role == MessageRole::System
+                            && !crate::extensions::explicit_context_message(m)
+                    })
                     .count(),
                 force: false,
                 token_budget: None,
