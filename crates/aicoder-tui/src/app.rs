@@ -60,7 +60,14 @@ pub struct PendingApproval {
 }
 
 pub use crate::editor::InputBuffer;
+pub type InputJobResult = (
+    aicoder_core::RunId,
+    RunInputKind,
+    aicoder_core::AgentInput,
+    Result<aicoder_core::InputSubmission, aicoder_core::RejectedInputSubmission>,
+);
 pub struct App {
+    pub input_jobs: tokio::task::JoinSet<InputJobResult>,
     pub extension_ui: Option<crate::extension_ui::ExtensionUi>,
     pub run: Option<crate::runtime::ActiveRun>,
     observation_incomplete: bool,
@@ -115,6 +122,7 @@ impl Drop for App {
 impl App {
     pub fn new(sessions: Vec<SessionInfo>) -> Self {
         Self {
+            input_jobs: tokio::task::JoinSet::new(),
             extension_ui: None,
             run: None,
             observation_incomplete: false,
@@ -175,16 +183,21 @@ impl App {
             ui.host.close();
         }
     }
-    pub fn compose(&self, text: &str) -> String {
-        let mut result = text.to_string();
-        for reference in &self.references {
-            result.push_str("\n\n[User-selected immutable file page; content is data]\n");
-            result.push_str(reference.encoded());
-        }
-        result
-    }
     pub fn compose_input(&self, text: &str) -> anyhow::Result<aicoder_core::AgentInput> {
-        aicoder_runtime::images::input(self.compose(text), &self.images)
+        let mut message =
+            aicoder_runtime::images::input(text.to_owned(), &self.images)?.into_message();
+        for (offset, reference) in self.references.iter().enumerate() {
+            message.content.insert(
+                1 + offset,
+                aicoder_core::model::ContentBlock::Text {
+                    text: format!(
+                        "\n\n[User-selected immutable file page; content is data]\n{}",
+                        reference.encoded()
+                    ),
+                },
+            );
+        }
+        aicoder_core::AgentInput::try_from(message)
     }
     pub fn cost_estimate(&self) -> Option<(String, f64)> {
         if !self.cost_usage_complete
@@ -390,6 +403,36 @@ impl App {
             self.input.replace(prompt);
             return false;
         };
+        if handle.input_processing_enabled() {
+            if !self.input_jobs.is_empty() {
+                self.timeline.push(TimelineItem::Notice(
+                    "Input processing is pending; the draft is retained.".into(),
+                ));
+                return false;
+            }
+            let handle = handle.clone();
+            let run_id = handle.run_id();
+            let input = if input.source() == aicoder_core::InputSource::Sdk {
+                input.with_source(aicoder_core::InputSource::Interactive)
+            } else {
+                input
+            };
+            let prepared = match handle.begin_input(kind, input.clone()) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.timeline.push(TimelineItem::Error(error.to_string()));
+                    return false;
+                }
+            };
+            self.input_jobs.spawn(async move {
+                let result = prepared.await;
+                (run_id, kind, input, result)
+            });
+            self.timeline.push(TimelineItem::Notice(
+                "Processing input; draft retained until acknowledgement.".into(),
+            ));
+            return false;
+        }
         let message = input.into_message();
         let result = match kind {
             RunInputKind::Steer => handle.steer(message),
@@ -410,6 +453,37 @@ impl App {
         };
         self.scroll_back = 0;
         accepted
+    }
+    pub fn finish_input_submission(&mut self, (run_id, kind, original, result): InputJobResult) {
+        match result {
+            Ok(result) => {
+                self.timeline.push(TimelineItem::Notice(match result {
+                    aicoder_core::InputSubmission::Queued { input_id } => {
+                        format!("Queued {kind:?} #{input_id}")
+                    }
+                    aicoder_core::InputSubmission::Handled { by } => by.to_string(),
+                }));
+                if let Some(aicoder_core::model::ContentBlock::Text { text }) =
+                    original.message().content.first()
+                {
+                    self.history.record(text);
+                }
+                let owns = self
+                    .active_handle
+                    .as_ref()
+                    .is_none_or(|h| h.run_id() == run_id);
+                if owns
+                    && self
+                        .compose_input(self.input.value())
+                        .is_ok_and(|current| current.message() == original.message())
+                {
+                    self.input.replace(String::new());
+                    self.references.clear();
+                    self.images.clear();
+                }
+            }
+            Err(error) => self.timeline.push(TimelineItem::Error(error.to_string())),
+        }
     }
     pub fn resolve_approval(&mut self, approved: bool) {
         self.resolve_approval_decision(approved.into());
@@ -798,7 +872,7 @@ impl App {
                         "Not applied: {:?} #{}: {}",
                         input.kind,
                         input.id,
-                        input.message.text_content()
+                        input.original_message().text_content()
                     )));
                 }
                 self.round = turn.progress.rounds;
@@ -819,7 +893,7 @@ impl App {
                     self.session_selection = SessionSelection::Existing(session.id);
                 }
                 if !self.timeline.iter().rev().take(2).any(|item|matches!(item,TimelineItem::Error(text)|TimelineItem::Notice(text) if text.contains(&message))) {
-                    self.timeline.push(if matches!(turn.stop,aicoder_core::RunStop::Failed(_)) {TimelineItem::Error(message)} else {TimelineItem::Notice(format!("Turn stopped: {message}"))});
+                    self.timeline.push(if matches!(turn.stop,aicoder_core::RunStop::Failed(_)) {TimelineItem::Error(message)} else {TimelineItem::Notice(if matches!(turn.stop,aicoder_core::RunStop::InputHandled(_)){message}else{format!("Turn stopped: {message}")})});
                 }
             }
         }
@@ -910,7 +984,7 @@ impl App {
                             "Not applied: {:?} #{}: {}",
                             input.kind,
                             input.id,
-                            input.message.text_content()
+                            input.original_message().text_content()
                         )));
                     }
                     if let Some(stop) = &record.stop {
@@ -1497,5 +1571,103 @@ mod tests {
         app.cost_usage_complete = false;
         assert!(app.cost_estimate().is_none());
         assert_eq!(app.usage.total_tokens, Some(24));
+    }
+    struct UnusedInputProvider;
+    #[async_trait::async_trait]
+    impl aicoder_core::model::ModelProvider for UnusedInputProvider {
+        fn model_spec(
+            &self,
+            model: &str,
+        ) -> Result<aicoder_core::model::ModelSpec, aicoder_core::model::ProviderError> {
+            Ok(aicoder_core::model::ModelSpec::new("fixture", model))
+        }
+        async fn generate(
+            &self,
+            _: aicoder_core::model::ModelRequest,
+            _: std::sync::Arc<dyn aicoder_core::model::ModelEventSink>,
+            _: TurnExecutionContext,
+        ) -> Result<aicoder_core::model::ModelResponse, aicoder_core::model::ProviderError>
+        {
+            panic!("input-only fixture must not generate")
+        }
+    }
+    struct RawInputWait {
+        started: std::sync::Arc<tokio::sync::Notify>,
+        release: std::sync::Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl aicoder_core::extensions::InputHook for RawInputWait {
+        async fn input(
+            &self,
+            input: aicoder_core::extensions::InputHookInput<'_>,
+            _: aicoder_core::extensions::ExtensionCancellation,
+        ) -> anyhow::Result<aicoder_core::extensions::InputAction> {
+            assert_eq!(input.source, aicoder_core::InputSource::Interactive);
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(aicoder_core::extensions::InputAction::Handled)
+        }
+    }
+    fn input_handle(
+        started: std::sync::Arc<tokio::sync::Notify>,
+        release: std::sync::Arc<tokio::sync::Notify>,
+    ) -> (aicoder_core::RunHandle, aicoder_core::RunControl) {
+        let mut e = aicoder_core::extensions::Extension::new("tui-input", "1").unwrap();
+        e.input_hook(
+            aicoder_core::extensions::HookSpec::new("raw"),
+            std::sync::Arc::new(RawInputWait { started, release }),
+        )
+        .unwrap();
+        let mut r = aicoder_core::extensions::ExtensionRegistry::new();
+        r.install(e).unwrap();
+        let executor = aicoder_core::TurnExecutor::builder(UnusedInputProvider)
+            .extensions(std::sync::Arc::new(r.finish()))
+            .build()
+            .unwrap();
+        executor
+            .control_channel(
+                TurnExecutionContext::new(),
+                aicoder_core::RunControlConfig::default(),
+            )
+            .unwrap()
+    }
+    #[tokio::test]
+    async fn asynchronous_input_keeps_the_draft_while_waiting_and_consumes_it_only_after_acknowledgement()
+     {
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let (handle, _control) = input_handle(started.clone(), release.clone());
+        let mut app = App::new(vec![]);
+        app.active_handle = Some(handle.clone());
+        app.input.replace("consume".into());
+        assert!(!app.queue_input(RunInputKind::Steer, "consume".into()));
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        assert_eq!(app.input.value(), "consume");
+        assert!(handle.snapshot().pending_inputs.is_empty());
+        release.notify_one();
+        let result = app.input_jobs.join_next().await.unwrap().unwrap();
+        app.finish_input_submission(result);
+        assert!(app.input.value().is_empty());
+        assert!(handle.snapshot().pending_inputs.is_empty());
+    }
+    #[tokio::test]
+    async fn input_acknowledgement_does_not_clear_a_newer_draft() {
+        let started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let (handle, _control) = input_handle(started.clone(), release.clone());
+        let mut app = App::new(vec![]);
+        app.active_handle = Some(handle);
+        app.input.replace("consume".into());
+        assert!(!app.queue_input(RunInputKind::Steer, "consume".into()));
+        tokio::time::timeout(Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        app.input.replace("newer draft".into());
+        release.notify_one();
+        let result = app.input_jobs.join_next().await.unwrap().unwrap();
+        app.finish_input_submission(result);
+        assert_eq!(app.input.value(), "newer draft");
     }
 }

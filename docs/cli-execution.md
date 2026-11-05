@@ -18,6 +18,10 @@ with each other and explicit `--stdin`. Without explicit input, non-terminal std
 to EOF automatically. Terminal invocation retains the historical default prompt `你是谁`.
 Empty one-shot input, invalid UTF-8 and inputs above 1 MiB fail without contacting a model.
 Prompt/template expansion remains runtime-owned and bounded by its existing policy.
+Explicit [raw input hooks](input-hooks.md) run before that expansion. A handled submission
+exits successfully without fabricating final text; JSON records its typed input_handled stop.
+Transformation/expansion failures remain failures. Original hook inputs are not written back
+into session receipts or event payloads.
 
 The existing `-p` alias still means `--prompt`; final-text mode is the long `--print` flag.
 Execution flags cannot be mixed with metadata subcommands. For example, `session-tree

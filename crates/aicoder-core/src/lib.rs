@@ -5,7 +5,7 @@
 
 pub mod agent;
 pub mod agent_input;
-pub use agent_input::AgentInput;
+pub use agent_input::{AgentInput, InputSource};
 pub mod cancellation;
 pub mod completion;
 pub mod composition;
@@ -63,6 +63,7 @@ pub use run::{
 pub use journal::RunJournal;
 
 pub use control::{
-    ApprovalRequestId, PendingRunApproval, RejectedRunInput, RunControl, RunControlConfig,
-    RunControlError, RunControlSnapshot, RunControlStatus, RunHandle, RunInput, RunInputKind,
+    ApprovalRequestId, InputSubmission, PendingRunApproval, RejectedInputSubmission,
+    RejectedRunInput, RunControl, RunControlConfig, RunControlError, RunControlSnapshot,
+    RunControlStatus, RunHandle, RunInput, RunInputKind,
 };

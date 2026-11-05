@@ -50,7 +50,8 @@ are assembled on a compatible client before registering/selecting its provider r
 not introduce HTTP types into core or load from extension catalogs. [Shared Runtime binding](auxiliary-transport.md) covers its native auxiliary clients. [Boundary hooks](boundary-hooks.md) stage inert data or
 explicit context at successful round/settlement boundaries and can continue the same metered run.
 [Startup hooks](startup-hooks.md) additionally freeze run-level prefix/tool/context changes before
-turn validation. Raw-input/message transforms and session navigation veto remain open.
+turn validation. [Raw input hooks](input-hooks.md) transform or consume input before expansion/queueing.
+Message transforms and session navigation veto remain open.
 
 HookSpec defines local ID, signed priority and a 1 ms–30 s timeout (default two seconds).
 Lower priority runs first; ties preserve extension installation/contribution order. Calls

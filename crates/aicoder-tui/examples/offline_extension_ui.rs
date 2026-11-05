@@ -68,6 +68,45 @@ impl ExtensionCommand for Review {
         }
     }
 }
+struct RawUi;
+#[async_trait]
+impl InputHook for RawUi {
+    async fn input(
+        &self,
+        input: InputHookInput<'_>,
+        cancellation: ExtensionCancellation,
+    ) -> anyhow::Result<InputAction> {
+        if input
+            .input
+            .message()
+            .content
+            .first()
+            .is_some_and(|b| matches!(b,ContentBlock::Text{text}if text=="/raw-ui"))
+        {
+            anyhow::ensure!(
+                input.source == InputSource::Interactive,
+                "raw UI input must be interactive"
+            );
+            let answer = cancellation
+                .ui()
+                .ask(UiPrompt::Input {
+                    title: "Raw input note".into(),
+                    initial: String::new(),
+                    multiline: true,
+                    max_bytes: 256,
+                })
+                .await?;
+            if let UiAnswer::Text { text } = answer {
+                cancellation
+                    .ui()
+                    .notify(UiLevel::Info, format!("Input consumed: {text}"))?;
+            }
+            Ok(InputAction::Handled)
+        } else {
+            Ok(InputAction::Continue)
+        }
+    }
+}
 struct Offline;
 #[async_trait]
 impl ModelProvider for Offline {
@@ -82,6 +121,13 @@ impl ModelProvider for Offline {
         sink: Arc<dyn ModelEventSink>,
         _: TurnExecutionContext,
     ) -> Result<ModelResponse, ProviderError> {
+        if request
+            .messages
+            .last()
+            .is_some_and(|m| m.text_content() == "model-wait")
+        {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
         let response = ModelResponse {
             id: None,
             model: request.model,
@@ -134,6 +180,9 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let mut extension = Extension::new("review-example", "1")?;
     extension.command(Arc::new(Review), Duration::from_secs(300))?;
+    let mut raw = HookSpec::new("raw-input");
+    raw.timeout = Duration::from_secs(10);
+    extension.input_hook(raw, Arc::new(RawUi))?;
     let mut registry = ExtensionRegistry::new();
     registry.install(extension)?;
     aicoder_tui::run_with_provider(runtime, Arc::new(Offline), Arc::new(registry.finish())).await

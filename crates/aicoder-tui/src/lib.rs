@@ -14,7 +14,9 @@ use std::{
     time::Duration,
 };
 
-use aicoder_core::{RunControlConfig, RunHandle, RunInputKind};
+#[cfg(test)]
+use aicoder_core::RunHandle;
+use aicoder_core::{RunControlConfig, RunInputKind};
 use aicoder_runtime::resources::ResourceSettings;
 use aicoder_runtime::{
     ConfigDiscovery, ContextSettings, Runtime, RuntimeOverrides, Setting, Settings,
@@ -306,6 +308,8 @@ async fn run(
         let event = reference.recv().await;
         app.apply(event);
     }
+    app.input_jobs.abort_all();
+    while app.input_jobs.join_next().await.is_some() {}
     result
 }
 async fn drive(
@@ -333,16 +337,23 @@ async fn drive(
             Tick,
             Agent(AppEvent),
             Reference(AppEvent),
+            InputPrepared(Option<Result<crate::app::InputJobResult, tokio::task::JoinError>>),
             Terminal(Option<io::Result<Event>>),
         }
         let action = tokio::select! {
             _=tick.tick()=>Action::Tick,
             event=async {match &mut app.run {Some(run)=>run.recv().await,None=>std::future::pending().await}}=>Action::Agent(event),
             event=async{match &mut app.reference{Some(job)=>job.recv().await,None=>std::future::pending().await}}=>Action::Reference(event),
+            result=app.input_jobs.join_next(),if !app.input_jobs.is_empty()=>Action::InputPrepared(result),
             event=terminal_events.next()=>Action::Terminal(event),
         };
         match action {
             Action::Tick => {}
+            Action::InputPrepared(Some(Ok(result))) => app.finish_input_submission(result),
+            Action::InputPrepared(Some(Err(error))) => app.timeline.push(TimelineItem::Error(
+                format!("Input submission ended: {error}"),
+            )),
+            Action::InputPrepared(None) => {}
             Action::Reference(event) => app.apply(event),
             Action::Agent(event) => {
                 let submit = if let AppEvent::CommandFinished(report) = &event {
@@ -412,8 +423,13 @@ fn start_input(
     runtime: &AgentRuntime,
     prompt: aicoder_core::AgentInput,
 ) -> Result<()> {
+    let prompt = if prompt.source() == aicoder_core::InputSource::Sdk {
+        prompt.with_source(aicoder_core::InputSource::Interactive)
+    } else {
+        prompt
+    };
     let context = app.ui_context(runtime.execution_context());
-    let (handle, control) = RunHandle::channel(
+    let (handle, control) = runtime.control_channel(
         context.clone(),
         RunControlConfig {
             handle_approvals: true,
@@ -918,15 +934,7 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                 return;
             }
             let raw_prompt = prompt.clone();
-            let prepared = match runtime.prepare_prompt(&prompt) {
-                Ok(prepared) => prepared,
-                Err(error) => {
-                    app.input.replace(prompt);
-                    app.timeline.push(TimelineItem::Error(error.to_string()));
-                    return;
-                }
-            };
-            if !app.images.is_empty() {
+            if !app.images.is_empty() && !runtime.has_input_hooks() {
                 match runtime.supports_images(&app.session_selection) {
                     Ok(true) => {}
                     Ok(false) => {
@@ -941,7 +949,7 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                     }
                 }
             }
-            let prompt = match app.compose_input(&prepared.text) {
+            let prompt = match app.compose_input(&prompt) {
                 Ok(input) => input,
                 Err(error) => {
                     app.input.replace(raw_prompt);

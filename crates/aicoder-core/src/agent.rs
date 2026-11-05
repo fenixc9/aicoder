@@ -261,6 +261,13 @@ impl Agent {
         Ok(report)
     }
 
+    pub fn control_channel(
+        &self,
+        parent: TurnExecutionContext,
+        config: crate::RunControlConfig,
+    ) -> Result<(crate::RunHandle, crate::RunControl), crate::RunControlError> {
+        self.turn_executor.control_channel(parent, config)
+    }
     pub fn turn_executor(&self) -> &TurnExecutor {
         &self.turn_executor
     }
@@ -288,15 +295,75 @@ impl Agent {
         handler: Arc<dyn AgentEventHandler>,
         context: TurnExecutionContext,
     ) -> AgentTurnOutcome {
-        let mut messages = self.system_messages();
-        messages.push(prompt.into().into_message());
-        from_execution(
-            self.turn_executor
-                .run_outcome(self.completion_request(messages), handler, context)
-                .await,
-            None,
-        )
+        let context = context.child();
+        let now = tokio::time::Instant::now();
+        let prompt = prompt.into();
+        let started = prompt.prepared.as_ref().map_or(now, |p| p.started.min(now));
+        let started = context
+            .control
+            .as_ref()
+            .map_or(started, |c| c.preparation_start(started));
+        let scope = self
+            .turn_executor
+            .start_scope(&self.config.model, handler, &context);
+        let mut initial = self.system_messages();
+        initial.push(prompt.message().clone());
+        match self
+            .turn_executor
+            .prepare_user_input_at(
+                prompt,
+                crate::extensions::InputDelivery::Initial,
+                &context,
+                started,
+            )
+            .await
+        {
+            Ok(crate::extensions::InputPreparation::Ready(input)) => {
+                let prepared_user = input.prepared.clone();
+                let mut messages = self.system_messages();
+                messages.push(input.into_message());
+                let mut input =
+                    crate::ExecutionInput::from_request(self.completion_request(messages));
+                input.started = Some(started);
+                input.prepared_user = prepared_user;
+                from_execution(
+                    self.turn_executor
+                        .run_scoped_input(input, context, &(), scope)
+                        .await,
+                    None,
+                )
+            }
+            result => {
+                let error = match result {
+                    Ok(crate::extensions::InputPreparation::Handled(handled)) => {
+                        initial.pop();
+                        anyhow::Error::new(handled)
+                    }
+                    Err(error) => error,
+                    _ => unreachable!(),
+                };
+                let mut progress = RunProgress::new(initial);
+                progress.elapsed = started.elapsed();
+                progress.stage = RunStage::Preparing;
+                let stop = preparation_stop(&error, RunStage::Preparing);
+                from_execution(
+                    self.turn_executor
+                        .finish_preparation(
+                            scope,
+                            RunOutcome::Interrupted(InterruptedTurn {
+                                stop,
+                                progress,
+                                persistence_error: None,
+                            }),
+                            &context,
+                        )
+                        .await,
+                    None,
+                )
+            }
+        }
     }
+
     pub async fn compact_session(
         &self,
         repository: &dyn SessionRepository,
@@ -391,7 +458,13 @@ impl Agent {
         context: TurnExecutionContext,
     ) -> AgentTurnOutcome {
         let mut context = context.child();
-        let started = tokio::time::Instant::now();
+        let prompt = prompt.into();
+        let now = tokio::time::Instant::now();
+        let started = prompt.prepared.as_ref().map_or(now, |p| p.started.min(now));
+        let started = context
+            .control
+            .as_ref()
+            .map_or(started, |c| c.preparation_start(started));
         let selected = if context.is_cancelled() {
             Err(context.error().into())
         } else {
@@ -419,9 +492,9 @@ impl Agent {
         let scope = self
             .turn_executor
             .start_scope(&requested_model, handler, &context);
-        let user = prompt.into().into_message();
+        let raw_user = prompt.message().clone();
         let mut initial = self.system_messages();
-        initial.push(user.clone());
+        initial.push(raw_user);
         let mut metadata = None;
         let mut preparation_stage = RunStage::Persistence;
         let prepared = async {
@@ -432,7 +505,6 @@ impl Agent {
             let mut session = selected?;
             metadata = Some(session.metadata().clone());
             preparation_stage = RunStage::Preparing;
-            model?;
             ensure!(
                 session.metadata().cwd == workspace,
                 "session belongs to another workspace"
@@ -448,11 +520,34 @@ impl Agent {
             preparation_stage = RunStage::Persistence;
             let lease = session.acquire(repository)?;
             preparation_stage = RunStage::Preparing;
+            let (user, prepared_user) = match self
+                .turn_executor
+                .prepare_user_input_at(
+                    prompt,
+                    crate::extensions::InputDelivery::Initial,
+                    &context,
+                    started,
+                )
+                .await?
+            {
+                crate::extensions::InputPreparation::Ready(input) => {
+                    let prepared = input.prepared.clone();
+                    (input.into_message(), prepared)
+                }
+                crate::extensions::InputPreparation::Handled(handled) => {
+                    initial = self.system_messages();
+                    return Err(handled.into());
+                }
+            };
+            initial = self.system_messages();
+            initial.push(user.clone());
+            model?;
             let mut request = self.completion_request(initial.clone());
             request.model = requested_model;
             self.apply_session_reasoning(&mut request, &session)?;
             let mut input = crate::ExecutionInput::from_run_session(request, &session)?.for_run();
             input.started = Some(started);
+            input.prepared_user = prepared_user.clone();
             let mut input = self.turn_executor.prepare_input(input, &context).await?;
             let report = self.turn_executor.validate_model_selection(&input)?;
             self.turn_executor.check_preparation_budget(&input)?;
@@ -481,6 +576,14 @@ impl Agent {
             entries.push(SessionEntryData::TurnStart {
                 turn_id: turn_id.clone(),
             });
+            if let Some(receipt) = prepared_user.as_ref().and_then(|p| p.receipt.as_ref()) {
+                entries.push(SessionEntryData::Extension {
+                    namespace: crate::extensions::INPUT_HOOK_NAMESPACE.into(),
+                    data: serde_json::to_value(crate::extensions::InputHookRecord::Prepared {
+                        receipt: receipt.for_record(),
+                    })?,
+                });
+            }
             entries.push(SessionEntryData::Message { message: user });
             let startup_messages = input
                 .prepared_start
@@ -491,6 +594,7 @@ impl Agent {
             }
             preparation_stage = RunStage::Persistence;
             session.append(repository, entries)?;
+            input.input_committed = true;
             if let Some(start) = &mut input.prepared_start {
                 start.committed = true;
             }
@@ -511,17 +615,8 @@ impl Agent {
             Err(error) => {
                 let mut progress = RunProgress::new(initial);
                 progress.elapsed = started.elapsed();
-                let stop = if let Some(budget) = error.downcast_ref::<crate::run::BudgetExceeded>()
-                {
-                    RunStop::Budget(budget.clone())
-                } else if let Some(cancelled) = error.downcast_ref::<crate::TurnCancelled>() {
-                    RunStop::Cancelled {
-                        reason: cancelled.reason().into(),
-                    }
-                } else {
-                    progress.stage = preparation_stage;
-                    RunStop::Failed(RunFailure::from_error(preparation_stage, &error))
-                };
+                progress.stage = preparation_stage;
+                let stop = preparation_stop(&error, preparation_stage);
                 let outcome = self
                     .turn_executor
                     .finish_preparation(
@@ -594,7 +689,7 @@ fn interrupted(
     match &turn.stop {
         RunStop::Cancelled { .. } => AgentTurnOutcome::Aborted(turn),
         RunStop::Budget(_) => AgentTurnOutcome::Limited(turn),
-        RunStop::Model(_) => AgentTurnOutcome::Stopped(turn),
+        RunStop::Model(_) | RunStop::InputHandled(_) => AgentTurnOutcome::Stopped(turn),
         RunStop::Failed(_) => AgentTurnOutcome::Failed(turn),
     }
 }
@@ -638,6 +733,20 @@ fn reasoning_record(
         )
         .data()
     }))
+}
+
+fn preparation_stop(error: &anyhow::Error, stage: RunStage) -> RunStop {
+    if let Some(budget) = error.downcast_ref::<crate::BudgetExceeded>() {
+        RunStop::Budget(budget.clone())
+    } else if let Some(cancelled) = error.downcast_ref::<crate::TurnCancelled>() {
+        RunStop::Cancelled {
+            reason: cancelled.reason().into(),
+        }
+    } else if let Some(handled) = error.downcast_ref::<crate::extensions::InputHandled>() {
+        RunStop::InputHandled(handled.clone())
+    } else {
+        RunStop::Failed(RunFailure::from_error(stage, error))
+    }
 }
 
 #[cfg(test)]

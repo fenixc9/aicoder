@@ -18,6 +18,10 @@ History retains at most 100 accepted raw prompt strings / 256 KiB in memory. It 
 persist a separate log, include approval answers, replay commands automatically, re-expand
 old recorded context or restore file attachments/authority. Failed submissions preserve
 raw input and pending references. Canonical conversation history remains core-owned.
+[Raw input hooks](input-hooks.md) run before expansion. Asynchronous controls retain the draft
+and attachments until acknowledgement and keep input UI, events and cancellation responsive.
+A consumed input is a notice, not a model answer; newer edits survive a late acknowledgement.
+Raw originals stay in memory for recovery and are omitted from session/evaluation receipts.
 
 ## Explicit file pages
 

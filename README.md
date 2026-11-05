@@ -43,6 +43,8 @@ clients, preserve reload snapshots and retain the same parent approvals/usage.
 continue the same budgeted run at successful round/settlement boundaries.
 [Startup hooks](docs/startup-hooks.md) prepare one run’s system prefix, admitted root-tool
 selection and sourced context before validation and persistence.
+[Raw input hooks](docs/input-hooks.md) continue, transform or consume input before expansion
+and queueing, with ordered asynchronous controls and private recovery data.
 [Explicit host launch files](docs/host-extensions.md) enable process/MCP tools in CLI, TUI and Web.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime

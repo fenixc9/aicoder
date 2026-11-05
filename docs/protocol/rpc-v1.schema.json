@@ -585,6 +585,7 @@
                 "aborted",
                 "limited",
                 "stopped",
+                "handled",
                 "failed"
               ]
             },

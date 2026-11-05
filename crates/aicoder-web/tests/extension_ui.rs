@@ -148,7 +148,18 @@ struct Server {
 }
 impl Server {
     async fn new(write: bool) -> Self {
+        Self::with_input(write, false).await
+    }
+    async fn with_input(write: bool, inputs: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
+        if inputs {
+            std::fs::create_dir_all(root.path().join(".aicoder/prompts")).unwrap();
+            std::fs::write(
+                root.path().join(".aicoder/prompts/task.md"),
+                "WEB_TEMPLATE $1",
+            )
+            .unwrap();
+        }
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let runtime = Runtime::load_with_environment(
@@ -156,7 +167,9 @@ impl Server {
             RuntimeOverrides {
                 settings: Settings {
                     resources: ResourceSettings {
-                        enabled: Setting::Value(false),
+                        enabled: Setting::Value(inputs),
+                        global: Setting::Value(false),
+                        parents: Setting::Value(false),
                         ..Default::default()
                     },
                     ..Default::default()
@@ -179,6 +192,11 @@ impl Server {
         let mut spec = HookSpec::new("ask-before-tool");
         spec.timeout = Duration::from_secs(10);
         extension.tool_hook(spec, Arc::new(Guard)).unwrap();
+        if inputs {
+            extension
+                .input_hook(HookSpec::new("raw"), Arc::new(WebInput))
+                .unwrap();
+        }
         let mut registry = ExtensionRegistry::new();
         registry.install(extension).unwrap();
         let model = Arc::new(Model {
@@ -458,5 +476,60 @@ async fn ui_choices_never_resolve_tool_approvals_or_restore_session_grants() {
     );
     server.wait(&path, |v| !v["result"].is_null()).await;
     assert!(!server.root.path().join("result.txt").exists());
+    server.close().await;
+}
+
+struct WebInput;
+#[async_trait]
+impl InputHook for WebInput {
+    async fn input(
+        &self,
+        input: InputHookInput<'_>,
+        _: ExtensionCancellation,
+    ) -> anyhow::Result<InputAction> {
+        assert_eq!(input.source, InputSource::Web);
+        Ok(if input.input.message().text_content() == "consume-web" {
+            InputAction::Handled
+        } else {
+            InputAction::Transform(input.input.clone().with_prompt_text("/task transformed"))
+        })
+    }
+}
+#[tokio::test]
+async fn authenticated_web_runs_transform_before_templates_and_report_consumed_input_without_model_io()
+ {
+    let server = Server::with_input(false, true).await;
+    let response = server
+        .post("/api/runs", json!({"id":1,"text":"raw-web"}))
+        .await;
+    assert_eq!(response.status(), 202);
+    let run = response.json::<Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let done = server
+        .wait(&format!("/api/runs/{run}"), |v| !v["result"].is_null())
+        .await;
+    assert_eq!(done["result"]["status"], "completed");
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 1);
+    assert!(
+        serde_json::to_string(&server.model.requests.lock().unwrap()[0].messages)
+            .unwrap()
+            .contains("WEB_TEMPLATE transformed")
+    );
+    let response = server
+        .post("/api/runs", json!({"id":2,"text":"consume-web"}))
+        .await;
+    assert_eq!(response.status(), 202);
+    let run = response.json::<Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let done = server
+        .wait(&format!("/api/runs/{run}"), |v| !v["result"].is_null())
+        .await;
+    assert_eq!(done["result"]["status"], "handled");
+    assert_eq!(done["result"]["stop"]["kind"], "input_handled");
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 1);
     server.close().await;
 }

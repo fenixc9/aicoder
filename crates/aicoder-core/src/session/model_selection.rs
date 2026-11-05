@@ -28,6 +28,14 @@ impl TurnExecutor {
             return Err(context.error().into());
         }
         input.request.stream = self.config.stream;
+        ensure!(
+            input
+                .prepared_user
+                .as_ref()
+                .is_none_or(|p| p.owner == self.request_owner
+                    && p.delivery == crate::extensions::InputDelivery::Initial),
+            "input snapshot belongs to another executor"
+        );
         if let Some(start) = &input.prepared_start {
             ensure!(
                 start.owner == self.request_owner,
@@ -114,6 +122,22 @@ impl TurnExecutor {
         }
     }
     pub(crate) fn check_preparation_budget(&self, input: &ExecutionInput) -> Result<()> {
+        let retained = input
+            .prepared_user
+            .as_ref()
+            .map_or(0, |p| p.receipt_bytes)
+            .saturating_add(input.prepared_start.as_ref().map_or(0, |p| p.encoded.len()));
+        if let Some(limit) = self.config.budget.max_output_bytes {
+            ensure!(
+                retained <= limit,
+                crate::BudgetExceeded {
+                    resource: crate::BudgetResource::OutputBytes,
+                    limit: limit as u64,
+                    used: 0,
+                    requested: Some(retained as u64)
+                }
+            );
+        }
         if let Some(started) = input.started
             && let Some(duration) = self.config.budget.max_duration
             && started.elapsed() >= duration

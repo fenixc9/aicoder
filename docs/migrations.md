@@ -1,5 +1,43 @@
 # API migrations
 
+## S7: raw input interception and ordered asynchronous controls
+
+Extension adds input_hook and InputAction Continue/Transform/Handled. Agent prepares fresh
+AgentInput before expansion/validation/persistence; raw executor histories are not reinterpreted.
+AgentInput adds origin, with_prompt_text and preparation_receipt; its private prepared marker
+cannot serialize or cross executor/run/delivery boundaries. Original input exists only in
+memory for recovery. InputReceipt.original and new RunInput.provenance use serde skip; update
+Rust RunInput literals with provenance: None. Existing control JSON stays unchanged.
+
+Runtime now installs frozen resource expansion in the Agent input pipeline. Pass raw prompts
+to Runtime-created Agents; remove previous prepare_prompt(...).text calls before Agent.run.
+Otherwise an escaped literal can expand twice. prepare_prompt remains a read-only expansion /
+diagnostic API. Text/image attachments after the first prompt block remain unexpanded.
+
+Use Agent::control_channel / TurnExecutor::control_channel before publishing a handle.
+begin_input reserves order synchronously and returns an owned future; submit_input is its async
+convenience. Drive it alongside frontend events. Synchronous steer/follow_up reject when raw hooks
+are installed. A legacy unbound channel with already queued raw inputs fails setup rather than
+bypassing hooks. Queued IDs can have gaps after handled/cancelled reservations. RPC control replies
+may be deferred/interleaved and retain their request IDs; correlate them by ID. TUI awaits input
+acknowledgement without blocking UI, status or cancellation and keeps unsent drafts.
+
+RunStop adds InputHandled. Initial handled input maps to AgentTurnOutcome::Stopped, without a
+model answer or persisted turn; RPC/Web status adds handled and CLI succeeds. into_result/run
+conveniences still require a completed model answer and return this typed stop. Update exhaustive
+RunStop matches and strict v1 event/RPC schema consumers. Handled active controls return a separate
+InputSubmission result and do not stop the current run. No event/session version bump is made.
+
+RunJournal adds record_input_hooks and atomic input_prepared with default unsupported errors.
+Implement both before installing raw hooks or accepting prepared control receipts. Built-in
+session/eval journals and () support them. Safe receipts and effective user messages commit
+atomically; private original bodies, prepared callbacks and authority never restore from history.
+Whole receipts and prepared startup output share output admission, and preparation/waits retain
+the original duration clock. No dependency, manifest, lockfile or default feature was added.
+See [contract](input-hooks.md), [example](../crates/aicoder-runtime/examples/offline_input_hooks.rs)
+and [acceptance](s7-input-hooks-acceptance.md).
+
+
 ## S7: once-per-run startup preparation
 
 Extension adds before_start_hook with BeforeStartHook/Input/Action. It can replace the current

@@ -6,18 +6,60 @@ use std::io::Write;
 /// Explicit messages reject non-user roles, non-input blocks and oversized image envelopes.
 /// Image URLs belong to the host; core never fetches or decodes image bytes.
 #[derive(Debug, Clone)]
-pub struct AgentInput(Message);
+pub struct AgentInput {
+    message: Message,
+    source: InputSource,
+    pub(crate) prepared: Option<crate::extensions::PreparedUserInput>,
+}
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputSource {
+    #[default]
+    Sdk,
+    Interactive,
+    Rpc,
+    Web,
+    Extension,
+}
+
 impl AgentInput {
+    pub fn preparation_receipt(&self) -> Option<&crate::extensions::InputReceipt> {
+        self.prepared.as_ref().and_then(|p| p.receipt.as_deref())
+    }
+    pub fn source(&self) -> InputSource {
+        self.source
+    }
+    pub fn with_source(mut self, source: InputSource) -> Self {
+        self.source = source;
+        self.prepared = None;
+        self
+    }
+    /// Replace the prompt block, preserving separately captured text/image attachments.
+    pub fn with_prompt_text(mut self, text: impl Into<String>) -> Self {
+        let text = text.into();
+        if let Some(ContentBlock::Text { text: original }) = self.message.content.first_mut() {
+            *original = text;
+        } else {
+            self.message.content.insert(0, ContentBlock::Text { text });
+        }
+        self.prepared = None;
+        self
+    }
+
     pub fn message(&self) -> &Message {
-        &self.0
+        &self.message
     }
     pub fn into_message(self) -> Message {
-        self.0
+        self.message
     }
 }
 impl From<String> for AgentInput {
     fn from(value: String) -> Self {
-        Self(Message::text(MessageRole::User, value))
+        Self {
+            message: Message::text(MessageRole::User, value),
+            source: InputSource::Sdk,
+            prepared: None,
+        }
     }
 }
 impl From<&str> for AgentInput {
@@ -89,7 +131,11 @@ impl TryFrom<Message> for AgentInput {
             }
             serde_json::to_writer(&mut Limit(0), &message)?;
         }
-        Ok(Self(message))
+        Ok(Self {
+            message,
+            source: InputSource::Sdk,
+            prepared: None,
+        })
     }
 }
 

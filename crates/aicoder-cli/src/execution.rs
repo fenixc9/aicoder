@@ -170,16 +170,8 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
         if prompt.trim().is_empty() && pending_images.is_empty() {
             continue;
         }
-        let prepared = match runtime.prepare_prompt(&prompt) {
-            Ok(prepared) => prepared,
-            Err(error) if cli.repl => {
-                eprintln!("{error}");
-                continue;
-            }
-            Err(error) => return Err(error),
-        };
-        let prepared_input = match aicoder_runtime::images::input(prepared.text, &pending_images) {
-            Ok(input) => input,
+        let prepared_input = match aicoder_runtime::images::input(prompt, &pending_images) {
+            Ok(input) => input.with_source(aicoder_core::InputSource::Interactive),
             Err(error) if cli.repl => {
                 eprintln!("{error}");
                 continue;
@@ -288,7 +280,11 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
         if !cli.repl && context.is_cancelled() && context.reason().as_ref() == "Ctrl-C" {
             return Err(input::Interrupted.into());
         }
-        let failed = !matches!(outcome, AgentTurnOutcome::Completed(_));
+        let handled = matches!(&outcome,AgentTurnOutcome::Stopped(turn) if matches!(turn.stop,aicoder_core::RunStop::InputHandled(_)));
+        if handled && !cli.json && !cli.print {
+            eprintln!("Input handled by extension");
+        }
+        let failed = !matches!(outcome, AgentTurnOutcome::Completed(_)) && !handled;
         if failed {
             if cli.repl {
                 eprintln!("{}", outcome.into_result().unwrap_err());

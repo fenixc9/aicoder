@@ -114,6 +114,20 @@ impl EvaluationJournal {
 }
 #[async_trait]
 impl RunJournal for EvaluationJournal {
+    async fn record_input_hooks(
+        &self,
+        record: &aicoder_core::extensions::InputHookRecord,
+    ) -> Result<()> {
+        self.record(json!({"kind":"input_hooks","data":record}))
+    }
+    async fn input_prepared(
+        &self,
+        index: usize,
+        input: &aicoder_core::RunInput,
+        receipt: &aicoder_core::extensions::InputReceipt,
+    ) -> Result<()> {
+        self.record(json!({"kind":"prepared_input","index":index,"input":input,"receipt":receipt}))
+    }
     async fn record_lifecycle(
         &self,
         record: &aicoder_core::extensions::LifecycleRecord,

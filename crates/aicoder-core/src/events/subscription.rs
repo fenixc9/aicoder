@@ -471,11 +471,13 @@ impl EventSource {
         if let Some(round) = hub.open_round {
             let outcome = match outcome.stop() {
                 Some(crate::RunStop::Cancelled { .. }) => super::RoundOutcome::Aborted,
-                Some(stop @ (crate::RunStop::Budget(_) | crate::RunStop::Model(_))) => {
-                    super::RoundOutcome::Stopped {
-                        stop: Arc::new(stop.clone()),
-                    }
-                }
+                Some(
+                    stop @ (crate::RunStop::Budget(_)
+                    | crate::RunStop::Model(_)
+                    | crate::RunStop::InputHandled(_)),
+                ) => super::RoundOutcome::Stopped {
+                    stop: Arc::new(stop.clone()),
+                },
                 Some(crate::RunStop::Failed(_)) => super::RoundOutcome::Failed,
                 None => super::RoundOutcome::FinalAnswer,
             };

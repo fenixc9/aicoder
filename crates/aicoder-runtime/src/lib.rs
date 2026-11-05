@@ -48,6 +48,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+mod input;
 /// Immutable effective settings plus request-time credentials. Reload creates a new snapshot.
 pub struct Runtime {
     model_transport: Option<aicoder_providers::transport::TransportBinding>,
@@ -464,6 +465,10 @@ impl Runtime {
             }
             builder = builder.artifact_store(store);
         }
+        builder = builder.input_expander(match &resources {
+            Some(resources) => resources.clone(),
+            None => self.resources()?,
+        });
         if let Some(resources) = resources {
             builder = builder.input_context(resources);
         }

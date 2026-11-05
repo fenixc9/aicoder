@@ -27,6 +27,11 @@ Responses are `{"version":1,"type":"response","id":1,"ok":true,"result":{...}}`
 or `{"version":1,"type":"response","id":1,"ok":false,"error":{"code":"...","message":"..."}}`.
 A prompt response acknowledges ownership with `run_id`; it does not claim task success.
 It precedes that run's notifications. Only one run can be owned per connection.
+Control input replies can be deferred while [raw hooks](input-hooks.md) run. Correlate replies
+by request ID; later replies/events can arrive first. A successful control reply has input_id
+or handled metadata. Input IDs need not be consecutive. Status/cancel remain responsive.
+An initially consumed submission finishes with status handled and stop kind input_handled;
+it creates no model answer or persisted turn. No source/origin field is accepted from clients.
 
 Notifications have no request ID:
 
@@ -48,9 +53,9 @@ currently owned run; old IDs cannot cancel, steer or approve a later run.
 | Type | Fields | Effect |
 | --- | --- | --- |
 | `initialize` | none | Version, commands, limits and execution configuration |
-| `prompt` | `text` | Expand runtime resources and start one turn in selected session |
+| `prompt` | `text` | Prepare raw input through shared core/runtime and start or consume a submission |
 | `status` | none | Selected session, active controls and last bounded completion metadata |
-| `steer`, `follow_up` | `run_id`, `text` | Runtime expansion, then bounded RunHandle submission |
+| `steer`, `follow_up` | `run_id`, `text` | Ordered raw hooks/expansion before bounded queueing; may be handled |
 | `cancel` | `run_id` | Request cancellation; owner continues to terminal/persistence |
 | `approve` | `run_id`, `approval_id`, `decision` | Answer exact pending question; choice only |
 | `select_session` | `session_id` (string or null) | Idle only; validate scoped stored session, or select a new session |

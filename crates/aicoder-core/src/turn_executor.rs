@@ -1,4 +1,5 @@
 //! Executes one agent turn through its model, tool, and completion-verification rounds.
+mod input;
 mod lifecycle;
 mod request_view;
 mod startup;
@@ -49,6 +50,8 @@ pub(crate) struct RunScope {
     state: AgentRunStateMachine,
 }
 pub struct TurnExecutor {
+    input_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::InputHook>>,
+    input_expander: Option<Arc<dyn crate::extensions::InputExpander>>,
     startup_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::BeforeStartHook>>,
     boundary_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::BoundaryHook>>,
     pub(crate) request_owner: uuid::Uuid,
@@ -102,6 +105,8 @@ impl TurnExecutor {
         config: TurnExecutionConfig,
     ) -> Self {
         Self {
+            input_hooks: Vec::new(),
+            input_expander: None,
             startup_hooks: Vec::new(),
             boundary_hooks: Vec::new(),
             request_owner: uuid::Uuid::new_v4(),
@@ -134,6 +139,9 @@ impl TurnExecutor {
                 .filter_map(|name| definitions.iter().find(|tool| &tool.name == name).cloned())
                 .collect(),
         }
+    }
+    pub fn has_input_hooks(&self) -> bool {
+        !self.input_hooks.is_empty()
     }
     pub fn model_tool_names(&self) -> Option<&[String]> {
         self.model_tools.as_deref()
@@ -344,6 +352,7 @@ impl TurnExecutor {
         context: &TurnExecutionContext,
     ) -> RunScope {
         if let Some(control) = &context.control {
+            control.bind_input_pipeline(self.input_pipeline());
             control.start();
         }
         let source = context.control.as_ref().map_or_else(
@@ -394,12 +403,17 @@ impl TurnExecutor {
             prepared_request,
             prepared_start,
             start_requested: _,
+            prepared_user,
+            input_committed,
             started,
         } = input;
         let context = context.child();
         let mut limiter = RunLimiter::new(self.config.budget.clone(), context.clone());
         if let Some(started) = started {
             limiter.started = started;
+        }
+        if let Some(control) = &context.control {
+            limiter.started = control.preparation_start(limiter.started);
         }
         let limits = Arc::new(limiter);
         let mut progress = RunProgress::new(history);
@@ -434,7 +448,14 @@ impl TurnExecutor {
             }
             Ok(()) => {
                 let inner = self.run_inner(
-                    (request, system_prefix_len, prepared_request, prepared_start),
+                    (
+                        request,
+                        system_prefix_len,
+                        prepared_request,
+                        prepared_start,
+                        prepared_user,
+                        input_committed,
+                    ),
                     &events,
                     &mut state,
                     &context,
@@ -535,7 +556,9 @@ impl TurnExecutor {
                 rounds: progress.rounds,
             },
             Some(RunStop::Cancelled { .. }) => AgentRunState::Aborted { round },
-            Some(RunStop::Budget(_) | RunStop::Model(_)) => AgentRunState::Stopped { round },
+            Some(RunStop::Budget(_) | RunStop::Model(_) | RunStop::InputHandled(_)) => {
+                AgentRunState::Stopped { round }
+            }
             Some(RunStop::Failed(_)) => AgentRunState::Failed { round },
         };
         if let Err(error) = transition_state(&mut state, &events, terminal) {
@@ -559,7 +582,7 @@ impl TurnExecutor {
                 RunStop::Cancelled { reason } => events.emit(AgentRawEvent::AgentAborted {
                     reason: reason.clone().into(),
                 }),
-                RunStop::Budget(_) | RunStop::Model(_) => {
+                RunStop::Budget(_) | RunStop::Model(_) | RunStop::InputHandled(_) => {
                     events.emit(AgentRawEvent::AgentStopped {
                         stop: Arc::new(turn.stop.clone()),
                     })
@@ -581,11 +604,20 @@ impl TurnExecutor {
 
     async fn run_inner(
         &self,
-        (mut request, system_prefix_len, mut prepared_request, prepared_start): (
+        (
+            mut request,
+            system_prefix_len,
+            mut prepared_request,
+            prepared_start,
+            prepared_user,
+            input_committed,
+        ): (
             ModelRequest,
             usize,
             Option<crate::extensions::PreparedRequestView>,
             Option<crate::extensions::PreparedStartup>,
+            Option<crate::extensions::PreparedUserInput>,
+            bool,
         ),
         events: &AgentEventEmitter,
         state: &mut AgentRunStateMachine,
@@ -598,6 +630,8 @@ impl TurnExecutor {
             return Err(context.error().into());
         }
         limits.check()?;
+        self.admit_input_preparation(prepared_user, input_committed, context, journal, limits)
+            .await?;
 
         let mut context_prefix_len = system_prefix_len;
         let mut context_messages = std::mem::take(&mut request.messages);
@@ -670,7 +704,7 @@ impl TurnExecutor {
                 &mut context_messages,
                 progress,
                 context,
-                journal,
+                (journal, limits),
                 InputBoundary::BeforeModel,
                 &round_events,
                 |messages, message| self.validate_control_input(&base_request, messages, message),
@@ -1311,7 +1345,7 @@ impl TurnExecutor {
                                 &mut context_messages,
                                 progress,
                                 context,
-                                journal,
+                                (journal, limits),
                                 InputBoundary::AfterCompletion {
                                     round_limit: self.config.max_rounds,
                                 },
@@ -1356,7 +1390,7 @@ impl TurnExecutor {
                                 &mut context_messages,
                                 progress,
                                 context,
-                                journal,
+                                (journal, limits),
                                 InputBoundary::AfterCompletion {
                                     round_limit: self.config.max_rounds,
                                 },
@@ -1530,11 +1564,12 @@ async fn apply_inputs(
     messages: &mut Vec<Message>,
     progress: &mut RunProgress,
     context: &TurnExecutionContext,
-    journal: &dyn crate::RunJournal,
+    accounting: (&dyn crate::RunJournal, &Arc<RunLimiter>),
     boundary: InputBoundary,
     events: &AgentEventEmitter,
     validate: impl Fn(&[Message], &Message) -> Result<()>,
 ) -> Result<bool> {
+    let (journal, limits) = accounting;
     let Some(control) = &context.control else {
         return Ok(false);
     };
@@ -1559,12 +1594,22 @@ async fn apply_inputs(
             .into());
         }
         validate(messages, &input.message)?;
+        let receipt = control.input_receipt(input.id);
+        if let Some(receipt) = &receipt {
+            let bytes = crate::extensions::size(
+                &crate::extensions::InputHookRecord::Prepared {
+                    receipt: receipt.for_record(),
+                },
+                crate::extensions::MAX_INPUT_HOOK_BYTES,
+            )?;
+            limits.charge_output_bytes(bytes)?;
+        }
         let index = progress.messages.len();
         progress.messages.push(input.message.clone());
         tokio::select! {
             biased;
             cancelled=context.cancelled()=>return Err(cancelled.into()),
-            result=journal.input(index,&input)=>{
+            result=async{match &receipt{Some(receipt)=>journal.input_prepared(index,&input,receipt).await,None=>journal.input(index,&input).await}}=>{
                 result.map_err(|error|anyhow::Error::from(RunFailure::from_error(RunStage::Persistence,&error)))?;
             }
         }
@@ -1573,6 +1618,7 @@ async fn apply_inputs(
         events.emit(AgentRawEvent::RunInputApplied {
             input: Arc::new(input),
         });
+        limits.check()?;
         applied = true;
     }
     Ok(applied)
@@ -1587,6 +1633,8 @@ fn classify_stop(error: &anyhow::Error, limits: &RunLimiter, stage: RunStage) ->
         RunStop::Cancelled {
             reason: cancelled.reason().into(),
         }
+    } else if let Some(handled) = error.downcast_ref::<crate::extensions::InputHandled>() {
+        RunStop::InputHandled(handled.clone())
     } else if let Some(stopped) = error.downcast_ref::<ModelStopped>() {
         RunStop::Model(stopped.0.clone())
     } else {
@@ -1649,6 +1697,7 @@ fn ensure_valid_compaction(compaction: &ContextCompaction, target_tokens: usize)
 
 /// Host assembly for the reusable loop. An omitted registry is empty.
 pub struct TurnExecutorBuilder {
+    input_expander: Option<Arc<dyn crate::extensions::InputExpander>>,
     model_tools: Option<Vec<String>>,
     extensions: Option<Arc<crate::extensions::ExtensionSet>>,
     tool_image_resolver: Option<Arc<dyn crate::tool_images::ToolImageResolver>>,
@@ -1688,12 +1737,17 @@ impl TurnExecutorBuilder {
             dispatcher_config: DispatcherConfig::default(),
             artifact_store: None,
             input_context: None,
+            input_expander: None,
             execution_config: TurnExecutionConfig::default(),
             counting: crate::tokens::TokenCounting::default(),
             context_policy: Arc::new(crate::context_policy::WindowContextPolicy),
         }
     }
 
+    pub fn input_expander(mut self, expander: Arc<dyn crate::extensions::InputExpander>) -> Self {
+        self.input_expander = Some(expander);
+        self
+    }
     pub fn workspace(mut self, workspace: impl Into<PathBuf>) -> Self {
         self.workspace = workspace.into();
         self
@@ -1848,6 +1902,12 @@ impl TurnExecutorBuilder {
             input_context,
             self.execution_config,
         );
+        executor.input_expander = self.input_expander;
+        executor.input_hooks = self
+            .extensions
+            .as_ref()
+            .map(|e| e.input_hooks())
+            .unwrap_or_default();
         executor.startup_hooks = self
             .extensions
             .as_ref()

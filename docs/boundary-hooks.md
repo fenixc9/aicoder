@@ -77,8 +77,11 @@ cargo run --locked -p aicoder-runtime --features code-mode --example offline_bou
 It uses actual owned file tools, approvals, JSONL, archive windows and export, with a scripted
 provider and no credentials/network. [Acceptance](s7-boundary-hooks-acceptance.md) records the
 measured checks. This implements data/context/continuation boundary actions; Pi's context-edit
-and compaction drafts, raw-input/message transforms and session navigation veto remain
+and compaction drafts, message transforms and session navigation veto remain
 separate work in the [audit](pi-parity-audit.md).
 
 [Startup hooks](startup-hooks.md) use a separate once-per-run callback and BeforeStart receipt
 kind; ordinary BoundaryHook callbacks still run only at TurnEnd and BeforeSettle.
+
+[Raw input hooks](input-hooks.md) run before expansion and queueing, independently of these
+successful-round callbacks; consumed controls never signal steering.

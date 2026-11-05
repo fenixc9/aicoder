@@ -116,8 +116,11 @@ shell variables such as `$HOME` remain text. No variable/command execution occur
 Expansion checks its output incrementally, preventing repeated placeholders from
 multiplying a small invocation into unbounded output. Expanded user text includes its
 resource source label; PreparedPrompt also returns the exact ResourceInfo/fingerprint.
-Core never interprets untrusted historical/dataset user messages as commands: hosts
-explicitly call Runtime::prepare_prompt for a new user invocation.
+Core never interprets historical/dataset messages as commands. Runtime-created Agents now
+expand fresh AgentInput after [raw hooks](input-hooks.md), using the same frozen snapshot.
+Pass raw prompts to those Agents; Runtime::prepare_prompt remains an explicit preview API.
+Do not feed its text back into automatic expansion, particularly for escaped leading slashes.
+Low-level ModelRequest/ExecutionInput histories remain explicit, already prepared inputs.
 
 ## Limits and switches
 

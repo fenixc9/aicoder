@@ -34,6 +34,8 @@ pub struct ModelContextInfo {
 }
 #[derive(Debug, Clone)]
 pub struct ExecutionInput {
+    pub(crate) prepared_user: Option<crate::extensions::PreparedUserInput>,
+    pub(crate) input_committed: bool,
     pub(crate) start_requested: bool,
     pub(crate) prepared_start: Option<crate::extensions::PreparedStartup>,
     pub(crate) request: ModelRequest,
@@ -56,6 +58,8 @@ impl ExecutionInput {
             request,
             system_prefix_len: prefix,
             source: None,
+            prepared_user: None,
+            input_committed: false,
             start_requested: false,
             prepared_start: None,
             prepared_request: None,
@@ -94,6 +98,8 @@ impl ExecutionInput {
             history,
             system_prefix_len,
             source: None,
+            prepared_user: None,
+            input_committed: false,
             start_requested: false,
             prepared_start: None,
             prepared_request: None,

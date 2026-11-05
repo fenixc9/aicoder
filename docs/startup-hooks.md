@@ -72,7 +72,7 @@ cargo run --locked -p aicoder-runtime --features code-mode --example offline_sta
 
 It uses real runtime tools, approvals, JSONL, archive windows and HTML export with a scripted
 provider and no credentials/network. See [acceptance](s7-startup-hooks-acceptance.md) and
-[migration](migrations.md). This stage does not consume or transform raw input: Pi's input
-continue/transform/handled gate, idle custom-message session submission, message transforms,
-session navigation veto and boundary
+[migration](migrations.md). [Raw input hooks](input-hooks.md) separately implement the
+continue/transform/handled gate before this stage. Idle custom-message session submission,
+message transforms, session navigation veto and boundary
 context-edit/compaction drafts remain open in the [audit](pi-parity-audit.md).

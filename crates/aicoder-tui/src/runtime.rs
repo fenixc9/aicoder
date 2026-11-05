@@ -203,12 +203,6 @@ impl AgentRuntime {
             completion: RunCompletion::Command(completion),
         })
     }
-    pub fn prepare_prompt(
-        &self,
-        prompt: &str,
-    ) -> Result<aicoder_runtime::resources::PreparedPrompt> {
-        self.runtime.prepare_prompt(prompt)
-    }
     pub fn start_reference(&self, path: String, context: TurnExecutionContext) -> ReferenceJob {
         let runtime = self.runtime.clone();
         let worker = context.clone();
@@ -236,6 +230,9 @@ impl AgentRuntime {
             let _ = sent.send(result);
         });
         ReferenceJob { context, completed }
+    }
+    pub fn has_input_hooks(&self) -> bool {
+        self.agent.turn_executor().has_input_hooks()
     }
     pub fn supports_images(&self, selection: &SessionSelection) -> Result<bool> {
         let model = match selection {
@@ -556,6 +553,13 @@ impl AgentRuntime {
             events: None,
             completion: RunCompletion::Model(received),
         }
+    }
+    pub fn control_channel(
+        &self,
+        context: TurnExecutionContext,
+        config: aicoder_core::RunControlConfig,
+    ) -> Result<(aicoder_core::RunHandle, RunControl), aicoder_core::RunControlError> {
+        self.agent.control_channel(context, config)
     }
     pub fn execution_context(&self) -> TurnExecutionContext {
         TurnExecutionContext::new().with_approval_sessions(self.approvals.clone())

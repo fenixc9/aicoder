@@ -1,0 +1,1394 @@
+{
+  "schema_version": 1,
+  "phase": "S7 Raw input interception and ordered asynchronous submission",
+  "reference": "s7-startup-hooks-report.json",
+  "resolved_packages": 272,
+  "locked_package_versions_changed": false,
+  "dependency_change": "No manifest, lockfile, dependency or default-feature changes. Core owns raw-input contracts, reservations and lifecycle; runtime supplies frozen expansion and concrete tools/stores.",
+  "samples": [
+    {
+      "schema_version": 1,
+      "revision": "2be47fa19cdb8427e125741460283e1a83f72275",
+      "worktree_dirty": true,
+      "source_sha256": "0f852244d4c981b39333aae63749b9d1cd467d1d19543defa6a6fcc3ca489eb9",
+      "platform": "Linux-6.8.0-101-generic-x86_64-with-glibc2.35",
+      "machine": "x86_64",
+      "logical_cpus": 16,
+      "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+      "cargo": "cargo 1.92.0 (344c4567c 2025-10-21)",
+      "build": {
+        "mode": "existing-target",
+        "seconds": 154.7423186879605
+      },
+      "binaries": {
+        "aicoder": {
+          "bytes": 20529968,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 5.826270207762718,
+            "peak_rss_kib": 8320
+          },
+          "warm_process_help_median_ms": 4.308870993554592,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 4.444741643965244,
+              "peak_rss_kib": 8320
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.308870993554592,
+              "peak_rss_kib": 8448
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.294324666261673,
+              "peak_rss_kib": 8448
+            }
+          ]
+        },
+        "aicoder-tui": {
+          "bytes": 20639808,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 4.424554295837879,
+            "peak_rss_kib": 7552
+          },
+          "warm_process_help_median_ms": 3.8816863670945168,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 3.8816863670945168,
+              "peak_rss_kib": 7680
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.7025269120931625,
+              "peak_rss_kib": 7680
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.046699032187462,
+              "peak_rss_kib": 7424
+            }
+          ]
+        },
+        "aicoder-swebench": {
+          "bytes": 20780568,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 6.3171423971652985,
+            "peak_rss_kib": 8064
+          },
+          "warm_process_help_median_ms": 3.9474572986364365,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 3.9474572986364365,
+              "peak_rss_kib": 7808
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.8171280175447464,
+              "peak_rss_kib": 7808
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.118210636079311,
+              "peak_rss_kib": 7808
+            }
+          ]
+        }
+      },
+      "runtime": {
+        "wall_ms_including_time_wrapper": 397.7840207517147,
+        "peak_rss_kib": 9088,
+        "idle_runtime_rss_kib": 4236,
+        "iterations": 25,
+        "cases_per_iteration": 5,
+        "example_bytes": 11382888
+      },
+      "limitations": [
+        "No filesystem/OS page caches are cleared: first process is not disk-cold startup.",
+        "Help includes process creation and GNU time wrapper overhead, not interactive startup.",
+        "Idle RSS samples the current-thread offline runtime, not the TUI.",
+        "Smoke uses a scripted provider; it measures no real model latency or task success rate.",
+        "No allocator or message-clone instrumentation is performed; transcript bytes are serialized size only."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "revision": "2be47fa19cdb8427e125741460283e1a83f72275",
+      "worktree_dirty": true,
+      "source_sha256": "0f852244d4c981b39333aae63749b9d1cd467d1d19543defa6a6fcc3ca489eb9",
+      "platform": "Linux-6.8.0-101-generic-x86_64-with-glibc2.35",
+      "machine": "x86_64",
+      "logical_cpus": 16,
+      "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+      "cargo": "cargo 1.92.0 (344c4567c 2025-10-21)",
+      "build": {
+        "mode": "existing-target",
+        "seconds": 0.2061751028522849
+      },
+      "binaries": {
+        "aicoder": {
+          "bytes": 20529968,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 5.073436535894871,
+            "peak_rss_kib": 8320
+          },
+          "warm_process_help_median_ms": 4.457773640751839,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 4.2709410190582275,
+              "peak_rss_kib": 8448
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.457773640751839,
+              "peak_rss_kib": 8448
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.758176393806934,
+              "peak_rss_kib": 8320
+            }
+          ]
+        },
+        "aicoder-tui": {
+          "bytes": 20639808,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 4.905036650598049,
+            "peak_rss_kib": 7296
+          },
+          "warm_process_help_median_ms": 4.530527628958225,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 4.530527628958225,
+              "peak_rss_kib": 7552
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.720758646726608,
+              "peak_rss_kib": 7680
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.3342867866158485,
+              "peak_rss_kib": 7552
+            }
+          ]
+        },
+        "aicoder-swebench": {
+          "bytes": 20780568,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 5.057025700807571,
+            "peak_rss_kib": 7808
+          },
+          "warm_process_help_median_ms": 4.34595812112093,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 4.731948487460613,
+              "peak_rss_kib": 8064
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.283853806555271,
+              "peak_rss_kib": 7808
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.34595812112093,
+              "peak_rss_kib": 7936
+            }
+          ]
+        }
+      },
+      "runtime": {
+        "wall_ms_including_time_wrapper": 810.9385157003999,
+        "peak_rss_kib": 8704,
+        "idle_runtime_rss_kib": 4216,
+        "iterations": 25,
+        "cases_per_iteration": 5,
+        "example_bytes": 11382888
+      },
+      "limitations": [
+        "No filesystem/OS page caches are cleared: first process is not disk-cold startup.",
+        "Help includes process creation and GNU time wrapper overhead, not interactive startup.",
+        "Idle RSS samples the current-thread offline runtime, not the TUI.",
+        "Smoke uses a scripted provider; it measures no real model latency or task success rate.",
+        "No allocator or message-clone instrumentation is performed; transcript bytes are serialized size only."
+      ]
+    },
+    {
+      "schema_version": 1,
+      "revision": "2be47fa19cdb8427e125741460283e1a83f72275",
+      "worktree_dirty": true,
+      "source_sha256": "0f852244d4c981b39333aae63749b9d1cd467d1d19543defa6a6fcc3ca489eb9",
+      "platform": "Linux-6.8.0-101-generic-x86_64-with-glibc2.35",
+      "machine": "x86_64",
+      "logical_cpus": 16,
+      "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+      "cargo": "cargo 1.92.0 (344c4567c 2025-10-21)",
+      "build": {
+        "mode": "existing-target",
+        "seconds": 0.2086003189906478
+      },
+      "binaries": {
+        "aicoder": {
+          "bytes": 20529968,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 5.193866789340973,
+            "peak_rss_kib": 8320
+          },
+          "warm_process_help_median_ms": 4.27305418998003,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 4.270450212061405,
+              "peak_rss_kib": 8448
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.429122433066368,
+              "peak_rss_kib": 7936
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.27305418998003,
+              "peak_rss_kib": 8576
+            }
+          ]
+        },
+        "aicoder-tui": {
+          "bytes": 20639808,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 4.294713959097862,
+            "peak_rss_kib": 7552
+          },
+          "warm_process_help_median_ms": 3.825332038104534,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 3.820221871137619,
+              "peak_rss_kib": 7680
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.825332038104534,
+              "peak_rss_kib": 7552
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.953746519982815,
+              "peak_rss_kib": 7552
+            }
+          ]
+        },
+        "aicoder-swebench": {
+          "bytes": 20780568,
+          "first_process_help": {
+            "wall_ms_including_time_wrapper": 4.568638280034065,
+            "peak_rss_kib": 7936
+          },
+          "warm_process_help_median_ms": 4.141331650316715,
+          "warm_process_help_samples": [
+            {
+              "wall_ms_including_time_wrapper": 4.141331650316715,
+              "peak_rss_kib": 8064
+            },
+            {
+              "wall_ms_including_time_wrapper": 4.2853569611907005,
+              "peak_rss_kib": 7808
+            },
+            {
+              "wall_ms_including_time_wrapper": 3.9318371564149857,
+              "peak_rss_kib": 7936
+            }
+          ]
+        }
+      },
+      "runtime": {
+        "wall_ms_including_time_wrapper": 403.01793441176414,
+        "peak_rss_kib": 8576,
+        "idle_runtime_rss_kib": 4236,
+        "iterations": 25,
+        "cases_per_iteration": 5,
+        "example_bytes": 11382888
+      },
+      "limitations": [
+        "No filesystem/OS page caches are cleared: first process is not disk-cold startup.",
+        "Help includes process creation and GNU time wrapper overhead, not interactive startup.",
+        "Idle RSS samples the current-thread offline runtime, not the TUI.",
+        "Smoke uses a scripted provider; it measures no real model latency or task success rate.",
+        "No allocator or message-clone instrumentation is performed; transcript bytes are serialized size only."
+      ]
+    }
+  ],
+  "summary": {
+    "aicoder": {
+      "bytes": 20529968,
+      "mib": 19.578903198242188,
+      "change_percent": 1.9983560999186079
+    },
+    "aicoder-tui": {
+      "bytes": 20639808,
+      "mib": 19.68365478515625,
+      "change_percent": 2.175729632583745
+    },
+    "aicoder-swebench": {
+      "bytes": 20780568,
+      "mib": 19.817893981933594,
+      "change_percent": 0.8377749913625498
+    },
+    "wall_ms_including_time_wrapper": {
+      "median": 403.01793441176414,
+      "reference_median": 396.77705615758896,
+      "change_percent": 1.5728929274823056
+    },
+    "peak_rss_kib": {
+      "median": 8704,
+      "reference_median": 8704,
+      "change_percent": 0.0
+    },
+    "idle_runtime_rss_kib": {
+      "median": 4236,
+      "reference_median": 4296,
+      "change_percent": -1.3966480446927387
+    }
+  },
+  "standalone_eval": {
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--release",
+      "-p",
+      "aicoder-eval",
+      "--bin",
+      "aicoder-swebench"
+    ],
+    "exit_code": 0,
+    "bytes": 19579968,
+    "optional_dependency_lines": [],
+    "scope": "Standalone eval release and selected feature tree; distinct from feature-unified workspace-default samples.",
+    "reference_bytes": 19417160,
+    "change_percent": 0.8384748336007997
+  },
+  "smoke_case_summary": [
+    {
+      "Cancel": {
+        "count": 25,
+        "median_ms": 0.178,
+        "max_ms": 0.252
+      },
+      "Edit": {
+        "count": 25,
+        "median_ms": 3.956,
+        "max_ms": 4.96
+      },
+      "Search": {
+        "count": 25,
+        "median_ms": 0.648,
+        "max_ms": 0.754
+      },
+      "SessionResume": {
+        "count": 25,
+        "median_ms": 9.679,
+        "max_ms": 10.575
+      },
+      "ToolFailure": {
+        "count": 25,
+        "median_ms": 0.26,
+        "max_ms": 0.446
+      }
+    },
+    {
+      "Cancel": {
+        "count": 25,
+        "median_ms": 0.154,
+        "max_ms": 0.204
+      },
+      "Edit": {
+        "count": 25,
+        "median_ms": 3.766,
+        "max_ms": 214.074
+      },
+      "Search": {
+        "count": 25,
+        "median_ms": 0.544,
+        "max_ms": 0.67
+      },
+      "SessionResume": {
+        "count": 25,
+        "median_ms": 9.414,
+        "max_ms": 223.053
+      },
+      "ToolFailure": {
+        "count": 25,
+        "median_ms": 0.255,
+        "max_ms": 0.339
+      }
+    },
+    {
+      "Cancel": {
+        "count": 25,
+        "median_ms": 0.189,
+        "max_ms": 0.28
+      },
+      "Edit": {
+        "count": 25,
+        "median_ms": 3.994,
+        "max_ms": 4.517
+      },
+      "Search": {
+        "count": 25,
+        "median_ms": 0.569,
+        "max_ms": 0.797
+      },
+      "SessionResume": {
+        "count": 25,
+        "median_ms": 9.809,
+        "max_ms": 12.222
+      },
+      "ToolFailure": {
+        "count": 25,
+        "median_ms": 0.319,
+        "max_ms": 0.487
+      }
+    }
+  ],
+  "input_contract": {
+    "raw_hooks_before_resource_expansion_and_steering_notification": true,
+    "ordered_continue_transform_handled_and_preserved_attachment_helper": true,
+    "host_source_informational_and_replacement_cannot_spoof_it": true,
+    "safe_metadata_receipts_never_serialize_raw_originals": true,
+    "ephemeral_raw_recovery_and_held_queue_payloads_bounded": true,
+    "explicit_initial_handled_stop_without_answer_or_turn": true,
+    "handled_controls_do_not_interrupt_active_provider_or_tool": true,
+    "eager_reservations_keep_submission_order_under_reverse_polling": true,
+    "drop_unpolled_cancel_and_closure_release_reservations_and_children": true,
+    "queue_wait_and_pre_owner_work_retain_parent_duration": true,
+    "whole_receipt_output_and_effective_window_admission": true,
+    "prepared_markers_executor_run_delivery_bound_and_not_restored": true,
+    "sync_control_bypass_and_prequeued_unbound_inputs_reject": true,
+    "initial_and_queued_effective_input_receipts_atomic": true,
+    "failed_checkpoint_retains_raw_sdk_recovery_without_wire_leak": true,
+    "rpc_status_cancel_live_during_processing_and_handled_status": true,
+    "authenticated_web_input_before_templates_and_handled_status": true,
+    "tui_drafts_until_ack_and_newer_edits_preserved": true,
+    "code_mode_leaf_approval_and_owned_file_operations_unchanged": true,
+    "actual_runtime_variants": [
+      {
+        "approved": true,
+        "bounded_archive_verified": true,
+        "code_mode": false,
+        "export_inert": true,
+        "handled": false,
+        "hook_calls": 1,
+        "model_requests": 2,
+        "network_requests": 0,
+        "notifications_valid": true,
+        "original_user_count": 1,
+        "raw_provenance_not_prompted": true,
+        "usage": 14
+      },
+      {
+        "approved": false,
+        "bounded_archive_verified": true,
+        "code_mode": false,
+        "export_inert": true,
+        "handled": false,
+        "hook_calls": 1,
+        "model_requests": 2,
+        "network_requests": 0,
+        "notifications_valid": true,
+        "original_user_count": 1,
+        "raw_provenance_not_prompted": true,
+        "usage": 14
+      },
+      {
+        "approved": true,
+        "bounded_archive_verified": true,
+        "code_mode": true,
+        "export_inert": true,
+        "handled": false,
+        "hook_calls": 1,
+        "model_requests": 2,
+        "network_requests": 0,
+        "notifications_valid": true,
+        "original_user_count": 1,
+        "raw_provenance_not_prompted": true,
+        "usage": 14
+      },
+      {
+        "approved": false,
+        "bounded_archive_verified": true,
+        "code_mode": true,
+        "export_inert": true,
+        "handled": false,
+        "hook_calls": 1,
+        "model_requests": 2,
+        "network_requests": 0,
+        "notifications_valid": true,
+        "original_user_count": 1,
+        "raw_provenance_not_prompted": true,
+        "usage": 14
+      },
+      {
+        "approved": true,
+        "code_mode": false,
+        "handled": true,
+        "hook_calls": 1,
+        "model_requests": 0,
+        "network_requests": 0,
+        "notifications_valid": true,
+        "original_user_count": 0
+      }
+    ],
+    "actual_terminal_input_ui": {
+      "pty": true,
+      "initial_input_ui": true,
+      "handled_without_fake_turn": true,
+      "paste_not_submit": true,
+      "control_input_ui": true,
+      "original_model_finishes_once": true,
+      "raw_bodies_not_persisted": true
+    },
+    "real_model_requests": 0,
+    "all_pi_lifecycle_stages_complete": false
+  },
+  "verification": {
+    "default_workspace_tests": 773,
+    "all_feature_tests": 900,
+    "isolated_core_tests": 321,
+    "isolated_codec_free_runtime_tests": 32,
+    "codec_free_code_mode_image_tests": 6,
+    "standalone_auxiliary_tests": 5,
+    "standalone_image_generation_tests": 4,
+    "standalone_tool_interception_tests": 1,
+    "standalone_request_view_tests": 1,
+    "standalone_transport_provider_tests": 11,
+    "standalone_transport_runtime_tests": 1,
+    "all_feature_transport_provider_tests": 15,
+    "standalone_auxiliary_transport_tests": 2,
+    "standalone_boundary_runtime_tests": 1,
+    "standalone_startup_runtime_tests": 1,
+    "standalone_input_runtime_tests": 2,
+    "final_gates": 66,
+    "new_real_model_requests": 0,
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--check"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--workspace",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "clippy",
+          "--locked",
+          "--workspace",
+          "--all-targets",
+          "--all-features",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-core",
+          "--all-targets"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--no-default-features",
+          "--test",
+          "image_files",
+          "--lib"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--no-default-features",
+          "--features",
+          "code-mode",
+          "--test",
+          "code_mode_images"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--no-default-features",
+          "--features",
+          "auxiliary-models",
+          "--test",
+          "auxiliary_models"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--no-default-features",
+          "--features",
+          "auxiliary-models",
+          "--test",
+          "image_generation"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--workspace"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--workspace",
+          "--all-features"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_smoke"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "env",
+          "RUSTDOCFLAGS=-D warnings",
+          "cargo",
+          "doc",
+          "--locked",
+          "--workspace",
+          "--no-deps"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "env",
+          "RUSTDOCFLAGS=-D warnings",
+          "cargo",
+          "doc",
+          "--locked",
+          "--workspace",
+          "--all-features",
+          "--no-deps"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "aicoder-cli",
+          "-p",
+          "aicoder-tui",
+          "-p",
+          "aicoder-web",
+          "-p",
+          "aicoder-runtime",
+          "-p",
+          "aicoder-eval",
+          "--features",
+          "server,host-extensions,mcp-fixtures,images",
+          "--bins",
+          "--examples"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "aicoder-web",
+          "--features",
+          "server,host-extensions,images"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_file_images.py"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_host_extensions.py",
+          "--images"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_host_extensions.py",
+          "--images",
+          "--mime-alias"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_images.py"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_frontend_parity.py"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_event_schema.py"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_export_schema.py"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_rpc_schema.py"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_benchmark.py"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_swebench.py"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--locked",
+          "-p",
+          "aicoder-cli",
+          "-p",
+          "aicoder-tui",
+          "-p",
+          "aicoder-web",
+          "--features",
+          "server,images,code-mode",
+          "--bins"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_file_images.py",
+          "--code-mode"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_file_images.py",
+          "--only"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_file_images.py",
+          "--classifier"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_file_images.py",
+          "--generate-images"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--no-default-features",
+          "--test",
+          "tool_interception"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_tool_interception"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_tool_interception",
+          "--",
+          "--deny"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "code-mode",
+          "--example",
+          "offline_tool_interception",
+          "--",
+          "--code-mode"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "code-mode",
+          "--example",
+          "offline_tool_interception",
+          "--",
+          "--code-mode",
+          "--deny"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--no-default-features",
+          "--test",
+          "request_views"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_request_views"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_request_views",
+          "--",
+          "--stream"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-providers",
+          "--test",
+          "transport"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--no-default-features",
+          "--test",
+          "transport_hooks"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_transport_hooks"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_transport_hooks",
+          "--",
+          "--stream"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-providers",
+          "--all-features",
+          "--test",
+          "transport"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--no-default-features",
+          "--features",
+          "auxiliary-models",
+          "--test",
+          "auxiliary_transport"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "auxiliary-models",
+          "--example",
+          "offline_auxiliary_transport"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "auxiliary-models",
+          "--example",
+          "offline_auxiliary_transport",
+          "--",
+          "--observer-error"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "auxiliary-models",
+          "--example",
+          "offline_auxiliary_transport",
+          "--",
+          "--deny"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "code-mode",
+          "--example",
+          "offline_auxiliary_transport",
+          "--",
+          "--code-mode"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "code-mode",
+          "--example",
+          "offline_auxiliary_transport",
+          "--",
+          "--code-mode",
+          "--deny"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--no-default-features",
+          "--test",
+          "boundary_hooks"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_boundary_hooks"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_boundary_hooks",
+          "--",
+          "--deny"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "code-mode",
+          "--example",
+          "offline_boundary_hooks",
+          "--",
+          "--code-mode"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "code-mode",
+          "--example",
+          "offline_boundary_hooks",
+          "--",
+          "--code-mode",
+          "--deny"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--no-default-features",
+          "--test",
+          "startup_hooks"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_startup_hooks"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_startup_hooks",
+          "--",
+          "--deny"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "code-mode",
+          "--example",
+          "offline_startup_hooks",
+          "--",
+          "--code-mode"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "code-mode",
+          "--example",
+          "offline_startup_hooks",
+          "--",
+          "--code-mode",
+          "--deny"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--no-default-features",
+          "--test",
+          "input_hooks"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_input_hooks"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_input_hooks",
+          "--",
+          "--deny"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "code-mode",
+          "--example",
+          "offline_input_hooks",
+          "--",
+          "--code-mode"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--features",
+          "code-mode",
+          "--example",
+          "offline_input_hooks",
+          "--",
+          "--code-mode",
+          "--deny"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "cargo",
+          "run",
+          "--locked",
+          "-p",
+          "aicoder-runtime",
+          "--example",
+          "offline_input_hooks",
+          "--",
+          "--handled"
+        ],
+        "exit_code": 0
+      },
+      {
+        "command": [
+          "python3",
+          "scripts/check_input_hooks.py"
+        ],
+        "exit_code": 0
+      }
+    ]
+  },
+  "verification_input_sha256": {
+    "scripts/baseline.py": "c119c7ba329aa7a311792396eb3591e523ccd3d655e3f3b2357090cea06a0f9f",
+    "scripts/check_file_images.py": "5f5771b10a1c2c4e8a694c470ffb4890e4c75cfeb8485807415569a8814c0a3d",
+    "scripts/check_host_extensions.py": "8b4be57efcd1d294083fa2cd32fd39242d3a692470be85e0154375ed62ce64c5",
+    "scripts/check_input_hooks.py": "a4b0d2ea54601c4c4fb06d11ca3f1e6fcadd5e200dde0ee8ccf31bd86a814404",
+    ".github/workflows/ci.yml": "22f11328f725a4bc50ea7c168e965193b3d3ceb707d1a32da8525dde36092903",
+    "AGENTS.md": "53e4395d84f2fada390af4ae5359ca223e725bf031645b674d8df8d10c60b714",
+    "docs/protocol/events-v1.schema.json": "4a2acdf2127adf4990153180c18617d5c46796f5ba3b08bf9bf8d6421739ed14",
+    "docs/protocol/rpc-v1.schema.json": "35af606be559f0e5f98b51c1629d7d56806ac3b30c3dff9fce804d838fe78485"
+  },
+  "measurement_scope": "Three cached final-source default workspace samples retained without outlier filtering. No cold build, OS cache reset, allocator or binary-section profile. Default offline smoke/idle exclude explicitly installed raw hooks, input UI, active HTTP/codecs/JS and rendered frontends; not an active-hook latency/RSS profile. Standalone eval has no selected codec/JS/auxiliary feature. No real Spark/Pi, invoice, model quality or causal speed result is inferred."
+}

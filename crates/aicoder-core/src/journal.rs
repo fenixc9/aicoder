@@ -30,6 +30,21 @@ pub trait RunJournal: Send + Sync {
     ) -> anyhow::Result<()> {
         anyhow::bail!("journal does not support canonical tool composition records")
     }
+    async fn record_input_hooks(
+        &self,
+        _record: &crate::extensions::InputHookRecord,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support input hook records")
+    }
+    /// Atomically record raw provenance and the actual effective queued user input.
+    async fn input_prepared(
+        &self,
+        _index: usize,
+        _input: &crate::RunInput,
+        _receipt: &crate::extensions::InputReceipt,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support prepared input")
+    }
     async fn record_lifecycle(
         &self,
         _record: &crate::extensions::LifecycleRecord,
@@ -80,6 +95,20 @@ pub trait RunJournal: Send + Sync {
 }
 #[async_trait]
 impl RunJournal for () {
+    async fn record_input_hooks(
+        &self,
+        _: &crate::extensions::InputHookRecord,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn input_prepared(
+        &self,
+        _: usize,
+        _: &crate::RunInput,
+        _: &crate::extensions::InputReceipt,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn record_lifecycle(&self, _: &crate::extensions::LifecycleRecord) -> anyhow::Result<()> {
         Ok(())
     }

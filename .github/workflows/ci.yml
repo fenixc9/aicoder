@@ -88,6 +88,16 @@ jobs:
           cargo run --locked -p aicoder-runtime --example offline_startup_hooks -- --deny
           cargo run --locked -p aicoder-runtime --features code-mode --example offline_startup_hooks -- --code-mode
           cargo run --locked -p aicoder-runtime --features code-mode --example offline_startup_hooks -- --code-mode --deny
+      - name: Raw input before expansion and ordered controls
+        run: |
+          cargo test --locked -p aicoder-runtime --no-default-features --test input_hooks
+          cargo run --locked -p aicoder-runtime --example offline_input_hooks
+          cargo run --locked -p aicoder-runtime --example offline_input_hooks -- --deny
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_input_hooks -- --code-mode
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_input_hooks -- --code-mode --deny
+          cargo run --locked -p aicoder-runtime --example offline_input_hooks -- --handled
+          cargo build --locked -p aicoder-tui --example offline_extension_ui
+          python3 scripts/check_input_hooks.py
       - name: Planning, protected paths and read-only worker Agent extensions
         run: cargo run --locked -p aicoder-runtime --example coding_extensions
       - name: Versioned process tools and owned-plan approval

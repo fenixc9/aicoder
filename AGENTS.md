@@ -117,6 +117,12 @@
   input interception. Preserve original user/history facts, count the final prefix and tool
   selection, keep empty catalogs empty, and commit sourced context with the initial turn batch.
   Runtime prompt overrides are run-local; prepared startup snapshots never restore from history.
+  Raw input hooks precede expansion and steering notification. Ordered asynchronous reservations
+  bound waiting and retained payloads; synchronous controls cannot bypass installed hooks.
+  Keep original input only in ephemeral recovery data, never serialized receipts/events/history.
+  Record safe source/size/change metadata with the actual effective user message atomically.
+  Handled input creates no model answer or turn. Charge preparation and waits to the same run,
+  expire private UI children on drop/closure, and keep frontend command/cancel loops responsive.
 - Process tools use explicit host launch settings and conservative capabilities. Keep remote
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership

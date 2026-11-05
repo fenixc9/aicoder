@@ -98,12 +98,16 @@ that full product parity has already been achieved.
    still require explicit integration. [Actionable round/settlement boundaries](boundary-hooks.md)
    now stage inert data, source-labelled canonical context and continuation in the same metered
    loop, with atomic JSONL and queue rechecks. Context-edit/compaction boundary drafts,
-   raw-input/message transforms and session lifecycle/navigation veto remain open.
+   message transforms and session lifecycle/navigation veto remain open.
    [Startup hooks](startup-hooks.md) now freeze run-level System prefix replacement, admitted root
    selection and sourced context before turn validation/persistence. Empty catalogs, once-only
    preparation, queueing while busy, restored context and expiring private overrides are verified.
    The session-aware Agent still accepts user AgentInput only; idle custom-message submission
    with trigger-turn semantics remains a separate entry-point gap despite raw executor support.
+   [Raw input interception](input-hooks.md) now implements ordered continue/transform/handled
+   before expansion or steering notification. Explicit handled outcomes, ephemeral raw recovery,
+   nonblocking RPC/TUI submission and authenticated Web initial input are exercised separately;
+   the stock Web example still exposes cancellation/approvals rather than steer/follow-up routes.
    Provider wrappers can cover some
    host integrations, but no exhaustive executable equivalence check exists. Observation-only
    events must not quietly become mutation channels or rewrite canonical facts.

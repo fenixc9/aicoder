@@ -6,7 +6,6 @@ use super::*;
 use aicoder_core::{
     AgentRawEventEnvelope, AgentTurnOutcome, RunControlConfig, RunHandle, TurnExecutionContext,
     events::{EventBufferConfig, EventStreamError, EventSubscription},
-    model::{Message, MessageRole},
     session::{MemorySessionRepository, SessionNavigator},
 };
 use protocol::{Command, Failure, Response, VERSION};
@@ -66,6 +65,8 @@ struct FinishedBody<'a> {
     result: &'a Value,
 }
 
+type InputReply = (u64, Result<Value, Failure>);
+type InputJobUpdate = Option<Result<InputReply, tokio::task::JoinError>>;
 struct Host<'a> {
     runtime: &'a Runtime,
     agent: Arc<Agent>,
@@ -76,6 +77,7 @@ struct Host<'a> {
     active: Option<Active>,
     last: Option<Value>,
     closing: bool,
+    input_jobs: tokio::task::JoinSet<InputReply>,
 }
 impl<'a> Host<'a> {
     fn new(cli: &Cli, runtime: &'a Runtime) -> Result<Self> {
@@ -128,6 +130,7 @@ impl<'a> Host<'a> {
             active: None,
             last: None,
             closing: false,
+            input_jobs: tokio::task::JoinSet::new(),
         })
     }
     fn session_id(&self) -> Option<String> {
@@ -183,7 +186,7 @@ impl<'a> Host<'a> {
                 let prompt = self.prepare(&text)?;
                 let context =
                     TurnExecutionContext::new().with_approval_sessions(self.approvals.clone());
-                let (handle, control) = RunHandle::channel(
+                let (handle, control) = self.agent.control_channel(
                     context,
                     RunControlConfig {
                         handle_approvals: !self.automatic,
@@ -200,7 +203,8 @@ impl<'a> Host<'a> {
                         .run_with_session_controlled(
                             repository.as_ref(),
                             selection,
-                            prompt,
+                            aicoder_core::AgentInput::from(prompt)
+                                .with_source(aicoder_core::InputSource::Rpc),
                             Arc::new(()),
                             control,
                         )
@@ -213,8 +217,9 @@ impl<'a> Host<'a> {
                 });
                 Ok(json!({"run_id":run_id}))
             }
-            Command::Steer { run_id, text } => self.queue_input(&run_id, &text, false),
-            Command::FollowUp { run_id, text } => self.queue_input(&run_id, &text, true),
+            Command::Steer { .. } | Command::FollowUp { .. } => {
+                anyhow::bail!("input commands require async dispatch")
+            }
             Command::Cancel { run_id } => {
                 self.control(&run_id)
                     .map_err(CommandFailure)?
@@ -308,19 +313,59 @@ impl<'a> Host<'a> {
             !text.trim().is_empty() && text.len() <= input::MAX_INPUT,
             "prompt must be nonempty and fit 1 MiB"
         );
-        Ok(self.runtime.prepare_prompt(text)?.text)
+        Ok(text.to_owned())
     }
-    fn queue_input(&self, run_id: &str, text: &str, follow: bool) -> Result<Value> {
-        let handle = self.control(run_id).map_err(CommandFailure)?;
-        let prompt = self.prepare(text)?;
-        let message = Message::text(MessageRole::User, prompt);
-        let id = if follow {
-            handle.follow_up(message)
-        } else {
-            handle.steer(message)
+    fn begin_input(
+        &mut self,
+        id: u64,
+        run_id: &str,
+        text: &str,
+        follow: bool,
+    ) -> Result<(), Failure> {
+        let handle = self.control(run_id)?.clone();
+        let text = self
+            .prepare(text)
+            .map_err(|_| Failure::new("invalid_input", "prompt must be nonempty and fit 1 MiB"))?;
+        if self.input_jobs.len() >= 32 {
+            return Err(Failure::new(
+                "control_rejected",
+                "too many pending input submissions",
+            ));
         }
-        .map_err(|error| CommandFailure(Failure::new("control_rejected", error.to_string())))?;
-        Ok(json!({"input_id":id}))
+        let kind = if follow {
+            aicoder_core::RunInputKind::FollowUp
+        } else {
+            aicoder_core::RunInputKind::Steer
+        };
+        let prepared = handle
+            .begin_input(
+                kind,
+                aicoder_core::AgentInput::from(text).with_source(aicoder_core::InputSource::Rpc),
+            )
+            .map_err(|e| {
+                Failure::new(
+                    "control_rejected",
+                    aicoder_core::redaction::sanitize_text(&e.to_string(), 2048),
+                )
+            })?;
+        self.input_jobs.spawn(async move {
+            let result = prepared
+                .await
+                .map(|result| match result {
+                    aicoder_core::InputSubmission::Queued { input_id } => {
+                        json!({"input_id":input_id})
+                    }
+                    aicoder_core::InputSubmission::Handled { by } => json!({"handled":by}),
+                })
+                .map_err(|error| {
+                    Failure::new(
+                        "control_rejected",
+                        aicoder_core::redaction::sanitize_text(&error.to_string(), 2048),
+                    )
+                });
+            (id, result)
+        });
+        Ok(())
     }
     fn finished(&mut self, outcome: AgentTurnOutcome) -> Value {
         let active = self.active.take().expect("owned run");
@@ -332,6 +377,11 @@ impl<'a> Host<'a> {
             AgentTurnOutcome::Completed(_) => "completed",
             AgentTurnOutcome::Aborted(_) => "aborted",
             AgentTurnOutcome::Limited(_) => "limited",
+            AgentTurnOutcome::Stopped(v)
+                if matches!(v.stop, aicoder_core::RunStop::InputHandled(_)) =>
+            {
+                "handled"
+            }
             AgentTurnOutcome::Stopped(_) => "stopped",
             AgentTurnOutcome::Failed(_) => "failed",
         };
@@ -368,6 +418,8 @@ pub async fn run(cli: &Cli, runtime: &Runtime) -> Result<()> {
     if let Some(active) = host.active.take() {
         active.cancel_and_wait().await;
     }
+    host.input_jobs.abort_all();
+    while host.input_jobs.join_next().await.is_some() {}
     host.approvals.clear();
     result
 }
@@ -380,19 +432,22 @@ async fn serve(host: &mut Host<'_>) -> Result<()> {
     let mut interrupted = false;
     loop {
         output.flush_some()?;
-        if host.closing && host.active.is_none() && output.is_empty() {
+        if host.closing && host.active.is_none() && host.input_jobs.is_empty() && output.is_empty()
+        {
             break;
         }
         enum Action {
             Tick,
             Input(Result<Option<String>>),
             Run(Update),
+            InputPrepared(InputJobUpdate),
             Signal,
         }
         let action = tokio::select! {
             _=ticks.tick()=>Action::Tick,
             _=signal.recv()=>Action::Signal,
             line=lines.next_line(),if !host.closing=>Action::Input(line),
+            result=host.input_jobs.join_next(),if !host.input_jobs.is_empty()=>Action::InputPrepared(result),
             update=async {match &mut host.active {Some(active)=>active.next().await,None=>std::future::pending().await}}=>Action::Run(update),
         };
         match action {
@@ -413,11 +468,30 @@ async fn serve(host: &mut Host<'_>) -> Result<()> {
             }
             Action::Input(Ok(Some(line))) => {
                 let response = match protocol::parse(&line, &mut last_id) {
+                    Ok((id, Command::Steer { run_id, text })) => {
+                        match host.begin_input(id, &run_id, &text, false) {
+                            Ok(()) => continue,
+                            Err(error) => Response::new(Some(id), Err(error)),
+                        }
+                    }
+                    Ok((id, Command::FollowUp { run_id, text })) => {
+                        match host.begin_input(id, &run_id, &text, true) {
+                            Ok(()) => continue,
+                            Err(error) => Response::new(Some(id), Err(error)),
+                        }
+                    }
                     Ok((id, command)) => Response::new(Some(id), host.command(command)),
                     Err(response) => response,
                 };
                 output.push(&response)?;
             }
+            Action::InputPrepared(Some(Ok((id, result)))) => {
+                output.push(&Response::new(Some(id), result))?
+            }
+            Action::InputPrepared(Some(Err(_))) => {
+                anyhow::bail!("input submission owner ended without a result")
+            }
+            Action::InputPrepared(None) => {}
             Action::Run(Update::Event(event)) => output.push(&Notification {
                 version: VERSION,
                 r#type: "event",
@@ -457,4 +531,173 @@ async fn serve(host: &mut Host<'_>) -> Result<()> {
         return Err(input::Interrupted.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+    use aicoder_core::{extensions::*, model::*};
+    use aicoder_runtime::{
+        ConfigDiscovery, RuntimeOverrides, Setting, Settings, resources::ResourceSettings,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    struct Provider {
+        started: tokio::sync::Notify,
+        calls: AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl ModelProvider for Provider {
+        fn model_spec(&self, model: &str) -> Result<ModelSpec, ProviderError> {
+            let mut spec = ModelSpec::new("fixture", model);
+            spec.capabilities.tools = true;
+            Ok(spec)
+        }
+        async fn generate(
+            &self,
+            _: ModelRequest,
+            _: Arc<dyn ModelEventSink>,
+            _: TurnExecutionContext,
+        ) -> Result<ModelResponse, ProviderError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.started.notify_one();
+            std::future::pending().await
+        }
+    }
+    struct Raw {
+        started: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl InputHook for Raw {
+        async fn input(
+            &self,
+            input: InputHookInput<'_>,
+            _: ExtensionCancellation,
+        ) -> Result<InputAction> {
+            assert_eq!(input.source, aicoder_core::InputSource::Rpc);
+            if input.input.message().text_content() == "/consume" {
+                return Ok(InputAction::Handled);
+            }
+            if input.delivery != InputDelivery::Initial {
+                self.started.notify_one();
+                std::future::pending::<()>().await;
+            }
+            Ok(InputAction::Continue)
+        }
+    }
+    fn runtime(root: &std::path::Path) -> Runtime {
+        Runtime::load_with_environment(
+            root,
+            RuntimeOverrides {
+                settings: Settings {
+                    model: Setting::Value("offline".into()),
+                    resources: ResourceSettings {
+                        enabled: Setting::Value(false),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                session_dir: Setting::Clear,
+                ..Default::default()
+            },
+            ConfigDiscovery {
+                enabled: false,
+                ..Default::default()
+            },
+            Arc::new(std::collections::BTreeMap::new()),
+        )
+        .unwrap()
+    }
+    fn setup(runtime: &Runtime, started: Arc<tokio::sync::Notify>, p: Arc<Provider>) -> Host<'_> {
+        let cli = Cli::parse_from(["aicoder", "--no-session", "--yes"]);
+        let mut host = Host::new(&cli, runtime).unwrap();
+        let mut e = Extension::new("rpc-input", "1").unwrap();
+        e.input_hook(HookSpec::new("raw"), Arc::new(Raw { started }))
+            .unwrap();
+        let mut r = ExtensionRegistry::new();
+        r.install(e).unwrap();
+        host.agent = Arc::new(Agent::new(
+            runtime
+                .executor_builder_with_extensions(p, Arc::new(r.finish()))
+                .unwrap()
+                .build()
+                .unwrap(),
+            runtime.agent_config(),
+        ));
+        host
+    }
+    #[tokio::test]
+    async fn rpc_consumed_initial_input_reports_handled_without_model_io() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = runtime(root.path());
+        let provider = Arc::new(Provider {
+            started: tokio::sync::Notify::new(),
+            calls: AtomicUsize::new(0),
+        });
+        let mut host = setup(
+            &runtime,
+            Arc::new(tokio::sync::Notify::new()),
+            provider.clone(),
+        );
+        host.command(Command::Prompt {
+            text: "/consume".into(),
+        })
+        .unwrap();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if let Update::Finished(Ok(outcome)) = host.active.as_mut().unwrap().next().await {
+                    return outcome;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        let report = host.finished(*outcome);
+        assert_eq!(report["status"], "handled");
+        assert_eq!(report["stop"]["kind"], "input_handled");
+        assert_eq!(report["rounds"], 0);
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    }
+    #[tokio::test]
+    async fn rpc_keeps_status_and_cancel_available_while_an_input_handler_waits() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = runtime(root.path());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let provider = Arc::new(Provider {
+            started: tokio::sync::Notify::new(),
+            calls: AtomicUsize::new(0),
+        });
+        let mut host = setup(&runtime, started.clone(), provider.clone());
+        let run = host
+            .command(Command::Prompt {
+                text: "initial".into(),
+            })
+            .unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            provider.started.notified(),
+        )
+        .await
+        .unwrap();
+        let run_id = run["run_id"].as_str().unwrap().to_owned();
+        host.begin_input(2, &run_id, "wait", false).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), started.notified())
+            .await
+            .unwrap();
+        assert_eq!(
+            host.command(Command::Status).unwrap()["active"]["pending_inputs"],
+            json!([])
+        );
+        host.command(Command::Cancel { run_id }).unwrap();
+        let (_, response) = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            host.input_jobs.join_next(),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        assert!(response.is_err());
+        host.active.take().unwrap().cancel_and_wait().await;
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    }
 }

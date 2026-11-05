@@ -1,4 +1,11 @@
 //! Explicit native extension registration. Native code is trusted host code, not a sandbox.
+mod input;
+pub use input::{
+    INPUT_HOOK_NAMESPACE, InputAction, InputChange, InputDelivery, InputExpander, InputHandled,
+    InputHook, InputHookInput, InputHookRecord, InputPreparation, InputReceipt,
+    MAX_INPUT_HOOK_BYTES,
+};
+pub(crate) use input::{InputPipeline, PreparedUserInput};
 mod startup;
 pub(crate) use startup::PreparedStartup;
 pub use startup::{

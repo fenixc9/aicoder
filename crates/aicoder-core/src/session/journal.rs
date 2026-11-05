@@ -151,6 +151,46 @@ impl RunJournal for SessionJournal<'_> {
             }],
         )
     }
+    async fn record_input_hooks(&self, record: &crate::extensions::InputHookRecord) -> Result<()> {
+        crate::extensions::size(record, crate::extensions::MAX_INPUT_HOOK_BYTES)?;
+        let mut state = self.state.lock().expect("session journal poisoned");
+        self.write(
+            &mut state,
+            vec![SessionEntryData::Extension {
+                namespace: crate::extensions::INPUT_HOOK_NAMESPACE.into(),
+                data: serde_json::to_value(record)?,
+            }],
+        )
+    }
+    async fn input_prepared(
+        &self,
+        index: usize,
+        input: &crate::RunInput,
+        receipt: &crate::extensions::InputReceipt,
+    ) -> Result<()> {
+        let record = crate::extensions::InputHookRecord::Prepared {
+            receipt: receipt.for_record(),
+        };
+        crate::extensions::size(&record, crate::extensions::MAX_INPUT_HOOK_BYTES)?;
+        let mut state = self.state.lock().expect("session journal poisoned");
+        ensure!(
+            !state.saved.contains_key(&index),
+            "control input position already saved"
+        );
+        self.write(&mut state,vec![
+            SessionEntryData::Extension{namespace:crate::extensions::INPUT_HOOK_NAMESPACE.into(),data:serde_json::to_value(record)?},
+            SessionEntryData::Extension{namespace:"aicoder.run.input".into(),data:serde_json::json!({"run_id":input.run_id,"id":input.id,"kind":input.kind})},
+            SessionEntryData::Message{message:input.message.clone()},
+        ])?;
+        let id = state
+            .session
+            .metadata()
+            .leaf_id
+            .clone()
+            .expect("prepared input checkpoint");
+        state.saved.insert(index, id);
+        Ok(())
+    }
     async fn record_lifecycle(&self, record: &crate::extensions::LifecycleRecord) -> Result<()> {
         crate::extensions::size(record, 128 * 1024)?;
         let mut state = self.state.lock().expect("session journal poisoned");

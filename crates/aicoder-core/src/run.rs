@@ -114,6 +114,7 @@ pub enum RunStop {
     Budget(BudgetExceeded),
     Model(StopReason),
     Failed(RunFailure),
+    InputHandled(crate::extensions::InputHandled),
 }
 impl fmt::Display for RunStop {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -126,6 +127,7 @@ impl fmt::Display for RunStop {
                 model_stop_text(reason)
             ),
             Self::Failed(error) => error.fmt(f),
+            Self::InputHandled(handled) => handled.fmt(f),
         }
     }
 }
@@ -136,6 +138,7 @@ impl RunStop {
             Self::Budget(error) => error.clone().into(),
             Self::Failed(error) => error.clone().into(),
             Self::Model(reason) => ModelStopped(reason.clone()).into(),
+            Self::InputHandled(handled) => handled.clone().into(),
         }
     }
 }
@@ -421,6 +424,26 @@ impl RunLimiter {
         self.state.lock().expect("run budget poisoned").failure =
             Some(RunFailure::from_error(RunStage::Persistence, error));
         self.context.cancel("auxiliary persistence failed");
+    }
+    pub(crate) fn charge_output_bytes(&self, bytes: usize) -> anyhow::Result<()> {
+        self.check()?;
+        let mut state = self.state.lock().expect("run budget poisoned");
+        if let Some(limit) = self.budget.max_output_bytes
+            && bytes > limit.saturating_sub(state.output_bytes)
+        {
+            let violation = BudgetExceeded {
+                resource: BudgetResource::OutputBytes,
+                limit: limit as u64,
+                used: state.output_bytes as u64,
+                requested: Some(bytes as u64),
+            };
+            drop(state);
+            self.stop(violation.clone());
+            return Err(violation.into());
+        }
+        state.output_bytes = state.output_bytes.saturating_add(bytes);
+        drop(state);
+        self.check()
     }
     pub fn retain_text(&self, text: &str) -> String {
         let mut state = self.state.lock().expect("run budget poisoned");

@@ -266,31 +266,26 @@ impl WebHost {
         if text.trim().is_empty() || text.len() > MAX_BODY {
             return Err(("invalid_input", "Prompt must be nonempty and fit 1 MiB"));
         }
-        let prompt = self
-            .0
-            .runtime
-            .prepare_prompt(text)
-            .map_err(|_| {
-                (
-                    "invalid_input",
-                    "Prompt expansion failed; inspect host resources",
-                )
-            })?
-            .text;
-        Ok(self.launch(&mut state, prompt.into()))
+        Ok(self.launch(
+            &mut state,
+            aicoder_core::AgentInput::from(text).with_source(aicoder_core::InputSource::Web),
+        ))
     }
     pub(crate) fn launch(&self, state: &mut State, prompt: aicoder_core::AgentInput) -> Arc<Run> {
         let ui = aicoder_core::ui::UiHost::interactive();
-        let (handle, control) = RunHandle::channel(
-            TurnExecutionContext::new()
-                .with_approval_sessions(self.0.approvals.clone())
-                .with_ui(ui.client("extension").expect("fixed UI owner")),
-            RunControlConfig {
-                handle_approvals: true,
-                ..Default::default()
-            },
-        )
-        .expect("valid Web controls");
+        let (handle, control) = self
+            .0
+            .agent
+            .control_channel(
+                TurnExecutionContext::new()
+                    .with_approval_sessions(self.0.approvals.clone())
+                    .with_ui(ui.client("extension").expect("fixed UI owner")),
+                RunControlConfig {
+                    handle_approvals: true,
+                    ..Default::default()
+                },
+            )
+            .expect("valid Web controls");
         let events = control
             .subscribe(EventBufferConfig::default())
             .expect("new Web subscription");
@@ -359,6 +354,11 @@ fn completion(run: &Run, outcome: &AgentTurnOutcome) -> Value {
         AgentTurnOutcome::Completed(_) => "completed",
         AgentTurnOutcome::Aborted(_) => "aborted",
         AgentTurnOutcome::Limited(_) => "limited",
+        AgentTurnOutcome::Stopped(v)
+            if matches!(v.stop, aicoder_core::RunStop::InputHandled(_)) =>
+        {
+            "handled"
+        }
         AgentTurnOutcome::Stopped(_) => "stopped",
         AgentTurnOutcome::Failed(_) => "failed",
     };

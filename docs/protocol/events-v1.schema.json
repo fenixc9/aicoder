@@ -832,6 +832,56 @@
             "kind",
             "detail"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "input_handled"
+            },
+            "detail": {
+              "type": "object",
+              "properties": {
+                "extension": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "hook": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "source": {
+                  "enum": [
+                    "sdk",
+                    "interactive",
+                    "rpc",
+                    "web",
+                    "extension"
+                  ]
+                },
+                "delivery": {
+                  "enum": [
+                    "initial",
+                    "steer",
+                    "follow_up"
+                  ]
+                }
+              },
+              "required": [
+                "extension",
+                "hook",
+                "source",
+                "delivery"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "kind",
+            "detail"
+          ]
         }
       ]
     },

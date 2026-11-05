@@ -1,9 +1,11 @@
 //! Bounded, host-independent controls for one owned agent run.
+mod input;
 use crate::{
     RunId, TurnExecutionContext,
     model::{ContentBlock, Message, MessageRole},
     tools::{ApprovalDecision, ApprovalRequest, ApprovalSessionInfo, ToolInvocation},
 };
+pub use input::{InputSubmission, InputSubmissionFuture, RejectedInputSubmission};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::VecDeque,
@@ -42,10 +44,21 @@ pub enum RunInputKind {
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunInput {
+    /// Ephemeral raw provenance retained for failure recovery; omitted from controls/events wire data.
+    #[serde(skip)]
+    pub provenance: Option<Arc<crate::extensions::InputReceipt>>,
     pub run_id: String,
     pub id: u64,
     pub kind: RunInputKind,
     pub message: Message,
+}
+impl RunInput {
+    pub fn original_message(&self) -> &Message {
+        self.provenance
+            .as_ref()
+            .and_then(|p| p.original.as_ref())
+            .unwrap_or(&self.message)
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -82,6 +95,8 @@ pub struct RunControlSnapshot {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunControlError {
     Closed,
+    InputPreparationRequired,
+    InputBindingMismatch,
     QueueFull,
     InputTooLarge,
     InvalidInput,
@@ -93,6 +108,10 @@ impl fmt::Display for RunControlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Closed => "run no longer accepts controls",
+            Self::InputPreparationRequired => "input hooks require asynchronous submit_input",
+            Self::InputBindingMismatch => {
+                "run input processor differs or raw inputs predate its installation"
+            }
             Self::QueueFull => "run input queue is full",
             Self::InputTooLarge => "run input exceeds its byte limit",
             Self::InvalidInput => "control input must contain user text or images",
@@ -129,6 +148,11 @@ struct Approval {
     response: oneshot::Sender<ApprovalDecision>,
 }
 struct State {
+    input_pipeline: Option<Arc<crate::extensions::InputPipeline>>,
+    input_error: Option<RunControlError>,
+    inflight: std::collections::BTreeMap<u64, usize>,
+    inflight_bytes: usize,
+    input_started: Option<tokio::time::Instant>,
     model_context: Option<crate::ModelContextInfo>,
     status: RunControlStatus,
     revision: u64,
@@ -176,6 +200,11 @@ impl RunHandle {
             id,
             config,
             state: Mutex::new(State {
+                input_pipeline: None,
+                input_error: None,
+                inflight: input::empty_reservations(),
+                inflight_bytes: 0,
+                input_started: None,
                 model_context: None,
                 status: RunControlStatus::Waiting,
                 revision: 0,
@@ -208,6 +237,14 @@ impl RunHandle {
     }
     pub fn run_id(&self) -> RunId {
         self.shared.id
+    }
+    pub fn input_processing_enabled(&self) -> bool {
+        self.shared
+            .state
+            .lock()
+            .expect("run controls poisoned")
+            .input_pipeline
+            .is_some()
     }
     pub fn steer(&self, message: Message) -> Result<u64, RejectedRunInput> {
         self.submit(RunInputKind::Steer, message)
@@ -245,13 +282,20 @@ impl RunHandle {
             {
                 return Err(RunControlError::Closed);
             }
-            if state.pending.len() >= self.shared.config.max_pending_inputs
+            if state
+                .input_pipeline
+                .as_ref()
+                .is_some_and(|p| p.requires_async())
+            {
+                return Err(RunControlError::InputPreparationRequired);
+            }
+            if state.pending.len() + state.inflight.len() >= self.shared.config.max_pending_inputs
                 || counter.bytes
                     > self
                         .shared
                         .config
                         .max_pending_bytes
-                        .saturating_sub(state.pending_bytes)
+                        .saturating_sub(state.pending_bytes.saturating_add(state.inflight_bytes))
             {
                 return Err(RunControlError::QueueFull);
             }
@@ -263,6 +307,7 @@ impl RunHandle {
             state.pending_bytes += counter.bytes;
             state.pending.push_back(Queued {
                 input: RunInput {
+                    provenance: None,
                     run_id: self.shared.id.to_string(),
                     id,
                     kind,
@@ -405,6 +450,9 @@ impl ControlState {
     pub(crate) fn start(&self) {
         let mut state = self.state.lock().expect("run controls poisoned");
         if state.status == RunControlStatus::Waiting {
+            state
+                .input_started
+                .get_or_insert_with(tokio::time::Instant::now);
             state.status = RunControlStatus::Running;
             self.update(&mut state);
         }
