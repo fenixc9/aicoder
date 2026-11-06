@@ -426,71 +426,25 @@ impl<'a> SessionNavigator<'a> {
         self.info(id)?;
         self.repository.archive_page(id, limit, cursor)
     }
-    /// Unified metadata mutations for full snapshots and bounded archive windows.
+    pub fn prepare(
+        &self,
+        id: &str,
+        action: ArchiveNavigation,
+    ) -> Result<PreparedSessionNavigation<'a>> {
+        PreparedSessionNavigation::new(self.repository, self.open_run(id)?, action)
+    }
+    /// Resolve once, hold ownership, and commit the same prepared transaction.
     pub fn execute(&self, id: &str, action: ArchiveNavigation) -> Result<RunSession> {
         let mut state = self.open_run(id)?;
-        let lease = state.acquire(self.repository)?;
-        match &mut state {
-            RunSession::Window(window) => self.repository.navigate_window(window, action)?,
-            RunSession::Full(session) => {
-                let data = match action {
-                    ArchiveNavigation::Rename { title } => Some(NavigationRecord::Rename { title }),
-                    ArchiveNavigation::Label { entry_id, label } => {
-                        let entry_id = session.resolve_entry(&entry_id)?.to_string();
-                        Some(NavigationRecord::Label { entry_id, label })
-                    }
-                    ArchiveNavigation::Checkout { target } => {
-                        let target = target
-                            .as_deref()
-                            .map(|target| session.resolve_entry(target).map(str::to_string))
-                            .transpose()?;
-                        self.repository.checkout(session, target.as_deref())?;
-                        None
-                    }
-                    ArchiveNavigation::Branch { source, name } => {
-                        let parent = match source {
-                            BranchSource::Current => session.metadata().leaf_id.clone(),
-                            BranchSource::Root => None,
-                            BranchSource::Entry(target) => {
-                                Some(session.resolve_entry(&target)?.to_string())
-                            }
-                        };
-                        session.branch(parent.as_deref())?.model_context()?;
-                        let entry = SessionEntry {
-                            id: uuid::Uuid::new_v4().to_string(),
-                            parent_id: parent,
-                            created_at: super::now_millis()?,
-                            data: NavigationRecord::Branch { name }.data(),
-                        };
-                        let transaction = SessionTransaction {
-                            leaf_id: Some(entry.id.clone()),
-                            entries: vec![entry],
-                        };
-                        self.repository.commit(session, transaction)?;
-                        None
-                    }
-                    ArchiveNavigation::Recover => {
-                        session.selected_branch().model_context()?;
-                        if let Some(turn) = session.unfinished_turn().map(str::to_string) {
-                            self.repository.append_entries(
-                                session,
-                                vec![SessionEntryData::TurnEnd {
-                                    turn_id: turn,
-                                    record: Box::new(TurnRecord::recovered()),
-                                }],
-                            )?;
-                        }
-                        None
-                    }
-                };
-                if let Some(data) = data {
-                    self.repository.append_entries(session, vec![data.data()])?;
-                }
-            }
+        if let RunSession::Window(window) = &mut state {
+            let lease = self.repository.acquire_window(window)?;
+            self.repository.navigate_window(window, action)?;
+            drop(lease);
+            state.clear_run_token();
+            Ok(state)
+        } else {
+            PreparedSessionNavigation::new(self.repository, state, action)?.commit()
         }
-        drop(lease);
-        state.clear_run_token();
-        Ok(state)
     }
     pub fn rename(&self, id: &str, title: &str) -> Result<Session> {
         name(title)?;

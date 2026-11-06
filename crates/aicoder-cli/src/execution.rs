@@ -133,6 +133,7 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
     } else {
         SessionSelection::New
     };
+    let mut adopted_session: Option<String> = None;
     let approvals = ApprovalSessions::default();
     let json = if cli.json {
         Some(Arc::new(JsonEvents::new()?))
@@ -145,6 +146,7 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
         None
     };
     let mut next = initial;
+    let result:Result<()> = async {
     loop {
         let prompt = if let Some(prompt) = next.take() {
             prompt
@@ -188,12 +190,14 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
         };
         let context = TurnExecutionContext::new().with_approval_sessions(approvals.clone());
         let turn_selection = selection.clone();
+        let turn_current=adopted_session.clone();
         let work = async {
             match repository {
                 Some(repo) => {
                     agent
-                        .run_with_session_outcome(
+                        .run_hosted_session_outcome(
                             repo,
+                            turn_current.as_deref(),
                             turn_selection.clone(),
                             prepared_input,
                             handler,
@@ -201,18 +205,31 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
                         )
                         .await
                 }
-                None => {
-                    agent
+                None => aicoder_core::HostedSessionOutcome {
+                    outcome: agent
                         .run_outcome(prepared_input, handler, context.clone())
-                        .await
-                }
+                        .await,
+                    lifecycle: Vec::new(),
+                },
             }
         };
         tokio::pin!(work);
         let outcome = loop {
             tokio::select! {biased;_=signal.recv()=>context.cancel("Ctrl-C"),outcome=&mut work=>break outcome}
         };
+        let lifecycle_failures = outcome
+            .lifecycle
+            .iter()
+            .map(|r| r.delivery.failures.len())
+            .sum::<usize>();
+        if lifecycle_failures > 0 {
+            eprintln!(
+                "Session adopted; {lifecycle_failures} lifecycle observations were incomplete."
+            );
+        }
+        let outcome = outcome.outcome;
         if let Some(session) = outcome.session() {
+            adopted_session = Some(session.id.clone());
             selection = SessionSelection::Existing(session.id.clone());
             if disk.is_some() {
                 eprintln!("Session: {}", session.id);
@@ -297,6 +314,27 @@ pub async fn run(cli: &Cli, explicit: bool, runtime: &Runtime) -> Result<()> {
         }
     }
     Ok(())
+    }.await;
+    if agent.has_session_hooks()
+        && let (Some(repository), Some(id)) = (repository, adopted_session.as_deref())
+    {
+        let report = agent
+            .notify_session_shutdown(
+                repository,
+                id,
+                aicoder_core::extensions::SessionShutdownReason::Quit,
+                TurnExecutionContext::new(),
+            )
+            .await;
+        if report.as_ref().is_err()
+            || report
+                .as_ref()
+                .is_ok_and(|r| !r.delivery.failures.is_empty())
+        {
+            eprintln!("Session shutdown observations were incomplete.");
+        }
+    }
+    result
 }
 fn number(value: Option<u64>) -> String {
     value.map_or_else(|| "unknown".into(), |value| value.to_string())

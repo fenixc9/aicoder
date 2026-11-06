@@ -12,6 +12,7 @@ const DEFAULT_REASON: &str = "Turn execution was cancelled";
 
 #[derive(Clone)]
 pub struct TurnExecutionContext {
+    preparation_started: Option<tokio::time::Instant>,
     pub(crate) control: Option<Arc<crate::control::ControlState>>,
     pub(crate) approval_sessions: Option<crate::tools::ApprovalSessions>,
     pub(crate) approval_session: Option<crate::tools::ApprovalSession>,
@@ -22,11 +23,19 @@ pub struct TurnExecutionContext {
 }
 
 impl TurnExecutionContext {
+    pub(crate) fn with_preparation_start(mut self, started: tokio::time::Instant) -> Self {
+        self.preparation_started = Some(self.preparation_start(started));
+        self
+    }
+    pub(crate) fn preparation_start(&self, started: tokio::time::Instant) -> tokio::time::Instant {
+        self.preparation_started.map_or(started, |s| s.min(started))
+    }
     pub fn new() -> Self {
         Self::fresh(CancellationToken::new(), crate::ui::UiClient::default())
     }
     fn fresh(token: CancellationToken, ui: crate::ui::UiClient) -> Self {
         Self {
+            preparation_started: None,
             control: None,
             approval_sessions: None,
             approval_session: None,
@@ -104,6 +113,7 @@ impl TurnExecutionContext {
     /// Parent cancellation propagates down; stopping a child does not cancel its caller.
     pub fn child(&self) -> Self {
         Self {
+            preparation_started: self.preparation_started,
             control: self.control.clone(),
             approval_sessions: self.approval_sessions.clone(),
             approval_session: self.approval_session.clone(),

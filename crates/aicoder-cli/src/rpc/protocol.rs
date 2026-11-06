@@ -40,6 +40,9 @@ pub enum Command {
         approval_id: ApprovalRequestId,
         decision: ApprovalDecision,
     },
+    CancelSessionSelection {
+        request_id: u64,
+    },
     SelectSession {
         session_id: Option<String>,
     },
@@ -149,7 +152,7 @@ pub fn parse(line: &str, last: &mut u64) -> Result<(u64, Command), Response> {
             )),
         ));
     }
-    let command = serde_json::from_value(request.command).map_err(|_| {
+    let command: Command = serde_json::from_value(request.command).map_err(|_| {
         Response::new(
             Some(id),
             Err(Failure::new(
@@ -158,6 +161,17 @@ pub fn parse(line: &str, last: &mut u64) -> Result<(u64, Command), Response> {
             )),
         )
     })?;
+    if let Command::CancelSessionSelection { request_id } = command
+        && !(1..=MAX_ID).contains(&request_id)
+    {
+        return Err(Response::new(
+            Some(id),
+            Err(Failure::new(
+                "invalid_command",
+                "request_id must be a positive JavaScript-safe integer",
+            )),
+        ));
+    }
     Ok((id, command))
 }
 

@@ -5,13 +5,20 @@ pub use native_context::{NATIVE_CONTEXT_NAMESPACE, NativeContextSource};
 mod journal;
 pub(crate) use journal::SessionJournal;
 pub const SESSION_VERSION: u32 = 3;
+mod lifecycle;
 mod memory;
 mod model_selection;
+pub use lifecycle::{
+    SessionActionReport, SessionCreatedWithoutOwnership, SessionNavigationOutcome,
+    SessionSelectionOutcome,
+};
 pub(crate) mod navigation;
 pub use model_selection::*;
+mod plan;
 mod projection;
 mod reasoning;
 mod repository;
+pub use plan::{PreparedSessionNavigation, SessionNavigationPlan, prepare_transaction};
 pub use reasoning::*;
 mod types;
 mod window;

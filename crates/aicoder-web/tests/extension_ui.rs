@@ -154,6 +154,14 @@ impl Server {
         Self::with_setup(write, inputs, false).await
     }
     async fn with_setup(write: bool, inputs: bool, messages: bool) -> Self {
+        Self::with_session_hook(write, inputs, messages, None).await
+    }
+    async fn with_session_hook(
+        write: bool,
+        inputs: bool,
+        messages: bool,
+        session: Option<Arc<dyn SessionHook>>,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         if inputs {
             std::fs::create_dir_all(root.path().join(".aicoder/prompts")).unwrap();
@@ -208,6 +216,11 @@ impl Server {
         if messages {
             extension
                 .message_hook(HookSpec::new("finalize"), Arc::new(WebFinalize))
+                .unwrap();
+        }
+        if let Some(hook) = session {
+            extension
+                .session_hook(HookSpec::new("session"), hook)
                 .unwrap();
         }
         let mut registry = ExtensionRegistry::new();
@@ -686,5 +699,91 @@ async fn authenticated_web_sse_delivers_effective_user_and_assistant_after_final
         "WEB_FINAL_ASSISTANT"
     );
     assert!(!text.contains("private input"));
+    server.close().await;
+}
+
+struct DenySession;
+#[async_trait]
+impl SessionHook for DenySession {
+    async fn before(
+        &self,
+        _: SessionHookInput<'_>,
+        _: ExtensionCancellation,
+    ) -> anyhow::Result<SessionDecision> {
+        Ok(SessionDecision::Deny {
+            reason: "host session policy".into(),
+        })
+    }
+}
+#[tokio::test]
+async fn authenticated_web_session_veto_prevents_model_io_and_reports_failed_preparation() {
+    let server = Server::with_session_hook(false, false, false, Some(Arc::new(DenySession))).await;
+    let response = server
+        .post("/api/runs", json!({"id":1,"text":"user"}))
+        .await;
+    assert_eq!(response.status(), 202);
+    let run = response.json::<Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let done = server
+        .wait(&format!("/api/runs/{run}"), |v| !v["result"].is_null())
+        .await;
+    assert_eq!(done["result"]["status"], "failed");
+    assert!(done["result"]["session_id"].is_null());
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 0);
+    server.close().await;
+}
+struct LifecycleEvents(Mutex<Vec<SessionLifecycleEvent>>);
+#[async_trait]
+impl SessionHook for LifecycleEvents {
+    async fn after(
+        &self,
+        event: &SessionLifecycleEvent,
+        _: ExtensionCancellation,
+    ) -> anyhow::Result<()> {
+        self.0.lock().unwrap().push(event.clone());
+        Ok(())
+    }
+}
+#[tokio::test]
+async fn web_session_start_is_once_per_binding_and_shutdown_waits_owner_and_notifies_once() {
+    let hooks = Arc::new(LifecycleEvents(Mutex::new(Vec::new())));
+    let server = Server::with_session_hook(false, false, false, Some(hooks.clone())).await;
+    for id in 1..=2 {
+        let response = server
+            .post("/api/runs", json!({"id":id,"text":"user"}))
+            .await;
+        let run = response.json::<Value>().await.unwrap()["run_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let done = server
+            .wait(&format!("/api/runs/{run}"), |v| !v["result"].is_null())
+            .await;
+        assert_eq!(done["result"]["status"], "completed");
+    }
+    assert_eq!(
+        hooks
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e.kind, SessionEventKind::Started))
+            .count(),
+        1
+    );
+    server.host.shutdown().await;
+    server.host.shutdown().await;
+    assert_eq!(
+        hooks
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e.kind, SessionEventKind::Shutdown))
+            .count(),
+        1
+    );
     server.close().await;
 }

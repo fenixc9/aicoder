@@ -106,6 +106,20 @@ pub trait SessionRepository: Send + Sync {
             }),
         })
     }
+    fn prepare_window_navigation(
+        &self,
+        _window: &super::SessionWindow,
+        _action: super::ArchiveNavigation,
+    ) -> Result<super::SessionNavigationPlan> {
+        anyhow::bail!("repository does not support read-only navigation preparation")
+    }
+    fn commit_window_navigation(
+        &self,
+        _window: &mut super::SessionWindow,
+        _plan: super::SessionNavigationPlan,
+    ) -> Result<()> {
+        anyhow::bail!("repository does not support prepared window navigation")
+    }
     fn navigate_window(
         &self,
         _window: &mut super::SessionWindow,

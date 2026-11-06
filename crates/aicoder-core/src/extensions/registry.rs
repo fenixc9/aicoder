@@ -52,6 +52,7 @@ pub struct Extension {
     policies: Vec<(String, Arc<dyn ContextPolicy>)>,
     finalizers: Vec<Registered<dyn AssistantMessageHook>>,
     messages: Vec<Registered<dyn MessageHook>>,
+    sessions: Vec<Registered<dyn SessionHook>>,
     inputs: Vec<Registered<dyn InputHook>>,
     startups: Vec<Registered<dyn BeforeStartHook>>,
     boundaries: Vec<Registered<dyn BoundaryHook>>,
@@ -87,6 +88,7 @@ impl Extension {
             policies: Vec::new(),
             finalizers: Vec::new(),
             messages: Vec::new(),
+            sessions: Vec::new(),
             inputs: Vec::new(),
             startups: Vec::new(),
             boundaries: Vec::new(),
@@ -206,6 +208,25 @@ impl Extension {
             size(&spec, 1024)?,
         )?;
         self.guards.push(Registered {
+            owner: self.manifest.id.clone(),
+            spec,
+            callback: hook,
+        });
+        Ok(self)
+    }
+    pub fn session_hook(
+        &mut self,
+        spec: HookSpec,
+        hook: Arc<dyn SessionHook>,
+    ) -> Result<&mut Self> {
+        spec.validate()?;
+        self.register(
+            "session_hook",
+            &spec.id,
+            Some(spec.priority),
+            size(&spec, 1024)?,
+        )?;
+        self.sessions.push(Registered {
             owner: self.manifest.id.clone(),
             spec,
             callback: hook,
@@ -605,6 +626,9 @@ impl ExtensionSet {
             .collect();
         hooks.sort_by_key(|h| h.spec.priority);
         hooks
+    }
+    pub(crate) fn session_hooks(&self) -> Vec<Registered<dyn SessionHook>> {
+        ordered(self.extensions.iter().flat_map(|e| e.sessions.clone()))
     }
     pub(crate) fn message_hooks(&self) -> Vec<Registered<dyn MessageHook>> {
         ordered(self.extensions.iter().flat_map(|e| e.messages.clone()))

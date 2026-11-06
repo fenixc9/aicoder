@@ -929,87 +929,30 @@ pub(super) fn search(
     )?;
     Ok(page)
 }
-pub(super) fn navigate(
+pub(super) fn prepare_navigation(
     repository: &JsonlSessionRepository,
-    window: &mut SessionWindow,
+    window: &SessionWindow,
     action: ArchiveNavigation,
-) -> Result<()> {
-    let transaction = {
-        let _lock = repository.metadata_lock(&window.metadata().id, false)?;
-        let mut cache = repository
-            .archive_cache
-            .lock()
-            .map_err(|_| anyhow::anyhow!("archive cache poisoned"))?;
-        let index = cached(repository, &window.metadata().id, &mut cache)?;
-        ensure!(
-            index.session.metadata().revision == window.metadata().revision,
-            "window revision conflict"
-        );
-        let mut parent = window.metadata().leaf_id.clone();
-        let mut data = None;
-        match action {
-            ArchiveNavigation::Rename { title } => {
-                data = Some(NavigationRecord::Rename { title }.data())
-            }
-            ArchiveNavigation::Label { entry_id, label } => {
-                data = Some(
-                    NavigationRecord::Label {
-                        entry_id: index.session.resolve_entry(&entry_id)?.to_string(),
-                        label,
-                    }
-                    .data(),
-                )
-            }
-            ArchiveNavigation::Checkout { target } => {
-                parent = target
-                    .as_deref()
-                    .map(|target| index.session.resolve_entry(target).map(str::to_string))
-                    .transpose()?
-            }
-            ArchiveNavigation::Branch { source, name } => {
-                parent = match source {
-                    BranchSource::Current => parent,
-                    BranchSource::Root => None,
-                    BranchSource::Entry(target) => {
-                        Some(index.session.resolve_entry(&target)?.to_string())
-                    }
-                };
-                data = Some(NavigationRecord::Branch { name }.data());
-            }
-            ArchiveNavigation::Recover => {
-                index.session.selected_branch().model_context()?;
-                if let Some(turn) = index.session.unfinished_turn() {
-                    data = Some(SessionEntryData::TurnEnd {
-                        turn_id: turn.to_string(),
-                        record: Box::new(TurnRecord::recovered()),
-                    });
-                } else {
-                    return Ok(());
-                }
-            }
-        }
-        let entries = if let Some(data) = data {
-            let id = uuid::Uuid::new_v4().to_string();
-            let entry = SessionEntry {
-                id: id.clone(),
-                parent_id: parent,
-                created_at: now_millis()?,
-                data,
-            };
-            parent = Some(id);
-            vec![entry]
-        } else {
-            Vec::new()
-        };
-        let transaction = SessionTransaction {
-            entries,
-            leaf_id: parent,
-        };
-        index.session.validate_transaction(&transaction)?;
-        // Preflight the new selection using descriptors and existing payload locations.
-        // New navigation markers carry no model payload and are never read as a fake record.
-        let mut candidate = index.clone();
-        let revision = index.session.metadata().revision + 1;
+) -> Result<SessionNavigationPlan> {
+    let _lock = repository.metadata_lock(&window.metadata().id, false)?;
+    let mut cache = repository
+        .archive_cache
+        .lock()
+        .map_err(|_| anyhow::anyhow!("archive cache poisoned"))?;
+    let index = cached(repository, &window.metadata().id, &mut cache)?;
+    ensure!(
+        index.session.metadata().revision == window.metadata().revision,
+        "window revision conflict"
+    );
+    let (action, transaction) = prepare_transaction(&index.session, action)?;
+    let mut candidate = index.clone();
+    if let Some(transaction) = &transaction {
+        let revision = index
+            .session
+            .metadata()
+            .revision
+            .checked_add(1)
+            .context("navigation revision exhausted")?;
         accept(
             &mut candidate,
             transaction.entries.clone(),
@@ -1019,10 +962,33 @@ pub(super) fn navigate(
             index.valid_len,
             &repository.limits,
         )?;
-        materialize(&candidate, &repository.limits)?;
-        transaction
-    };
-    commit_transaction(repository, window, transaction, true)
+    }
+    let preview = materialize(&candidate, &repository.limits)?;
+    SessionNavigationPlan::new(
+        window.metadata().clone(),
+        action,
+        transaction,
+        RunSession::Window(Box::new(preview)),
+    )
+}
+pub(super) fn commit_navigation(
+    repository: &JsonlSessionRepository,
+    window: &mut SessionWindow,
+    plan: SessionNavigationPlan,
+) -> Result<()> {
+    plan.validate_source(window.metadata())?;
+    if let Some(transaction) = plan.into_transaction() {
+        commit_transaction(repository, window, transaction, true)?;
+    }
+    Ok(())
+}
+pub(super) fn navigate(
+    repository: &JsonlSessionRepository,
+    window: &mut SessionWindow,
+    action: ArchiveNavigation,
+) -> Result<()> {
+    let plan = prepare_navigation(repository, window, action)?;
+    commit_navigation(repository, window, plan)
 }
 
 /// One pinned read/validation pass followed by bounded record visits, never model projections.

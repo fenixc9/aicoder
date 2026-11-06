@@ -1,5 +1,39 @@
 # API migrations
 
+## S7: guarded session navigation and host lifecycle
+
+Extension adds session_hook(HookSpec, Arc<dyn SessionHook>). before receives immutable resolved
+operation/source/target positions and may Continue or Deny. after observes actual lifecycle events;
+its failures are bounded delivery data and cannot veto/retry an adopted change. See [contract](session-lifecycle.md).
+
+SessionNavigator adds prepare; PreparedSessionNavigation retains the lease and exact transaction.
+Agent::navigate_session / apply_navigation validate branch compatibility, call native guards and
+commit those entries. SessionRepository adds prepare_window_navigation and commit_window_navigation
+with unsupported defaults. Custom window backends must implement these for guarded operations;
+legacy navigate_window/SessionNavigator::execute remain available. JSONL and memory paths are covered.
+No plan or preview is serializable, and backend/lease tokens are not exposed to hooks.
+
+Agent::select_session explicitly adopts new/resumed sessions and reports Started/Shutdown.
+notify_session_shutdown / notify_session_reload are host notifications after owner settlement or
+runtime adoption. run_hosted_session_outcome / controlled wrap the same agent loop with explicit
+host adoption and return HostedSessionOutcome {outcome, lifecycle}. A private preparation clock
+charges adoption waits to the same run. Acknowledged creation metadata survives subsequent aborts
+or budget expiry; SessionCreatedWithoutOwnership reports an already-created session if ownership
+could not be acquired. No automatic creation retry occurs.
+
+Ordinary Existing turn APIs continue recorded sessions without inferring a new host binding.
+Low-level storage APIs are trusted host primitives, not a session-policy sandbox. CLI, RPC, TUI and
+Web hosted runs use the explicit adoption path when callbacks are installed. Native RPC selection
+is asynchronous and resolves New to its actual ID; cancel_session_selection {request_id} targets
+only that owned request. IDs remain monotonic, bounded and non-replayable. Native run/selection
+results may include session_lifecycle reports. No callback, model route, queue or tool grant is
+restored from these observations. TUI navigation, new/resume and active-session deletion settle
+their owners before adopting UI state; denied changes preserve drafts and existing authority.
+
+Session versions, dependency manifests, lockfile and default features are unchanged. See
+[acceptance](s7-session-lifecycle-acceptance.md). Fork/clone into a distinct session, tree-summary
+customization and compaction interception/drafts remain separate audit items.
+
 ## S7: general fresh-message finalization
 
 Extension adds message_hook(HookSpec, Arc<dyn MessageHook>). Its ordered immutable input identifies

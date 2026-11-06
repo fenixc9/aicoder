@@ -106,6 +106,16 @@ jobs:
           cargo run --locked -p aicoder-runtime --features code-mode --example offline_message_finalization -- --code-mode --deny
           cargo build --locked -p aicoder-tui --example offline_extension_ui
           python3 scripts/check_message_finalization.py
+      - name: Owned session navigation and native lifecycle
+        run: |
+          cargo test --locked -p aicoder-runtime --no-default-features --test session_lifecycle
+          cargo run --locked -p aicoder-runtime --example offline_session_lifecycle
+          cargo run --locked -p aicoder-runtime --example offline_session_lifecycle -- --window
+          cargo run --locked -p aicoder-runtime --example offline_session_lifecycle -- --deny
+          cargo run --locked -p aicoder-runtime --example offline_session_lifecycle -- --window --deny
+          cargo run --locked -p aicoder-runtime --example offline_session_lifecycle -- --observer-error
+          cargo build --locked -p aicoder-tui --example offline_extension_ui
+          python3 scripts/check_session_lifecycle.py
       - name: Raw input before expansion and ordered controls
         run: |
           cargo test --locked -p aicoder-runtime --no-default-features --test input_hooks

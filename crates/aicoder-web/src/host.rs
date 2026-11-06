@@ -65,11 +65,14 @@ pub(crate) struct Inner {
     agent: Arc<Agent>,
     pub(crate) repository: Arc<dyn SessionRepository>,
     pub state: Mutex<State>,
+    shutdown_gate: tokio::sync::Mutex<()>,
     pub streams: Arc<Semaphore>,
     approvals: ApprovalSessions,
 }
 pub(crate) struct State {
     pub closing: bool,
+    adopted_session: Option<String>,
+    lifecycle_shutdown_started: bool,
     pub last_id: u64,
     pub current: Option<Arc<Run>>,
     pub(crate) selection: SessionSelection,
@@ -165,11 +168,14 @@ impl WebHost {
         };
         Ok(Self(Arc::new(Inner {
             options,
+            shutdown_gate: tokio::sync::Mutex::new(()),
             runtime,
             agent,
             repository,
             state: Mutex::new(State {
                 closing: false,
+                adopted_session: None,
+                lifecycle_shutdown_started: false,
                 last_id: 0,
                 current: None,
                 selection: SessionSelection::New,
@@ -203,6 +209,7 @@ impl WebHost {
     }
     /// Close admission, cancel the owned run and await authoritative execution/persistence.
     pub async fn shutdown(&self) {
+        let _shutdown = self.0.shutdown_gate.lock().await;
         let (run, command) = {
             let mut state = self.0.state.lock().expect("Web state");
             state.closing = true;
@@ -225,6 +232,36 @@ impl WebHost {
             command.join().await;
         }
         self.0.approvals.clear();
+        let session = {
+            let mut state = self.0.state.lock().expect("Web state");
+            if state.lifecycle_shutdown_started {
+                None
+            } else {
+                state.lifecycle_shutdown_started = true;
+                state.adopted_session.clone()
+            }
+        };
+        if self.0.agent.has_session_hooks()
+            && let Some(id) = session
+        {
+            let report = self
+                .0
+                .agent
+                .notify_session_shutdown(
+                    self.0.repository.as_ref(),
+                    &id,
+                    aicoder_core::extensions::SessionShutdownReason::Quit,
+                    aicoder_core::TurnExecutionContext::new(),
+                )
+                .await;
+            if report.as_ref().is_err()
+                || report
+                    .as_ref()
+                    .is_ok_and(|r| !r.delivery.failures.is_empty())
+            {
+                eprintln!("Session shutdown observations were incomplete.");
+            }
+        }
     }
     pub(crate) fn run(&self, id: &str) -> Option<Arc<Run>> {
         self.0
@@ -305,13 +342,15 @@ impl WebHost {
         });
         state.current = Some(run.clone());
         let selection = state.selection.clone();
+        let current = state.adopted_session.clone();
         let agent = self.0.agent.clone();
         let repository = self.0.repository.clone();
         let weak = Arc::downgrade(&self.0);
         let record = run.clone();
         let owner = tokio::spawn(async move {
-            let outcome = std::panic::AssertUnwindSafe(agent.run_prompt_with_session_controlled(
+            let outcome = std::panic::AssertUnwindSafe(agent.run_hosted_session_controlled(
                 repository.as_ref(),
+                current.as_deref(),
                 selection,
                 prompt,
                 Arc::new(()),
@@ -319,6 +358,12 @@ impl WebHost {
             ))
             .catch_unwind()
             .await;
+            let lifecycle = outcome
+                .as_ref()
+                .ok()
+                .map(|r| r.lifecycle.clone())
+                .unwrap_or_default();
+            let outcome = outcome.map(|r| r.outcome);
             record.ui.close();
             let session = outcome
                 .as_ref()
@@ -327,12 +372,15 @@ impl WebHost {
                 .map(|s| s.id.clone())
                 .or_else(|| record.handle.snapshot().session_id);
             let owner_failed = outcome.is_err();
-            let result = match outcome {
+            let mut result = match outcome {
                 Ok(outcome) => completion(&record, &outcome),
                 Err(_) => {
                     json!({"version":1,"run_id":record.handle.run_id(),"session_id":session,"status":"owner_failed","message":"Execution ended without an outcome; inspect recorded session"})
                 }
             };
+            if !lifecycle.is_empty() {
+                result["session_lifecycle"] = json!(lifecycle);
+            }
             if let Some(inner) = weak.upgrade() {
                 let mut state = inner.state.lock().expect("Web state");
                 if let Some(id) = session {
@@ -341,6 +389,7 @@ impl WebHost {
                             .approvals
                             .remove(&inner.runtime.config().workspace, &id);
                     }
+                    state.adopted_session = Some(id.clone());
                     state.selection = SessionSelection::Existing(id);
                 }
                 *record.completion.lock().expect("Web completion") = Some(result);

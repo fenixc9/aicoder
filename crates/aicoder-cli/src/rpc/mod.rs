@@ -17,6 +17,7 @@ struct Active {
     handle: RunHandle,
     events: Option<EventSubscription>,
     owner: JoinHandle<AgentTurnOutcome>,
+    lifecycle: Arc<std::sync::Mutex<Vec<aicoder_core::session::SessionActionReport>>>,
 }
 enum Update {
     Event(Arc<AgentRawEventEnvelope>),
@@ -37,11 +38,11 @@ impl Active {
         }
         Update::Finished((&mut self.owner).await.map(Box::new))
     }
-    async fn cancel_and_wait(mut self) {
+    async fn cancel_and_wait(mut self) -> Option<AgentTurnOutcome> {
         let _ = self.handle.cancel("RPC transport closed");
         // The transport is unusable. Drop only observation, then await the execution owner.
         self.events = None;
-        let _ = self.owner.await;
+        self.owner.await.ok()
     }
 }
 #[derive(Serialize)]
@@ -67,14 +68,21 @@ struct FinishedBody<'a> {
 
 type InputReply = (u64, Result<Value, Failure>);
 type InputJobUpdate = Option<Result<InputReply, tokio::task::JoinError>>;
+struct SessionJob {
+    id: u64,
+    context: TurnExecutionContext,
+    owner: JoinHandle<Result<aicoder_core::session::SessionSelectionOutcome, String>>,
+}
 struct Host<'a> {
     runtime: &'a Runtime,
     agent: Arc<Agent>,
     repository: Arc<dyn SessionRepository>,
     selection: SessionSelection,
+    adopted_session: Option<String>,
     approvals: ApprovalSessions,
     automatic: bool,
     active: Option<Active>,
+    session_job: Option<SessionJob>,
     last: Option<Value>,
     closing: bool,
     input_jobs: tokio::task::JoinSet<InputReply>,
@@ -125,9 +133,11 @@ impl<'a> Host<'a> {
             agent: Arc::new(agent),
             repository,
             selection,
+            adopted_session: None,
             approvals: ApprovalSessions::default(),
             automatic: cli.yes,
             active: None,
+            session_job: None,
             last: None,
             closing: false,
             input_jobs: tokio::task::JoinSet::new(),
@@ -164,19 +174,32 @@ impl<'a> Host<'a> {
         match command {
             Command::Initialize => Ok(
                 json!({"protocol_version":VERSION,"event_schema_version":aicoder_core::events::EVENT_SCHEMA_VERSION,
-                "commands":["initialize","prompt","status","steer","follow_up","cancel","approve","select_session","session_tree","session_search","permissions","revoke","shutdown"],
+                "commands":["initialize","prompt","status","steer","follow_up","cancel","approve","select_session","cancel_session_selection","session_tree","session_search","permissions","revoke","shutdown"],
                 "limits":{"input_line_bytes":input::MAX_INPUT,"frame_bytes":transport::MAX_FRAME,"output_queue_bytes":transport::MAX_BYTES,"output_queue_frames":transport::MAX_FRAMES,"output_stall_ms":transport::STALL.as_millis(),"max_request_id":protocol::MAX_ID,"active_runs":1},
                 "model":self.runtime.config().provider.model,"automatic_approval":self.automatic}),
             ),
+            Command::CancelSessionSelection { request_id } => {
+                let job = self
+                    .session_job
+                    .as_ref()
+                    .filter(|j| j.id == request_id)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("No owned session selection matches request_id")
+                    })?;
+                job.context.cancel("RPC session selection cancelled");
+                Ok(json!({"cancel_requested":true,"request_id":request_id}))
+            }
             Command::Status => {
                 let active=self.active.as_ref().map(|active|{
                     let snapshot=active.handle.snapshot();
                     json!({"run_id":snapshot.run_id,"session_id":snapshot.session_id,"revision":snapshot.revision,"status":snapshot.status,"pending_inputs":snapshot.pending_inputs,"approvals":snapshot.approvals})
                 });
-                Ok(json!({"session_id":self.session_id(),"active":active,"last":self.last}))
+                Ok(
+                    json!({"session_id":self.session_id(),"active":active,"last":self.last,"session_selection_request":self.session_job.as_ref().map(|j|j.id)}),
+                )
             }
             Command::Prompt { text } => {
-                if self.active.is_some() {
+                if self.active.is_some() || self.session_job.is_some() {
                     return Err(CommandFailure(Failure::new(
                         "busy",
                         "Wait for run_finished before starting another turn",
@@ -198,22 +221,29 @@ impl<'a> Host<'a> {
                 let agent = self.agent.clone();
                 let repository = self.repository.clone();
                 let selection = self.selection.clone();
+                let current = self.adopted_session.clone();
+                let lifecycle = Arc::new(std::sync::Mutex::new(Vec::new()));
+                let captured = lifecycle.clone();
                 let owner = tokio::spawn(async move {
-                    agent
-                        .run_with_session_controlled(
+                    let hosted = agent
+                        .run_hosted_session_controlled(
                             repository.as_ref(),
+                            current.as_deref(),
                             selection,
                             aicoder_core::AgentInput::from(prompt)
                                 .with_source(aicoder_core::InputSource::Rpc),
                             Arc::new(()),
                             control,
                         )
-                        .await
+                        .await;
+                    *captured.lock().expect("RPC session observations") = hosted.lifecycle;
+                    hosted.outcome
                 });
                 self.active = Some(Active {
                     handle,
                     events: Some(events),
                     owner,
+                    lifecycle,
                 });
                 Ok(json!({"run_id":run_id}))
             }
@@ -237,7 +267,11 @@ impl<'a> Host<'a> {
                 Ok(json!({"answered":true}))
             }
             Command::SelectSession { session_id } => {
-                if self.active.is_some() {
+                anyhow::ensure!(
+                    !self.agent.has_session_hooks(),
+                    "Session selection requires asynchronous dispatch"
+                );
+                if self.active.is_some() || self.session_job.is_some() {
                     return Err(CommandFailure(Failure::new(
                         "busy",
                         "Cannot select a session while a run is owned",
@@ -301,11 +335,58 @@ impl<'a> Host<'a> {
             }
             Command::Shutdown => {
                 self.closing = true;
+                if let Some(job) = &self.session_job {
+                    job.context.cancel("RPC shutdown");
+                }
                 if let Some(active) = &self.active {
                     let _ = active.handle.cancel("RPC shutdown");
                 }
                 Ok(json!({"closing":true}))
             }
+        }
+    }
+    fn begin_session_selection(
+        &mut self,
+        id: u64,
+        session_id: Option<String>,
+    ) -> Result<(), Failure> {
+        if self.active.is_some() || self.session_job.is_some() {
+            return Err(Failure::new(
+                "busy",
+                "Wait for the owned operation before selecting a session",
+            ));
+        }
+        let current = match &self.selection {
+            SessionSelection::Existing(id) => Some(id.clone()),
+            _ => None,
+        };
+        let selection = session_id.map_or(SessionSelection::New, SessionSelection::Existing);
+        let agent = self.agent.clone();
+        let repository = self.repository.clone();
+        let context = TurnExecutionContext::new().with_approval_sessions(self.approvals.clone());
+        let owned = context.clone();
+        let owner = tokio::spawn(async move {
+            agent
+                .select_session(repository.as_ref(), current.as_deref(), selection, owned)
+                .await
+                .map_err(|e| aicoder_core::redaction::sanitize_text(&e.to_string(), 2048))
+        });
+        self.session_job = Some(SessionJob { id, context, owner });
+        Ok(())
+    }
+    fn finish_session_selection(
+        &mut self,
+        result: Result<aicoder_core::session::SessionSelectionOutcome, String>,
+    ) -> Result<Value, Failure> {
+        match result {
+            Ok(output) => {
+                self.approvals.clear();
+                self.adopted_session = Some(output.session.metadata().id.clone());
+                self.selection = SessionSelection::Existing(output.session.metadata().id.clone());
+                self.last = None;
+                Ok(json!({"session_id":self.session_id(),"session_lifecycle":output.reports}))
+            }
+            Err(message) => Err(Failure::new("session_selection_failed", message)),
         }
     }
     fn prepare(&self, text: &str) -> Result<String> {
@@ -370,6 +451,7 @@ impl<'a> Host<'a> {
     fn finished(&mut self, outcome: AgentTurnOutcome) -> Value {
         let active = self.active.take().expect("owned run");
         if let Some(session) = outcome.session() {
+            self.adopted_session = Some(session.id.clone());
             self.selection = SessionSelection::Existing(session.id.clone());
         }
         let progress = outcome.progress();
@@ -399,6 +481,10 @@ impl<'a> Host<'a> {
             result["auxiliary"] = json!(progress.auxiliary);
             result["primary_usage"] = json!(progress.primary_usage);
         }
+        let lifecycle = active.lifecycle.lock().expect("RPC session observations");
+        if !lifecycle.is_empty() {
+            result["session_lifecycle"] = json!(*lifecycle);
+        }
         self.last = Some(result.clone());
         result
     }
@@ -415,12 +501,42 @@ impl std::error::Error for CommandFailure {}
 pub async fn run(cli: &Cli, runtime: &Runtime) -> Result<()> {
     let mut host = Host::new(cli, runtime)?;
     let result = serve(&mut host).await;
-    if let Some(active) = host.active.take() {
-        active.cancel_and_wait().await;
+    if let Some(active) = host.active.take()
+        && let Some(outcome) = active.cancel_and_wait().await
+        && let Some(session) = outcome.session()
+    {
+        host.adopted_session = Some(session.id.clone());
+        host.selection = SessionSelection::Existing(session.id.clone());
+    }
+    if let Some(job) = host.session_job.take() {
+        job.context.cancel("RPC transport closed");
+        if let Ok(result) = job.owner.await {
+            let _ = host.finish_session_selection(result);
+        }
     }
     host.input_jobs.abort_all();
     while host.input_jobs.join_next().await.is_some() {}
     host.approvals.clear();
+    if host.agent.has_session_hooks()
+        && let SessionSelection::Existing(id) = &host.selection
+    {
+        let report = host
+            .agent
+            .notify_session_shutdown(
+                host.repository.as_ref(),
+                id,
+                aicoder_core::extensions::SessionShutdownReason::Quit,
+                TurnExecutionContext::new(),
+            )
+            .await;
+        if report.as_ref().is_err()
+            || report
+                .as_ref()
+                .is_ok_and(|r| !r.delivery.failures.is_empty())
+        {
+            eprintln!("Session shutdown observations were incomplete.");
+        }
+    }
     result
 }
 async fn serve(host: &mut Host<'_>) -> Result<()> {
@@ -432,7 +548,11 @@ async fn serve(host: &mut Host<'_>) -> Result<()> {
     let mut interrupted = false;
     loop {
         output.flush_some()?;
-        if host.closing && host.active.is_none() && host.input_jobs.is_empty() && output.is_empty()
+        if host.closing
+            && host.active.is_none()
+            && host.session_job.is_none()
+            && host.input_jobs.is_empty()
+            && output.is_empty()
         {
             break;
         }
@@ -441,6 +561,12 @@ async fn serve(host: &mut Host<'_>) -> Result<()> {
             Input(Result<Option<String>>),
             Run(Update),
             InputPrepared(InputJobUpdate),
+            SessionSelected(
+                Result<
+                    Result<aicoder_core::session::SessionSelectionOutcome, String>,
+                    tokio::task::JoinError,
+                >,
+            ),
             Signal,
         }
         let action = tokio::select! {
@@ -448,6 +574,7 @@ async fn serve(host: &mut Host<'_>) -> Result<()> {
             _=signal.recv()=>Action::Signal,
             line=lines.next_line(),if !host.closing=>Action::Input(line),
             result=host.input_jobs.join_next(),if !host.input_jobs.is_empty()=>Action::InputPrepared(result),
+            selected=async{match &mut host.session_job{Some(job)=>(&mut job.owner).await,None=>std::future::pending().await}}=>Action::SessionSelected(selected),
             update=async {match &mut host.active {Some(active)=>active.next().await,None=>std::future::pending().await}}=>Action::Run(update),
         };
         match action {
@@ -455,6 +582,9 @@ async fn serve(host: &mut Host<'_>) -> Result<()> {
             Action::Signal => {
                 interrupted = true;
                 host.closing = true;
+                if let Some(job) = &host.session_job {
+                    job.context.cancel("RPC transport closing");
+                }
                 if let Some(active) = &host.active {
                     let _ = active.handle.cancel("Ctrl-C");
                 }
@@ -462,6 +592,9 @@ async fn serve(host: &mut Host<'_>) -> Result<()> {
             Action::Input(Err(error)) => return Err(error),
             Action::Input(Ok(None)) => {
                 host.closing = true;
+                if let Some(job) = &host.session_job {
+                    job.context.cancel("RPC transport closing");
+                }
                 if let Some(active) = &host.active {
                     let _ = active.handle.cancel("RPC stdin EOF");
                 }
@@ -480,10 +613,29 @@ async fn serve(host: &mut Host<'_>) -> Result<()> {
                             Err(error) => Response::new(Some(id), Err(error)),
                         }
                     }
+                    Ok((id, Command::SelectSession { session_id }))
+                        if host.agent.has_session_hooks() =>
+                    {
+                        match host.begin_session_selection(id, session_id) {
+                            Ok(()) => continue,
+                            Err(error) => Response::new(Some(id), Err(error)),
+                        }
+                    }
                     Ok((id, command)) => Response::new(Some(id), host.command(command)),
                     Err(response) => response,
                 };
                 output.push(&response)?;
+            }
+            Action::SessionSelected(result) => {
+                let id = host.session_job.take().expect("session job").id;
+                let result = match result {
+                    Ok(result) => host.finish_session_selection(result),
+                    Err(_) => Err(Failure::new(
+                        "session_owner_failed",
+                        "Session selection owner ended without a result; inspect stored sessions",
+                    )),
+                };
+                output.push(&Response::new(Some(id), result))?;
             }
             Action::InputPrepared(Some(Ok((id, result)))) => {
                 output.push(&Response::new(Some(id), result))?
@@ -699,5 +851,92 @@ mod input_tests {
         assert!(response.is_err());
         host.active.take().unwrap().cancel_and_wait().await;
         assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    }
+    struct SessionWait {
+        started: Arc<tokio::sync::Notify>,
+        ended: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl SessionHook for SessionWait {
+        async fn before(
+            &self,
+            _: SessionHookInput<'_>,
+            c: ExtensionCancellation,
+        ) -> Result<SessionDecision> {
+            let ended = self.ended.clone();
+            tokio::spawn(async move {
+                c.cancelled().await;
+                ended.notify_one();
+            });
+            self.started.notify_one();
+            std::future::pending().await
+        }
+    }
+    #[tokio::test]
+    async fn rpc_session_selection_keeps_status_shutdown_and_targeted_cancel_responsive() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = runtime(root.path());
+        let provider = Arc::new(Provider {
+            started: tokio::sync::Notify::new(),
+            calls: AtomicUsize::new(0),
+        });
+        let cli = Cli::parse_from(["aicoder", "--no-session", "--yes"]);
+        let mut host = Host::new(&cli, &runtime).unwrap();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let ended = Arc::new(tokio::sync::Notify::new());
+        let mut e = Extension::new("rpc-session", "1").unwrap();
+        e.session_hook(
+            HookSpec::new("wait"),
+            Arc::new(SessionWait {
+                started: started.clone(),
+                ended: ended.clone(),
+            }),
+        )
+        .unwrap();
+        let mut registry = ExtensionRegistry::new();
+        registry.install(e).unwrap();
+        host.agent = Arc::new(Agent::new(
+            runtime
+                .executor_builder_with_extensions(provider.clone(), Arc::new(registry.finish()))
+                .unwrap()
+                .build()
+                .unwrap(),
+            runtime.agent_config(),
+        ));
+        host.begin_session_selection(10, None).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+            .await
+            .unwrap();
+        assert_eq!(
+            host.command(Command::Status).unwrap()["session_selection_request"],
+            10
+        );
+        assert!(
+            host.command(Command::Prompt {
+                text: "must not run".into()
+            })
+            .is_err()
+        );
+        assert!(
+            host.command(Command::CancelSessionSelection { request_id: 9 })
+                .is_err()
+        );
+        host.command(Command::CancelSessionSelection { request_id: 10 })
+            .unwrap();
+        let job = host.session_job.take().unwrap();
+        let result = job.owner.await.unwrap();
+        assert!(host.finish_session_selection(result).is_err());
+        assert!(host.session_id().is_none());
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert!(host.repository.list(root.path()).unwrap().is_empty());
+        tokio::time::timeout(std::time::Duration::from_secs(1), ended.notified())
+            .await
+            .unwrap();
+        host.begin_session_selection(11, None).unwrap();
+        started.notified().await;
+        host.command(Command::Shutdown).unwrap();
+        let job = host.session_job.take().unwrap();
+        assert!(job.context.is_cancelled());
+        assert!(job.owner.await.unwrap().is_err());
     }
 }

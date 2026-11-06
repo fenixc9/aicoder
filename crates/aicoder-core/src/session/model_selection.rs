@@ -49,7 +49,9 @@ impl TurnExecutor {
         } else {
             self.prepare_model_tools(&mut input.request)?;
         }
-        input.started.get_or_insert_with(tokio::time::Instant::now);
+        input
+            .started
+            .get_or_insert_with(|| context.preparation_start(tokio::time::Instant::now()));
         let deadline = if let Some(duration) = self.config.budget.max_duration {
             Some(
                 input

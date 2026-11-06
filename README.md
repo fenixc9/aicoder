@@ -53,6 +53,8 @@ and bounded next-turn inboxes without restoring authority from history.
 storage and verification, preserving paid usage, tool actions and provider state.
 [General message hooks](docs/message-finalization.md) also finalize fresh user/custom inputs,
 queued delivery, tool payloads and explicitly sourced startup/boundary context before adoption.
+[Session lifecycle hooks](docs/session-lifecycle.md) guard owned navigation and explicit host
+adoption, with bounded start/shutdown/reload observations and cancellable frontend operations.
 [Explicit host launch files](docs/host-extensions.md) enable process/MCP tools in CLI, TUI and Web.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime

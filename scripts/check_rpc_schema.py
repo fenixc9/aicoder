@@ -23,4 +23,9 @@ for path in paths:
         except (ValueError, jsonschema.ValidationError) as error:
             raise SystemExit(f"{path}:{number}: {error}") from error
         count += 1
+request={"version":1,"id":100,"command":{"type":"cancel_session_selection","request_id":99}}
+validator.validate(request);count+=1
+for invalid in (0,9007199254740992):
+    request["command"]["request_id"]=invalid
+    assert list(validator.iter_errors(request)), "unsafe session cancellation ID accepted"
 print(f"Validated {count} RPC frames against schema v1")

@@ -356,6 +356,24 @@
                 "limit"
               ],
               "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "cancel_session_selection"
+                },
+                "request_id": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "type",
+                "request_id"
+              ],
+              "additionalProperties": false
             }
           ]
         }

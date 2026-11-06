@@ -117,3 +117,10 @@ python3 scripts/rpc_client.py 'inspect the project' target/release/aicoder --wor
 The example denies tool questions and prints authoritative result metadata. Configure the
 provider through normal runtime settings; Python is only required to run this example.
 See [acceptance and limitations](s5-rpc-acceptance.md) for actual tests and measurements.
+
+Native session hooks use an owned asynchronous select_session task. Status reports
+session_selection_request while it is pending; cancel_session_selection {request_id} cancels only
+that owned request. Shutdown/EOF also cancel and await it. Native selection resolves a new session
+to its actual ID and may return session_lifecycle observations; these are inert data, not rules or
+restored authority. Completed adoption survives later observation cancellation. See
+[session lifecycle](session-lifecycle.md).

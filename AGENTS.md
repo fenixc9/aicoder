@@ -139,6 +139,10 @@
   prefixes. Preserve custom/context sources, tool identity/status/capture/media and input
   provenance. Keep pending inputs recoverable on failure; retain original completed tool results
   until atomic finalization acknowledges, including cancellation and late duration expiry.
+  Session guards inspect read-only plans with resolved targets and fixed transactions under
+  the existing lease. Validate branch projections before adoption; never refresh a voted plan.
+  Observers report delivery independently of completed changes. Host bindings, preparation
+  clocks, backend previews and lifecycle registrations remain ephemeral and never restore grants.
 - Process tools use explicit host launch settings and conservative capabilities. Keep remote
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership

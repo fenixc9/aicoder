@@ -150,6 +150,43 @@ impl MessageHook for GeneralFinalize {
         )
     }
 }
+struct SessionPolicy;
+#[async_trait]
+impl SessionHook for SessionPolicy {
+    async fn before(
+        &self,
+        input: SessionHookInput<'_>,
+        cancellation: ExtensionCancellation,
+    ) -> anyhow::Result<SessionDecision> {
+        if matches!(input.operation,SessionOperation::Navigation{action:aicoder_core::session::ArchiveNavigation::Rename{title}}if title=="ask-rename")
+        {
+            let answer = cancellation
+                .ui()
+                .ask(UiPrompt::Select {
+                    title: "Session rename policy".into(),
+                    options: vec![
+                        UiOption {
+                            id: "allow".into(),
+                            label: "Allow rename".into(),
+                        },
+                        UiOption {
+                            id: "deny".into(),
+                            label: "Deny rename".into(),
+                        },
+                    ],
+                })
+                .await?;
+            return Ok(if matches!(answer,UiAnswer::Choice{id}if id=="allow") {
+                SessionDecision::Continue
+            } else {
+                SessionDecision::Deny {
+                    reason: "operator denied rename".into(),
+                }
+            });
+        }
+        Ok(SessionDecision::Continue)
+    }
+}
 struct Offline;
 struct Finalize;
 #[async_trait]
@@ -246,6 +283,11 @@ async fn main() -> anyhow::Result<()> {
         HookSpec::new("all-role-final-answer"),
         Arc::new(GeneralFinalize),
     )?;
+    if std::env::args().any(|a| a == "--session-hooks") {
+        let mut spec = HookSpec::new("session-policy");
+        spec.timeout = Duration::from_secs(10);
+        extension.session_hook(spec, Arc::new(SessionPolicy))?;
+    }
     let mut registry = ExtensionRegistry::new();
     registry.install(extension)?;
     aicoder_tui::run_with_provider(runtime, Arc::new(Offline), Arc::new(registry.finish())).await

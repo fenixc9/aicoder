@@ -22,9 +22,11 @@ pub struct ActiveRun {
 enum RunCompletion {
     Command(oneshot::Receiver<Result<aicoder_core::extensions::CommandOutput, String>>),
     Turn(oneshot::Receiver<AgentTurnOutcome>),
+    HostedTurn(oneshot::Receiver<aicoder_core::HostedSessionOutcome>),
     Compaction(oneshot::Receiver<aicoder_core::summary::ManualCompactionReport>),
 
     Model(oneshot::Receiver<Result<aicoder_core::session::ModelSelectionReport, String>>),
+    Navigation(oneshot::Receiver<Result<SessionChange, String>>),
 }
 impl ActiveRun {
     pub async fn recv(&mut self) -> AppEvent {
@@ -43,12 +45,20 @@ impl ActiveRun {
                 Ok(report) => AppEvent::CommandFinished(Box::new(report)),
                 Err(_) => AppEvent::RunDropped,
             },
+            RunCompletion::Navigation(receiver) => match receiver.await {
+                Ok(result) => AppEvent::SessionChanged(Box::new(result)),
+                Err(_) => AppEvent::RunDropped,
+            },
             RunCompletion::Model(receiver) => match receiver.await {
                 Ok(report) => AppEvent::ModelSelected(Box::new(report)),
                 Err(_) => AppEvent::RunDropped,
             },
             RunCompletion::Compaction(receiver) => match receiver.await {
                 Ok(report) => AppEvent::CompactionFinished(Box::new(report)),
+                Err(_) => AppEvent::RunDropped,
+            },
+            RunCompletion::HostedTurn(receiver) => match receiver.await {
+                Ok(outcome) => AppEvent::HostedTurnFinished(Box::new(outcome)),
                 Err(_) => AppEvent::RunDropped,
             },
             RunCompletion::Turn(receiver) => match receiver.await {
@@ -59,6 +69,12 @@ impl ActiveRun {
     }
 }
 
+pub struct SessionChange {
+    pub session: Option<aicoder_core::session::RunSession>,
+    pub info: Option<SessionInfo>,
+    pub deleted: Option<String>,
+    pub notices: Vec<String>,
+}
 pub enum CapturedInput {
     Text(aicoder_runtime::references::PromptReference),
     Image(aicoder_runtime::images::ImageAttachment),
@@ -83,6 +99,7 @@ impl Drop for ReferenceJob {
 }
 pub struct AgentRuntime {
     agent: Arc<Agent>,
+    adopted_session: Arc<std::sync::Mutex<Option<String>>>,
     repository: Arc<JsonlSessionRepository>,
     workspace: PathBuf,
     runtime: Arc<aicoder_runtime::Runtime>,
@@ -130,6 +147,7 @@ impl AgentRuntime {
         );
         Ok(Self {
             agent,
+            adopted_session: Arc::new(std::sync::Mutex::new(None)),
             repository,
             workspace: runtime.config().workspace.clone(),
             runtime: Arc::new(runtime),
@@ -310,14 +328,6 @@ impl AgentRuntime {
         aicoder_core::session::SessionNavigator::new(self.repository.as_ref(), &self.workspace)?
             .open_run(id)
     }
-    pub fn delete_session(&self, id: &str) -> Result<()> {
-        aicoder_core::session::SessionNavigator::new(self.repository.as_ref(), &self.workspace)?
-            .info(id)?;
-        self.repository.delete(id)?;
-        self.approvals.remove(&self.workspace, id);
-        Ok(())
-    }
-
     pub fn navigate(
         &self,
         selection: &SessionSelection,
@@ -391,12 +401,256 @@ impl AgentRuntime {
             SlashCommand::Recover => Action::Recover,
             _ => anyhow::bail!("Unsupported navigation command"),
         };
+        anyhow::ensure!(
+            !self.agent.has_session_hooks(),
+            "Use asynchronous navigation when session hooks are installed"
+        );
         let session = nav.execute(id, action)?;
         self.approvals.remove(&self.workspace, id);
         Ok((
             Some(session),
             "Session updated; previous branches remain available.".into(),
         ))
+    }
+    pub fn start_navigation(
+        &self,
+        selection: SessionSelection,
+        command: crate::commands::SlashCommand,
+        args: String,
+        context: TurnExecutionContext,
+    ) -> ActiveRun {
+        let repository = self.repository.clone();
+        let agent = self.agent.clone();
+        let approvals = self.approvals.clone();
+        let workspace = self.workspace.clone();
+        let (sent, received) = oneshot::channel();
+        tokio::spawn(async move {
+            let work = async {
+                use crate::commands::SlashCommand as C;
+                use aicoder_core::session::{ArchiveNavigation as A, BranchSource};
+                let SessionSelection::Existing(id) = selection else {
+                    anyhow::bail!("Select a stored session first")
+                };
+                let nav =
+                    aicoder_core::session::SessionNavigator::new(repository.as_ref(), &workspace)?;
+                let action = match command {
+                    C::Rename => A::Rename { title: args },
+                    C::Label => A::Label {
+                        entry_id: nav
+                            .info(&id)?
+                            .leaf_id
+                            .ok_or_else(|| anyhow::anyhow!("Empty root has no entry to label"))?,
+                        label: Some(args),
+                    },
+                    C::Unlabel => A::Label {
+                        entry_id: args,
+                        label: None,
+                    },
+                    C::Checkout => A::Checkout {
+                        target: (args != "root").then_some(args),
+                    },
+                    C::Branch => A::Branch {
+                        source: if args == "root" {
+                            BranchSource::Root
+                        } else if args.is_empty() {
+                            BranchSource::Current
+                        } else {
+                            BranchSource::Entry(args)
+                        },
+                        name: None,
+                    },
+                    C::Recover => A::Recover,
+                    _ => anyhow::bail!("Unsupported navigation command"),
+                };
+                let output = agent
+                    .navigate_session(repository.as_ref(), &id, action, context)
+                    .await?;
+                approvals.remove(&workspace, &id);
+                let mut notices =
+                    vec!["Session updated; previous branches remain available.".into()];
+                if !output.report.delivery.failures.is_empty() {
+                    notices.push(format!(
+                        "Session change committed; {} lifecycle observations were incomplete.",
+                        output.report.delivery.failures.len()
+                    ));
+                }
+                let info = repository.session_info(&id).ok();
+                Ok::<_, anyhow::Error>(SessionChange {
+                    info,
+                    deleted: None,
+                    session: Some(output.session),
+                    notices,
+                })
+            }
+            .await
+            .map_err(|e| aicoder_core::redaction::sanitize_text(&e.to_string(), 2048));
+            let _ = sent.send(work);
+        });
+        ActiveRun {
+            events: None,
+            completion: RunCompletion::Navigation(received),
+        }
+    }
+    pub fn has_session_hooks(&self) -> bool {
+        self.agent.has_session_hooks()
+    }
+    pub fn start_session_selection(
+        &self,
+        current: SessionSelection,
+        selection: SessionSelection,
+        context: TurnExecutionContext,
+    ) -> ActiveRun {
+        let repository = self.repository.clone();
+        let agent = self.agent.clone();
+        let approvals = self.approvals.clone();
+        let workspace = self.workspace.clone();
+        let adopted = self.adopted_session.clone();
+        let (sent, received) = oneshot::channel();
+        tokio::spawn(async move {
+            let current = if agent.has_session_hooks() {
+                adopted.lock().expect("TUI session binding").clone()
+            } else {
+                match current {
+                    SessionSelection::Existing(id) => Some(id),
+                    _ => None,
+                }
+            };
+            let result = agent
+                .select_session(repository.as_ref(), current.as_deref(), selection, context)
+                .await
+                .map(|output| {
+                    let id = output.session.metadata().id.clone();
+                    *adopted.lock().expect("TUI session binding") = Some(id.clone());
+                    if current.as_deref() != Some(&id) {
+                        if let Some(old) = &current {
+                            approvals.remove(&workspace, old);
+                        }
+                        approvals.remove(&workspace, &id);
+                    }
+                    let failures = output
+                        .reports
+                        .iter()
+                        .map(|r| r.delivery.failures.len())
+                        .sum::<usize>();
+                    let mut notices = vec!["Session selected.".into()];
+                    if failures > 0 {
+                        notices.push(format!(
+                            "Session selected; {failures} lifecycle observations were incomplete."
+                        ));
+                    }
+                    SessionChange {
+                        deleted: None,
+                        info: repository.session_info(&id).ok(),
+                        session: Some(output.session),
+                        notices,
+                    }
+                })
+                .map_err(|e| aicoder_core::redaction::sanitize_text(&e.to_string(), 2048));
+            let _ = sent.send(result);
+        });
+        ActiveRun {
+            events: None,
+            completion: RunCompletion::Navigation(received),
+        }
+    }
+    pub fn start_delete_session(
+        &self,
+        selection: SessionSelection,
+        id: String,
+        context: TurnExecutionContext,
+    ) -> ActiveRun {
+        let repository = self.repository.clone();
+        let agent = self.agent.clone();
+        let approvals = self.approvals.clone();
+        let workspace = self.workspace.clone();
+        let adopted = self.adopted_session.clone();
+        let (sent, received) = oneshot::channel();
+        tokio::spawn(async move {
+            let work=async{
+                let current=if agent.has_session_hooks(){adopted.lock().expect("TUI session binding").clone()}else{match selection{SessionSelection::Existing(id)=>Some(id),_=>None}};
+                let nav=aicoder_core::session::SessionNavigator::new(repository.as_ref(),&workspace)?;nav.info(&id)?;
+                let mut session=None;let mut info=None;let mut notices=Vec::new();
+                if current.as_deref()==Some(&id){
+                    let output=agent.select_session(repository.as_ref(),Some(&id),SessionSelection::New,context.clone()).await?;
+                    let selected=output.session.metadata().id.clone();*adopted.lock().expect("TUI session binding")=Some(selected.clone());
+                    approvals.remove(&workspace,&id);info=repository.session_info(&selected).ok();session=Some(output.session);
+                    if output.reports.iter().any(|r|!r.delivery.failures.is_empty()){notices.push("Session selected; lifecycle observations were incomplete.".into());}
+                }
+                let deleted=if context.is_cancelled(){notices.push("Deletion cancelled; the session remains stored.".into());None}
+                else{match repository.delete(&id){Ok(())=>{approvals.remove(&workspace,&id);notices.push("Session deleted.".into());Some(id)},Err(error)=>{if session.is_none(){return Err(error)}notices.push("New session selected, but the previous session could not be deleted; inspect it before retrying.".into());None}}};
+                Ok::<_,anyhow::Error>(SessionChange{session,info,deleted,notices})
+            }.await.map_err(|e|aicoder_core::redaction::sanitize_text(&e.to_string(),2048));
+            let _ = sent.send(work);
+        });
+        ActiveRun {
+            events: None,
+            completion: RunCompletion::Navigation(received),
+        }
+    }
+    pub fn start_reload_notifications(&self, context: TurnExecutionContext) -> ActiveRun {
+        let agent = self.agent.clone();
+        let repository = self.repository.clone();
+        let selected = self
+            .adopted_session
+            .lock()
+            .expect("TUI session binding")
+            .clone();
+        let (sent, received) = oneshot::channel();
+        tokio::spawn(async move {
+            let mut notices = vec!["Resources reloaded for the next run.".into()];
+            if let Some(id) = selected {
+                let reports = agent
+                    .notify_session_reload(repository.as_ref(), &id, context)
+                    .await;
+                if reports.as_ref().is_err()
+                    || reports
+                        .as_ref()
+                        .is_ok_and(|r| r.iter().any(|e| !e.delivery.failures.is_empty()))
+                {
+                    notices
+                        .push("Resources reloaded; lifecycle observations were incomplete.".into());
+                }
+            }
+            let _ = sent.send(Ok(SessionChange {
+                session: None,
+                info: None,
+                deleted: None,
+                notices,
+            }));
+        });
+        ActiveRun {
+            events: None,
+            completion: RunCompletion::Navigation(received),
+        }
+    }
+    pub async fn notify_shutdown(&self, _selection: &SessionSelection) -> Result<()> {
+        self.approvals.clear();
+        let selected = self
+            .adopted_session
+            .lock()
+            .expect("TUI session binding")
+            .take();
+        if self.has_session_hooks()
+            && let Some(id) = selected
+        {
+            let report = self
+                .agent
+                .notify_session_shutdown(
+                    self.repository.as_ref(),
+                    &id,
+                    aicoder_core::extensions::SessionShutdownReason::Quit,
+                    TurnExecutionContext::new(),
+                )
+                .await;
+            if report.as_ref().is_err()
+                || report
+                    .as_ref()
+                    .is_ok_and(|r| !r.delivery.failures.is_empty())
+            {
+                eprintln!("Session shutdown observations were incomplete.");
+            }
+        }
+        Ok(())
     }
     pub async fn select_model(
         &self,
@@ -619,6 +873,35 @@ impl AgentRuntime {
             |effort| Arc::new(self.agent.with_reasoning_effort(effort)),
         );
         let repository = self.repository.clone();
+        if agent.has_session_hooks() {
+            let current = self
+                .adopted_session
+                .lock()
+                .expect("TUI session binding")
+                .clone();
+            let adopted = self.adopted_session.clone();
+            let (sender, completion) = oneshot::channel();
+            tokio::spawn(async move {
+                let hosted = agent
+                    .run_hosted_session_controlled(
+                        repository.as_ref(),
+                        current.as_deref(),
+                        selection,
+                        prompt,
+                        Arc::new(()),
+                        control,
+                    )
+                    .await;
+                if let Some(session) = hosted.outcome.session() {
+                    *adopted.lock().expect("TUI session binding") = Some(session.id.clone());
+                }
+                let _ = sender.send(hosted);
+            });
+            return Ok(ActiveRun {
+                events: Some(events),
+                completion: RunCompletion::HostedTurn(completion),
+            });
+        }
         let (sender, completion) = oneshot::channel();
         tokio::spawn(async move {
             let outcome = agent
@@ -704,8 +987,8 @@ mod tests {
         );
         drop(control);
     }
-    #[test]
-    fn resource_reload_and_session_deletion_invalidate_their_authorization_handles() {
+    #[tokio::test]
+    async fn resource_reload_and_session_deletion_invalidate_their_authorization_handles() {
         use aicoder_runtime::{
             ConfigDiscovery, Runtime, RuntimeOverrides, Setting, Settings,
             resources::ResourceSettings,
@@ -750,7 +1033,12 @@ mod tests {
         runtime.reload_resources().unwrap();
         assert!(scope.snapshot().session.closed);
         let scope = runtime.approvals.session(&runtime.workspace, &id).unwrap();
-        runtime.delete_session(&id).unwrap();
+        let mut deleting = runtime.start_delete_session(
+            SessionSelection::Existing(id.clone()),
+            id.clone(),
+            runtime.execution_context(),
+        );
+        assert!(matches!(deleting.recv().await,AppEvent::SessionChanged(result) if result.is_ok()));
         assert!(scope.snapshot().session.closed);
         assert!(
             runtime

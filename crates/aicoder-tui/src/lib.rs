@@ -298,6 +298,15 @@ async fn run(
     mut runtime: AgentRuntime,
     model: &str,
 ) -> Result<()> {
+    if runtime.has_session_hooks() {
+        let context = app.ui_context(runtime.execution_context());
+        app.run = Some(runtime.start_session_selection(
+            aicoder_core::SessionSelection::New,
+            app.session_selection.clone(),
+            context.clone(),
+        ));
+        app.begin_session_change(context);
+    }
     let result = drive(terminal, &mut app, &mut runtime, model).await;
     app.cancel("TUI exited");
     while let Some(run) = &mut app.run {
@@ -310,7 +319,8 @@ async fn run(
     }
     app.input_jobs.abort_all();
     while app.input_jobs.join_next().await.is_some() {}
-    result
+    let shutdown = runtime.notify_shutdown(&app.session_selection).await;
+    result.and(shutdown)
 }
 async fn drive(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
@@ -538,13 +548,14 @@ fn handle_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) -> Resul
     if app.confirm_delete {
         match key.code {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                if let Some(session) = app.sessions.get(app.selected_session) {
-                    runtime.delete_session(&session.id)?;
-                    app.sessions = runtime.sessions()?;
-                    app.selected_session = app
-                        .selected_session
-                        .min(app.sessions.len().saturating_sub(1));
-                    app.select_new_session();
+                if let Some(id) = app.sessions.get(app.selected_session).map(|s| s.id.clone()) {
+                    let context = app.ui_context(runtime.execution_context());
+                    app.run = Some(runtime.start_delete_session(
+                        app.session_selection.clone(),
+                        id,
+                        context.clone(),
+                    ));
+                    app.begin_session_change(context);
                 }
                 app.confirm_delete = false;
             }
@@ -591,11 +602,25 @@ fn handle_session_key(app: &mut App, runtime: &AgentRuntime, key: KeyEvent) -> R
             app.selected_session = app.selected_session.saturating_sub(1);
         }
         KeyCode::Enter => {
-            if let Some(session) = app.sessions.get(app.selected_session) {
-                app.load_run_session(&runtime.open_run_session(&session.id)?);
+            if let Some(id) = app.sessions.get(app.selected_session).map(|s| s.id.clone()) {
+                let context = app.ui_context(runtime.execution_context());
+                app.run = Some(runtime.start_session_selection(
+                    app.session_selection.clone(),
+                    aicoder_core::SessionSelection::Existing(id),
+                    context.clone(),
+                ));
+                app.begin_session_change(context);
             }
         }
-        KeyCode::Char('n') => app.select_new_session(),
+        KeyCode::Char('n') => {
+            let context = app.ui_context(runtime.execution_context());
+            app.run = Some(runtime.start_session_selection(
+                app.session_selection.clone(),
+                aicoder_core::SessionSelection::New,
+                context.clone(),
+            ));
+            app.begin_session_change(context);
+        }
         KeyCode::Char('d') if !app.sessions.is_empty() => app.confirm_delete = true,
         _ => {}
     }
@@ -839,6 +864,25 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                                 .push(TimelineItem::Error("Select a stored session first".into()));
                         }
                     } else {
+                        if matches!(
+                            command,
+                            commands::SlashCommand::Rename
+                                | commands::SlashCommand::Label
+                                | commands::SlashCommand::Unlabel
+                                | commands::SlashCommand::Checkout
+                                | commands::SlashCommand::Branch
+                                | commands::SlashCommand::Recover
+                        ) {
+                            let context = app.ui_context(runtime.execution_context());
+                            app.run = Some(runtime.start_navigation(
+                                app.session_selection.clone(),
+                                command,
+                                args.into(),
+                                context.clone(),
+                            ));
+                            app.begin_session_change(context);
+                            return;
+                        }
                         match runtime.navigate(&app.session_selection, command, args) {
                             Ok((session, notice)) => {
                                 if let Some(session) = session {
@@ -924,9 +968,18 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                         ));
                     } else {
                         match runtime.reload_resources() {
-                            Ok(()) => app.timeline.push(TimelineItem::Notice(
-                                "Resources reloaded for the next run.".into(),
-                            )),
+                            Ok(()) => {
+                                if runtime.has_session_hooks() {
+                                    let context = app.ui_context(runtime.execution_context());
+                                    app.run =
+                                        Some(runtime.start_reload_notifications(context.clone()));
+                                    app.begin_session_change(context);
+                                } else {
+                                    app.timeline.push(TimelineItem::Notice(
+                                        "Resources reloaded for the next run.".into(),
+                                    ));
+                                }
+                            }
                             Err(error) => app.timeline.push(TimelineItem::Error(error.to_string())),
                         }
                     }

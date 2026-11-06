@@ -100,3 +100,11 @@ pub(crate) fn size(value: &impl Serialize, limit: usize) -> Result<usize> {
 }
 
 pub(crate) use hooks::{Registered, invoke, tool_hooks};
+
+mod session;
+pub(crate) use session::SessionHooks;
+pub use session::{
+    SessionActionDenied, SessionDecision, SessionEventKind, SessionHook, SessionHookInput,
+    SessionLifecycleDelivery, SessionLifecycleEvent, SessionLifecycleReason,
+    SessionObservationFailure, SessionOperation, SessionPosition, SessionShutdownReason,
+};

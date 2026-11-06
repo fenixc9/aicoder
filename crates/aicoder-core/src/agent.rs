@@ -143,7 +143,7 @@ impl Agent {
             config,
         }
     }
-    fn apply_session_reasoning(
+    pub(crate) fn apply_session_reasoning(
         &self,
         request: &mut ModelRequest,
         session: &crate::session::RunSession,
@@ -158,7 +158,7 @@ impl Agent {
         }
         Ok(())
     }
-    fn selected_model(&self, session: &crate::session::RunSession) -> Result<String> {
+    pub(crate) fn selected_model(&self, session: &crate::session::RunSession) -> Result<String> {
         if self.follow_session_models
             && let Some((provider, model)) = session.selected_model()
         {
@@ -286,6 +286,9 @@ impl Agent {
         control.shared.bind_custom_inbox(self.custom_inbox.clone());
         Ok((handle, control))
     }
+    pub fn has_session_hooks(&self) -> bool {
+        self.turn_executor.session_hooks.is_some()
+    }
     pub fn turn_executor(&self) -> &TurnExecutor {
         &self.turn_executor
     }
@@ -326,6 +329,7 @@ impl Agent {
         let now = tokio::time::Instant::now();
         let prompt = prompt.into();
         let started = prompt.prepared_user().map_or(now, |p| p.started.min(now));
+        let started = context.preparation_start(started);
         let started = context
             .control
             .as_ref()
@@ -630,6 +634,7 @@ impl Agent {
         let prompt = prompt.into();
         let now = tokio::time::Instant::now();
         let started = prompt.prepared_user().map_or(now, |p| p.started.min(now));
+        let started = context.preparation_start(started);
         let started = context
             .control
             .as_ref()
@@ -823,7 +828,7 @@ impl Agent {
         drop(lease);
         from_execution(execution, Some(metadata))
     }
-    fn system_messages(&self) -> Vec<Message> {
+    pub(crate) fn system_messages(&self) -> Vec<Message> {
         self.config
             .system_prompt
             .as_ref()
@@ -832,7 +837,7 @@ impl Agent {
             .into_iter()
             .collect()
     }
-    fn completion_request(&self, messages: Vec<Message>) -> ModelRequest {
+    pub(crate) fn completion_request(&self, messages: Vec<Message>) -> ModelRequest {
         let mut request = ModelRequest::new(self.config.model.clone(), messages);
         request.options = self.config.options.clone();
         request
@@ -876,6 +881,117 @@ fn interrupted(
         RunStop::Failed(_) => AgentTurnOutcome::Failed(turn),
     }
 }
+/// Result of explicit host session adoption followed by the same reusable agent loop.
+pub struct HostedSessionOutcome {
+    pub outcome: AgentTurnOutcome,
+    pub lifecycle: Vec<crate::session::SessionActionReport>,
+}
+impl Agent {
+    pub async fn run_hosted_session_controlled(
+        &self,
+        repository: &dyn SessionRepository,
+        current: Option<&str>,
+        selection: SessionSelection,
+        prompt: impl Into<crate::AgentPrompt>,
+        handler: Arc<dyn AgentEventHandler>,
+        control: crate::RunControl,
+    ) -> HostedSessionOutcome {
+        self.run_hosted_session_outcome(
+            repository,
+            current,
+            selection,
+            prompt,
+            handler,
+            control.context.clone(),
+        )
+        .await
+    }
+    pub async fn run_hosted_session_outcome(
+        &self,
+        repository: &dyn SessionRepository,
+        current: Option<&str>,
+        selection: SessionSelection,
+        prompt: impl Into<crate::AgentPrompt>,
+        handler: Arc<dyn AgentEventHandler>,
+        context: TurnExecutionContext,
+    ) -> HostedSessionOutcome {
+        let prompt = prompt.into();
+        if !self.has_session_hooks() {
+            return HostedSessionOutcome {
+                outcome: self
+                    .run_prompt_with_session_outcome(
+                        repository, selection, prompt, handler, context,
+                    )
+                    .await,
+                lifecycle: Vec::new(),
+            };
+        }
+        let started = tokio::time::Instant::now();
+        let context = context.with_preparation_start(started);
+        if let Some(control) = &context.control {
+            control.start();
+        }
+        match self
+            .select_session(repository, current, selection, context.clone())
+            .await
+        {
+            Ok(selected) => {
+                let metadata = selected.session.metadata().clone();
+                let mut outcome = self
+                    .run_prompt_with_session_outcome(
+                        repository,
+                        SessionSelection::Existing(metadata.id.clone()),
+                        prompt,
+                        handler,
+                        context,
+                    )
+                    .await;
+                let slot = match &mut outcome {
+                    AgentTurnOutcome::Completed(r) => &mut r.session,
+                    AgentTurnOutcome::Aborted(r)
+                    | AgentTurnOutcome::Limited(r)
+                    | AgentTurnOutcome::Stopped(r)
+                    | AgentTurnOutcome::Failed(r) => &mut r.session,
+                };
+                if slot.is_none() {
+                    *slot = Some(metadata);
+                }
+                HostedSessionOutcome {
+                    outcome,
+                    lifecycle: selected.reports,
+                }
+            }
+            Err(error) => {
+                let scope = self
+                    .turn_executor
+                    .start_scope(&self.config.model, handler, &context);
+                let mut messages = self.system_messages();
+                messages.push(prompt.message().clone());
+                let mut progress = RunProgress::new(messages);
+                progress.elapsed = started.elapsed();
+                progress.stage = RunStage::Preparing;
+                let stop = preparation_stop(&error, RunStage::Preparing);
+                let outcome = self
+                    .turn_executor
+                    .finish_preparation(
+                        scope,
+                        RunOutcome::Interrupted(InterruptedTurn {
+                            stop,
+                            progress,
+                            persistence_error: None,
+                        }),
+                        &context,
+                    )
+                    .await;
+                HostedSessionOutcome {
+                    outcome: from_execution(outcome, None),
+                    lifecycle: Vec::new(),
+                }
+            }
+        }
+    }
+}
+
 fn select_session(
     repository: &dyn SessionRepository,
     workspace: &std::path::Path,

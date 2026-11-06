@@ -16,8 +16,10 @@ use crate::commands::{self, CommandSpec};
 pub enum AppEvent {
     ReferenceReady(Box<Result<crate::runtime::CapturedInput, String>>),
     ModelSelected(Box<Result<aicoder_core::session::ModelSelectionReport, String>>),
+    SessionChanged(Box<Result<crate::runtime::SessionChange, String>>),
     Agent(AgentRawEventEnvelope),
     TurnFinished(Box<AgentTurnOutcome>),
+    HostedTurnFinished(Box<aicoder_core::HostedSessionOutcome>),
     CompactionFinished(Box<aicoder_core::summary::ManualCompactionReport>),
     ObservationFailed(String),
     CommandFinished(Box<Result<aicoder_core::extensions::CommandOutput, String>>),
@@ -349,6 +351,12 @@ impl App {
         self.timeline
             .push(TimelineItem::Notice("Checking selected model...".into()));
     }
+    pub fn begin_session_change(&mut self, context: TurnExecutionContext) {
+        self.begin_model_selection(context);
+        self.timeline.pop();
+        self.timeline
+            .push(TimelineItem::Notice("Checking session change...".into()));
+    }
     pub fn begin_reasoning_selection(&mut self, context: TurnExecutionContext) {
         self.begin_model_selection(context);
         self.reasoning_operation = true;
@@ -532,6 +540,8 @@ impl App {
             AppEvent::TurnFinished(_)
                 | AppEvent::CompactionFinished(_)
                 | AppEvent::ModelSelected(_)
+                | AppEvent::SessionChanged(_)
+                | AppEvent::HostedTurnFinished(_)
                 | AppEvent::CommandFinished(_)
                 | AppEvent::RunDropped
         ) {
@@ -595,6 +605,63 @@ impl App {
             }
             AppEvent::Agent(envelope) => self.apply_agent_event(envelope),
             AppEvent::TurnFinished(outcome) => self.finish_turn(*outcome),
+            AppEvent::HostedTurnFinished(hosted) => {
+                self.finish_turn(hosted.outcome);
+                let failures = hosted
+                    .lifecycle
+                    .iter()
+                    .map(|r| r.delivery.failures.len())
+                    .sum::<usize>();
+                if failures > 0 {
+                    self.timeline.push(TimelineItem::Notice(format!(
+                        "Session adopted; {failures} lifecycle observations were incomplete."
+                    )));
+                }
+            }
+            AppEvent::SessionChanged(result) => {
+                self.run = None;
+                self.active_context = None;
+                self.active_handle = None;
+                self.started_at = None;
+                self.state = AgentRunState::Idle;
+                match *result {
+                    Ok(change) => {
+                        if let Some(id) = change.deleted {
+                            self.sessions.retain(|s| s.id != id);
+                            self.selected_session = self
+                                .selected_session
+                                .min(self.sessions.len().saturating_sub(1));
+                        }
+                        if let Some(info) = change.info {
+                            if let Some(old) = self.sessions.iter_mut().find(|s| s.id == info.id) {
+                                *old = info;
+                            } else {
+                                self.sessions.insert(0, info);
+                            }
+                        }
+                        if let Some(session) = change.session {
+                            self.load_run_session(&session);
+                            if let Some(index) = self
+                                .sessions
+                                .iter()
+                                .position(|s| s.id == session.metadata().id)
+                            {
+                                self.selected_session = index;
+                            }
+                            if let Some(info) = self
+                                .sessions
+                                .iter_mut()
+                                .find(|s| s.id == session.metadata().id)
+                            {
+                                info.title = session.metadata().title.clone();
+                            }
+                        }
+                        self.timeline
+                            .extend(change.notices.into_iter().map(TimelineItem::Notice));
+                    }
+                    Err(error) => self.timeline.push(TimelineItem::Error(error)),
+                }
+            }
             AppEvent::ModelSelected(report) => {
                 let reasoning_operation = std::mem::take(&mut self.reasoning_operation);
                 let cancelled = self
@@ -998,6 +1065,7 @@ impl App {
     }
 
     pub fn load_run_session(&mut self, session: &aicoder_core::session::RunSession) {
+        self.model_spec = None;
         self.pending_reasoning = None;
         self.reasoning_effort = session
             .reasoning_selection()
@@ -1043,6 +1111,7 @@ impl App {
         }
     }
     pub fn load_session(&mut self, session: &Session) {
+        self.model_spec = None;
         self.reference = None;
         self.references.clear();
         self.images.clear();
@@ -1120,24 +1189,6 @@ impl App {
         self.session_selection = SessionSelection::Existing(session.metadata().id.clone());
         self.focus = Focus::Input;
         self.scroll_back = 0;
-    }
-
-    pub fn select_new_session(&mut self) {
-        self.reference = None;
-        self.references.clear();
-        self.images.clear();
-        self.model_context = None;
-        self.model_spec = None;
-        self.cost_usage_complete = false;
-        self.preview_omitted = false;
-        self.pending_reasoning = None;
-        self.reasoning_effort = None;
-
-        self.session_selection = SessionSelection::New;
-        self.model_label = None;
-        self.timeline.clear();
-        self.tool_indexes.clear();
-        self.focus = Focus::Input;
     }
 }
 
@@ -1352,7 +1403,17 @@ mod tests {
                 .count(),
             1
         );
-        app.select_new_session();
+        let root = tempfile::tempdir().unwrap();
+        let repo = aicoder_core::session::MemorySessionRepository::new();
+        let empty = aicoder_core::session::SessionRepository::create(&repo, root.path()).unwrap();
+        app.apply(AppEvent::SessionChanged(Box::new(Ok(
+            crate::runtime::SessionChange {
+                session: Some(aicoder_core::session::RunSession::Full(Box::new(empty))),
+                info: None,
+                deleted: None,
+                notices: Vec::new(),
+            },
+        ))));
         assert!(app.model_label.is_none());
     }
 
@@ -1629,7 +1690,17 @@ mod tests {
         app.begin_reasoning_selection(TurnExecutionContext::new());
         app.apply(AppEvent::ModelSelected(Box::new(Err("unsupported".into()))));
         assert_eq!(app.pending_reasoning, Some(Some(ReasoningEffort::Low)));
-        app.select_new_session();
+        let root = tempfile::tempdir().unwrap();
+        let repo = aicoder_core::session::MemorySessionRepository::new();
+        let empty = aicoder_core::session::SessionRepository::create(&repo, root.path()).unwrap();
+        app.apply(AppEvent::SessionChanged(Box::new(Ok(
+            crate::runtime::SessionChange {
+                session: Some(aicoder_core::session::RunSession::Full(Box::new(empty))),
+                info: None,
+                deleted: None,
+                notices: Vec::new(),
+            },
+        ))));
         assert_eq!(app.pending_reasoning, None);
         let context = TurnExecutionContext::new();
         app.begin_reasoning_selection(context.clone());
@@ -1935,5 +2006,30 @@ mod tests {
                 display
             );
         }
+    }
+    #[test]
+    fn denied_session_change_keeps_the_current_view_and_unsent_draft() {
+        let mut app = App::new(vec![]);
+        app.session_selection = SessionSelection::Existing("old".into());
+        app.input.replace("keep draft".into());
+        app.timeline.push(TimelineItem::User("old user".into()));
+        app.pending_reasoning = Some(Some(aicoder_core::model::ReasoningEffort::Low));
+        app.begin_session_change(TurnExecutionContext::new());
+        app.apply(AppEvent::SessionChanged(Box::new(Err("host veto".into()))));
+        assert_eq!(
+            app.session_selection,
+            SessionSelection::Existing("old".into())
+        );
+        assert_eq!(app.input.value(), "keep draft");
+        assert!(
+            app.timeline
+                .iter()
+                .any(|v| matches!(v,TimelineItem::User(text)if text=="old user"))
+        );
+        assert_eq!(
+            app.pending_reasoning,
+            Some(Some(aicoder_core::model::ReasoningEffort::Low))
+        );
+        assert!(!app.is_running());
     }
 }

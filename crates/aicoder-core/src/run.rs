@@ -354,11 +354,12 @@ pub(crate) struct RunLimiter {
 }
 impl RunLimiter {
     pub fn new(budget: RunBudget, context: TurnExecutionContext) -> Self {
+        let started = context.preparation_start(Instant::now());
         Self {
             auxiliary_gate: tokio::sync::Semaphore::new(4),
             budget,
             context,
-            started: Instant::now(),
+            started,
             state: Mutex::new(Usage::default()),
         }
     }

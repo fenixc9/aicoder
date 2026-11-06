@@ -42,7 +42,8 @@ pub mod turn_executor;
 pub mod ui;
 
 pub use agent::{
-    Agent, AgentConfig, AgentTurnOutcome, AgentTurnResult, InterruptedAgentTurn, SessionSelection,
+    Agent, AgentConfig, AgentTurnOutcome, AgentTurnResult, HostedSessionOutcome,
+    InterruptedAgentTurn, SessionSelection,
 };
 pub use cancellation::{TurnCancelled, TurnExecutionContext};
 pub use completion::{

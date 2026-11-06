@@ -63,6 +63,7 @@ struct RunPreparation {
     trigger: Option<crate::RunTrigger>,
 }
 pub struct TurnExecutor {
+    pub(crate) session_hooks: Option<Arc<crate::extensions::SessionHooks>>,
     pub(crate) message_finalizers: Option<Arc<crate::extensions::MessageFinalizers>>,
     finalizers: Vec<crate::extensions::Registered<dyn crate::extensions::AssistantMessageHook>>,
     input_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::InputHook>>,
@@ -120,6 +121,7 @@ impl TurnExecutor {
         config: TurnExecutionConfig,
     ) -> Self {
         Self {
+            session_hooks: None,
             message_finalizers: dispatcher.message_finalizers.clone(),
             finalizers: Vec::new(),
             input_hooks: Vec::new(),
@@ -2130,6 +2132,13 @@ impl TurnExecutorBuilder {
             input_context,
             self.execution_config,
         );
+        if let Some(extensions) = &self.extensions {
+            let hooks = extensions.session_hooks();
+            if !hooks.is_empty() {
+                executor.session_hooks =
+                    Some(Arc::new(crate::extensions::SessionHooks::new(hooks)));
+            }
+        }
         executor.finalizers = self
             .extensions
             .as_ref()

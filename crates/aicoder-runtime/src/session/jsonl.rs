@@ -376,6 +376,20 @@ impl SessionRepository for JsonlSessionRepository {
     fn session_info(&self, id: &str) -> Result<SessionInfo> {
         super::archive::info(self, id)
     }
+    fn prepare_window_navigation(
+        &self,
+        window: &SessionWindow,
+        action: ArchiveNavigation,
+    ) -> Result<SessionNavigationPlan> {
+        super::archive::prepare_navigation(self, window, action)
+    }
+    fn commit_window_navigation(
+        &self,
+        window: &mut SessionWindow,
+        plan: SessionNavigationPlan,
+    ) -> Result<()> {
+        super::archive::commit_navigation(self, window, plan)
+    }
     fn navigate_window(&self, window: &mut SessionWindow, action: ArchiveNavigation) -> Result<()> {
         super::archive::navigate(self, window, action)
     }

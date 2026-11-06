@@ -55,6 +55,8 @@ turn validation. [Raw input hooks](input-hooks.md) transform or consume input be
 before persistence, tool dispatch and verification. Stream events remain raw previews.
 [General message hooks](message-finalization.md) cover fresh messages across all canonical roles,
 including queued/idle custom messages and sourced context, without rewriting restored history.
+[Session hooks](session-lifecycle.md) veto prepared navigation and new/resume adoption before
+effects; completion observations retain committed state and report incomplete delivery separately.
 Message transforms and session navigation veto remain open.
 
 HookSpec defines local ID, signed priority and a 1 ms–30 s timeout (default two seconds).
