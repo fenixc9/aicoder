@@ -2192,6 +2192,37 @@
             "messages",
             "continue_run"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "assistant_message_finalized"
+            },
+            "message": {
+              "allOf": [
+                {
+                  "$ref": "#/$defs/message"
+                },
+                {
+                  "properties": {
+                    "role": {
+                      "const": "assistant"
+                    }
+                  }
+                }
+              ]
+            },
+            "changed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "message",
+            "changed"
+          ],
+          "additionalProperties": false
         }
       ]
     },

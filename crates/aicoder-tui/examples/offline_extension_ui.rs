@@ -130,6 +130,20 @@ impl InputHook for RawUi {
     }
 }
 struct Offline;
+struct Finalize;
+#[async_trait]
+impl AssistantMessageHook for Finalize {
+    async fn finalize(
+        &self,
+        input: AssistantMessageInput<'_>,
+        _: ExtensionCancellation,
+    ) -> anyhow::Result<Option<Message>> {
+        Ok(
+            (input.message.text_content() == "Reviewed input: finalization-demo")
+                .then(|| Message::text(MessageRole::Assistant, "FINALIZED_TUI_ANSWER")),
+        )
+    }
+}
 #[async_trait]
 impl ModelProvider for Offline {
     fn model_spec(&self, model: &str) -> Result<ModelSpec, ProviderError> {
@@ -206,6 +220,7 @@ async fn main() -> anyhow::Result<()> {
     let mut raw = HookSpec::new("raw-input");
     raw.timeout = Duration::from_secs(10);
     extension.input_hook(raw, Arc::new(RawUi))?;
+    extension.assistant_message_hook(HookSpec::new("final-answer"), Arc::new(Finalize))?;
     let mut registry = ExtensionRegistry::new();
     registry.install(extension)?;
     aicoder_tui::run_with_provider(runtime, Arc::new(Offline), Arc::new(registry.finish())).await

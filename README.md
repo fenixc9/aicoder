@@ -49,6 +49,8 @@ and queueing, with ordered asynchronous controls and private recovery data.
 inert details, supporting idle storage and native-command-triggered runs without synthetic users.
 [Busy custom delivery](docs/custom-delivery.md) adds steering, follow-up, safe deferred context
 and bounded next-turn inboxes without restoring authority from history.
+[Assistant finalization](docs/assistant-finalization.md) edits completed text before canonical
+storage and verification, preserving paid usage, tool actions and provider state.
 [Explicit host launch files](docs/host-extensions.md) enable process/MCP tools in CLI, TUI and Web.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime

@@ -50,6 +50,7 @@ pub struct Extension {
     tools: Vec<Arc<dyn ExecutableTool>>,
     providers: Vec<(String, Arc<dyn ModelProvider>)>,
     policies: Vec<(String, Arc<dyn ContextPolicy>)>,
+    finalizers: Vec<Registered<dyn AssistantMessageHook>>,
     inputs: Vec<Registered<dyn InputHook>>,
     startups: Vec<Registered<dyn BeforeStartHook>>,
     boundaries: Vec<Registered<dyn BoundaryHook>>,
@@ -83,6 +84,7 @@ impl Extension {
             tools: Vec::new(),
             providers: Vec::new(),
             policies: Vec::new(),
+            finalizers: Vec::new(),
             inputs: Vec::new(),
             startups: Vec::new(),
             boundaries: Vec::new(),
@@ -202,6 +204,25 @@ impl Extension {
             size(&spec, 1024)?,
         )?;
         self.guards.push(Registered {
+            owner: self.manifest.id.clone(),
+            spec,
+            callback: hook,
+        });
+        Ok(self)
+    }
+    pub fn assistant_message_hook(
+        &mut self,
+        spec: HookSpec,
+        hook: Arc<dyn AssistantMessageHook>,
+    ) -> Result<&mut Self> {
+        spec.validate()?;
+        self.register(
+            "assistant_message_hook",
+            &spec.id,
+            Some(spec.priority),
+            size(&spec, 1024)?,
+        )?;
+        self.finalizers.push(Registered {
             owner: self.manifest.id.clone(),
             spec,
             callback: hook,
@@ -561,6 +582,15 @@ impl ExtensionSet {
             .iter()
             .flat_map(|e| e.guards.iter().cloned())
             .collect();
+        hooks.sort_by_key(|h| h.spec.priority);
+        hooks
+    }
+    pub(crate) fn assistant_message_hooks(&self) -> Vec<Registered<dyn AssistantMessageHook>> {
+        let mut hooks = self
+            .extensions
+            .iter()
+            .flat_map(|e| e.finalizers.clone())
+            .collect::<Vec<_>>();
         hooks.sort_by_key(|h| h.spec.priority);
         hooks
     }

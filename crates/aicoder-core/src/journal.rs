@@ -5,6 +5,23 @@ use async_trait::async_trait;
 pub trait RunJournal: Send + Sync {
     /// Index is a logical transcript position. Tool results reserve positions in original call order.
     async fn checkpoint(&self, index: usize, message: &Message) -> anyhow::Result<()>;
+    /// Probe/record installed finalizers before provider IO. Unsupported journals fail closed.
+    async fn record_finalization(
+        &self,
+        _record: &crate::extensions::FinalizationRecord,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support assistant finalization")
+    }
+    /// Atomically persist the receipt and effective assistant at an unsaved canonical position.
+    /// Successful acknowledgement must prevent `finish`/`checkpoint` from duplicating it.
+    async fn finalize_assistant(
+        &self,
+        _index: usize,
+        _record: &crate::extensions::FinalizationRecord,
+        _message: &Message,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support atomic assistant finalization")
+    }
     fn supports_custom_input(&self) -> bool {
         false
     }
@@ -101,6 +118,20 @@ pub trait RunJournal: Send + Sync {
 }
 #[async_trait]
 impl RunJournal for () {
+    async fn record_finalization(
+        &self,
+        _: &crate::extensions::FinalizationRecord,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn finalize_assistant(
+        &self,
+        _: usize,
+        _: &crate::extensions::FinalizationRecord,
+        _: &Message,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
     fn supports_custom_input(&self) -> bool {
         true
     }

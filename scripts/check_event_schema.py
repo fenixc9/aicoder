@@ -34,4 +34,10 @@ control.pop("custom")
 assert list(validator.iter_errors(frame)), "custom control without metadata was accepted"
 control["message"]["role"] = "user"
 assert list(validator.iter_errors(frame)), "user control used context-only delivery"
+frame["event"] = {"type": "assistant_message_finalized", "changed": True,
+                  "message": {"role": "assistant", "content": [{"type": "text", "text": "effective"}]}}
+validator.validate(frame)
+count += 1
+frame["event"]["message"]["role"] = "user"
+assert list(validator.iter_errors(frame)), "finalized assistant accepted a user role"
 print(f"Validated {count} event frames against schema v1")

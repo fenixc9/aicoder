@@ -358,6 +358,15 @@ impl ApprovalHandler for ConsoleApproval {
 }
 
 impl AgentEventHandler for ConsoleEvents {
+    fn on_assistant_message_finalized(
+        &self,
+        event: aicoder_core::events::AssistantMessageFinalizedEvent,
+    ) {
+        if event.changed {
+            println!("\n[Finalized assistant]\n{}", event.message.text_content());
+        }
+    }
+
     fn on_agent_completed(&self, _event: AgentCompletedEvent) {
         // println!("[Finish] ModelUsage {:?}", _event.usage)
     }

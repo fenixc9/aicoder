@@ -1,5 +1,6 @@
 //! Executes one agent turn through its model, tool, and completion-verification rounds.
 mod custom_delivery;
+mod finalization;
 mod input;
 mod lifecycle;
 mod request_view;
@@ -60,6 +61,7 @@ struct RunPreparation {
     trigger: Option<crate::RunTrigger>,
 }
 pub struct TurnExecutor {
+    finalizers: Vec<crate::extensions::Registered<dyn crate::extensions::AssistantMessageHook>>,
     input_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::InputHook>>,
     input_expander: Option<Arc<dyn crate::extensions::InputExpander>>,
     startup_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::BeforeStartHook>>,
@@ -115,6 +117,7 @@ impl TurnExecutor {
         config: TurnExecutionConfig,
     ) -> Self {
         Self {
+            finalizers: Vec::new(),
             input_hooks: Vec::new(),
             input_expander: None,
             startup_hooks: Vec::new(),
@@ -684,6 +687,7 @@ impl TurnExecutor {
         }
 
         self.start_lifecycle(journal, context).await?;
+        self.start_finalization(journal, context).await?;
         request.stream = self.config.stream;
         if prepared_start.is_none() {
             self.prepare_model_tools(&mut request)?;
@@ -1275,9 +1279,22 @@ impl TurnExecutor {
             }
             let finish_reason = Some(response.stop_reason.clone());
             let assistant_message = response.message;
-            let tool_calls = assistant_message.tool_calls().cloned().collect::<Vec<_>>();
             progress.messages.push(assistant_message.clone());
             let assistant_index = progress.messages.len() - 1;
+            let assistant_message = self
+                .finalize_assistant(finalization::FinalizeScope {
+                    original: assistant_message,
+                    stop: &response.stop_reason,
+                    usage: &response.usage,
+                    round,
+                    progress,
+                    context,
+                    limits,
+                    journal,
+                    events: &round_events,
+                })
+                .await?;
+            let tool_calls = assistant_message.tool_calls().cloned().collect::<Vec<_>>();
             anyhow::ensure!(
                 tool_calls.is_empty()
                     || (model_spec.capabilities.tools
@@ -2039,6 +2056,11 @@ impl TurnExecutorBuilder {
             input_context,
             self.execution_config,
         );
+        executor.finalizers = self
+            .extensions
+            .as_ref()
+            .map(|e| e.assistant_message_hooks())
+            .unwrap_or_default();
         executor.input_expander = self.input_expander;
         executor.input_hooks = self
             .extensions

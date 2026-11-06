@@ -69,6 +69,58 @@ impl<'a> SessionJournal<'a> {
 }
 #[async_trait]
 impl RunJournal for SessionJournal<'_> {
+    async fn record_finalization(
+        &self,
+        record: &crate::extensions::FinalizationRecord,
+    ) -> Result<()> {
+        crate::extensions::size(record, 64 * 1024)?;
+        let mut state = self.state.lock().expect("session journal poisoned");
+        self.write(
+            &mut state,
+            vec![SessionEntryData::Extension {
+                namespace: crate::extensions::FINALIZATION_NAMESPACE.into(),
+                data: serde_json::to_value(record)?,
+            }],
+        )
+    }
+    async fn finalize_assistant(
+        &self,
+        index: usize,
+        record: &crate::extensions::FinalizationRecord,
+        message: &Message,
+    ) -> Result<()> {
+        crate::extensions::size(record, 64 * 1024)?;
+        crate::extensions::size(message, crate::extensions::MAX_FINAL_MESSAGE_BYTES)?;
+        ensure!(
+            message.role == MessageRole::Assistant,
+            "finalized message has wrong role"
+        );
+        let mut state = self.state.lock().expect("session journal poisoned");
+        ensure!(
+            !state.saved.contains_key(&index),
+            "finalized position already saved"
+        );
+        self.write(
+            &mut state,
+            vec![
+                SessionEntryData::Extension {
+                    namespace: crate::extensions::FINALIZATION_NAMESPACE.into(),
+                    data: serde_json::to_value(record)?,
+                },
+                SessionEntryData::Message {
+                    message: message.clone(),
+                },
+            ],
+        )?;
+        let id = state
+            .session
+            .metadata()
+            .leaf_id
+            .clone()
+            .expect("finalized message");
+        state.saved.insert(index, id);
+        Ok(())
+    }
     fn supports_custom_input(&self) -> bool {
         true
     }

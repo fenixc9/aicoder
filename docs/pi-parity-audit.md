@@ -97,8 +97,12 @@ that full product parity has already been achieved.
    see [native transport acceptance](s7-aux-transport-acceptance.md). Arbitrary new provider drivers
    still require explicit integration. [Actionable round/settlement boundaries](boundary-hooks.md)
    now stage inert data, source-labelled canonical context and continuation in the same metered
-   loop, with atomic JSONL and queue rechecks. Context-edit/compaction boundary drafts,
-   message transforms and session lifecycle/navigation veto remain open.
+   loop, with atomic JSONL and queue rechecks. Context-edit/compaction boundary drafts and session lifecycle/navigation veto remain open.
+   [Assistant finalization](assistant-finalization.md) now provides ordered text/visible-reasoning
+   edits after paid provider completion, atomically persisting the effective message before tool
+   dispatch and verification. Role, action blocks and opaque provider state remain protected;
+   raw streaming previews remain separate. Generic User/Custom/Tool finalization remains open;
+   existing input/tool hooks do not establish complete all-role message_end equivalence.
    [Startup hooks](startup-hooks.md) now freeze run-level System prefix replacement, admitted root
    selection and sourced context before turn validation/persistence. Empty catalogs, once-only
    preparation, queueing while busy, restored context and expiring private overrides are verified.
@@ -132,7 +136,8 @@ passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /
 incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
 original score/release requirements stay open; local scripted scores cannot substitute for them.
 
-The next implementation item is actionable lifecycle coverage. The final audit must rerun the matrix
+The next implementation items are all-role message finalization, session lifecycle/navigation
+veto and boundary context-edit/compaction drafts. The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.
 
 [Terminal/performance follow-up](s7-terminal-exit-followup.md) records the TUI terminal-owner

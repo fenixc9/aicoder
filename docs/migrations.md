@@ -1,5 +1,28 @@
 # API migrations
 
+## S7: assistant message finalization
+
+Extension adds assistant_message_hook(HookSpec, Arc<dyn AssistantMessageHook>). The input includes
+immutable original/current messages, response usage and stop reason. Only text and visible reasoning
+may change; role, actions and opaque state remain exact. There are no default callbacks or features.
+See [contract](assistant-finalization.md) and [acceptance](s7-assistant-finalization-acceptance.md).
+
+RunJournal adds record_finalization and finalize_assistant with unsupported defaults. Custom journals
+with installed finalizers must acknowledge support before provider IO and atomically persist a safe
+receipt plus the effective message at its unsaved index. Later checkpoints/finish must not duplicate
+the position. SessionJournal, the explicit transient `()` journal and EvaluationJournal support this.
+Without installed finalizers existing implementations retain their behavior.
+
+AgentRawEvent adds AssistantMessageFinalized {message, changed} and typed handlers gain a default
+on_assistant_message_finalized. Update exhaustive matches/v1 schema consumers. The event follows
+canonical acknowledgement; prior content/reasoning streaming events describe the original preview.
+TUI replaces its current preview; console/Web explicitly append the final effective answer when
+changed. Print/outcome/history/export use canonical effective content. This is not a stream filter.
+
+Session versions remain unchanged: safe receipts use the inert Extension namespace
+aicoder.assistant-finalization.v1. No callback, private original or authorization is restored from
+these records. User/custom/tool-wide message finalization remains outside this increment.
+
 ## S7: busy custom delivery and next-turn inboxes
 
 RunHandle adds begin_custom / submit_custom with CustomDelivery Steer/FollowUp/TurnEnd/NextTurn.

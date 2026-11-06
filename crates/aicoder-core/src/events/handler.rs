@@ -279,6 +279,12 @@ pub struct RunInputAppliedEvent {
     pub input: Arc<crate::RunInput>,
 }
 
+#[derive(Debug, Clone)]
+pub struct AssistantMessageFinalizedEvent {
+    pub meta: AgentEventMeta,
+    pub message: Arc<crate::model::Message>,
+    pub changed: bool,
+}
 /// The single event interface for agent applications.
 ///
 /// `on_raw_event` observes every event before its type-specific callback. Applications can use it
@@ -295,6 +301,7 @@ pub trait AgentEventHandler: Send + Sync + 'static {
 
     fn on_run_approval_requested(&self, _event: RunApprovalRequestedEvent) {}
     fn on_run_input_applied(&self, _event: RunInputAppliedEvent) {}
+    fn on_assistant_message_finalized(&self, _event: AssistantMessageFinalizedEvent) {}
     fn on_agent_started(&self, _event: AgentStartedEvent) {}
     fn on_agent_completed(&self, _event: AgentCompletedEvent) {}
     fn on_agent_failed(&self, _event: AgentFailedEvent) {}
@@ -355,6 +362,12 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
     handler.on_raw_event(envelope);
     let meta = AgentEventMeta::from(envelope);
     match &envelope.event {
+        AgentRawEvent::AssistantMessageFinalized { message, changed } => handler
+            .on_assistant_message_finalized(AssistantMessageFinalizedEvent {
+                meta,
+                message: message.clone(),
+                changed: *changed,
+            }),
         AgentRawEvent::AgentStarted { model } => handler.on_agent_started(AgentStartedEvent {
             meta,
             model: Arc::clone(model),

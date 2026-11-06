@@ -67,6 +67,7 @@ pub type InputJobResult = (
     Result<aicoder_core::InputSubmission, aicoder_core::RejectedInputSubmission>,
 );
 pub struct App {
+    response_start: usize,
     pub input_jobs: tokio::task::JoinSet<InputJobResult>,
     pub extension_ui: Option<crate::extension_ui::ExtensionUi>,
     pub run: Option<crate::runtime::ActiveRun>,
@@ -122,6 +123,7 @@ impl Drop for App {
 impl App {
     pub fn new(sessions: Vec<SessionInfo>) -> Self {
         Self {
+            response_start: 0,
             input_jobs: tokio::task::JoinSet::new(),
             extension_ui: None,
             run: None,
@@ -267,6 +269,7 @@ impl App {
             removed += 1;
         }
         if removed > 0 {
+            self.response_start = self.response_start.saturating_sub(removed);
             self.preview_omitted = true;
             self.tool_indexes.retain(|_, index| {
                 if *index < removed {
@@ -769,6 +772,40 @@ impl App {
                 }
             }
             AgentRawEvent::StateChanged { transition } => self.state = transition.current,
+            AgentRawEvent::ModelRequestStarted => self.response_start = self.timeline.len(),
+            AgentRawEvent::AssistantMessageFinalized { message, changed } => {
+                if changed {
+                    let start = self.response_start.min(self.timeline.len());
+                    let retained = self
+                        .timeline
+                        .drain(start..)
+                        .filter(|item| {
+                            !matches!(
+                                item,
+                                TimelineItem::Assistant { .. } | TimelineItem::Reasoning { .. }
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    self.timeline.extend(retained);
+                    for block in &message.content {
+                        match block {
+                            aicoder_core::model::ContentBlock::Text { text } => {
+                                self.timeline.push(TimelineItem::Assistant {
+                                    text: text.clone(),
+                                    open: false,
+                                })
+                            }
+                            aicoder_core::model::ContentBlock::Reasoning { text } => {
+                                self.timeline.push(TimelineItem::Reasoning {
+                                    text: text.clone(),
+                                    open: false,
+                                })
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
             AgentRawEvent::ReasoningStarted { .. } => self.timeline.push(TimelineItem::Reasoning {
                 text: String::new(),
                 open: true,
@@ -1775,5 +1812,80 @@ mod tests {
                 display
             );
         }
+    }
+    #[test]
+    fn final_assistant_event_replaces_only_the_current_response_preview() {
+        let mut app = App::new(vec![]);
+        app.timeline.push(TimelineItem::Assistant {
+            text: "older response".into(),
+            open: false,
+        });
+        app.apply(event(1, AgentRawEvent::ModelRequestStarted));
+        app.timeline.push(TimelineItem::Assistant {
+            text: "raw preview".into(),
+            open: false,
+        });
+        app.apply(event(
+            2,
+            AgentRawEvent::AssistantMessageFinalized {
+                message: Arc::new(Message::text(MessageRole::Assistant, "effective answer")),
+                changed: true,
+            },
+        ));
+        assert!(
+            app.timeline
+                .iter()
+                .any(|v| matches!(v,TimelineItem::Assistant{text,..}if text=="older response"))
+        );
+        assert!(
+            !app.timeline
+                .iter()
+                .any(|v| matches!(v,TimelineItem::Assistant{text,..}if text=="raw preview"))
+        );
+        assert!(
+            app.timeline
+                .iter()
+                .any(|v| matches!(v,TimelineItem::Assistant{text,..}if text=="effective answer"))
+        );
+    }
+    #[test]
+    fn final_assistant_event_tracks_the_response_after_bounded_preview_eviction() {
+        let mut app = App::new(vec![]);
+        for _ in 0..510 {
+            app.timeline.push(TimelineItem::Notice("old".into()));
+        }
+        app.apply(event(1, AgentRawEvent::ModelRequestStarted));
+        app.timeline.push(TimelineItem::Assistant {
+            text: "raw preview".into(),
+            open: false,
+        });
+        app.timeline
+            .push(TimelineItem::Notice("during response".into()));
+        app.timeline
+            .push(TimelineItem::Notice("during response 2".into()));
+        app.bounded_preview();
+        assert!(app.preview_omitted);
+        app.apply(event(
+            2,
+            AgentRawEvent::AssistantMessageFinalized {
+                message: Arc::new(Message::text(MessageRole::Assistant, "effective answer")),
+                changed: true,
+            },
+        ));
+        assert!(
+            !app.timeline
+                .iter()
+                .any(|v| matches!(v, TimelineItem::Assistant {text,..} if text=="raw preview"))
+        );
+        assert!(
+            app.timeline.iter().any(
+                |v| matches!(v, TimelineItem::Assistant {text,..} if text=="effective answer")
+            )
+        );
+        assert!(
+            app.timeline
+                .iter()
+                .any(|v| matches!(v, TimelineItem::Notice(text) if text=="during response"))
+        );
     }
 }

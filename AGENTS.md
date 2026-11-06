@@ -131,6 +131,10 @@
   until paired tool results and preserve candidate checkpoint order. Next-turn inboxes are bounded
   opaque host state: claim before preparation, consume only after atomic turn acknowledgement,
   release on failure/drop, retain new arrivals and never reconstruct queues from stored receipts.
+  Assistant finalization follows paid usage capture and preserves role, tool actions and opaque
+  provider state. Atomically acknowledge the effective message before verification/dispatch;
+  retain completed responses on callback failure and never repeat provider IO on receipt failure.
+  Streamed previews remain distinct from canonical final messages and cannot promise redaction.
 - Process tools use explicit host launch settings and conservative capabilities. Keep remote
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership

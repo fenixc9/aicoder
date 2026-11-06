@@ -107,6 +107,7 @@ async function observe(id, path) {
           if (frame.run_id !== id) throw new Error("Unexpected run identity");
           const event = frame.event;
           if (event.type === "content_chunk") append(event.delta);
+          else if (event.type === "assistant_message_finalized" && event.changed) append("\n[Finalized assistant]\n" + event.message.content.filter(b=>b.type==="text").map(b=>b.text).join(""));
           if (event.type === "run_approval_requested") await refresh();
         } else if (kind === "observation_error") { fail(new Error("Live events are incomplete; status and approvals remain available.")); }
         else if (kind === "result") { append(`\n\n[${frame.status}]\n`); await refresh(); }

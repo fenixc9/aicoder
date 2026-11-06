@@ -1,4 +1,10 @@
 //! Explicit native extension registration. Native code is trusted host code, not a sandbox.
+mod finalization;
+pub(crate) use finalization::validate_edit;
+pub use finalization::{
+    AssistantMessageHook, AssistantMessageInput, FINALIZATION_NAMESPACE, FinalizationChange,
+    FinalizationRecord, MAX_FINAL_MESSAGE_BYTES,
+};
 mod input;
 pub use input::{
     INPUT_HOOK_NAMESPACE, InputAction, InputChange, InputDelivery, InputExpander, InputHandled,

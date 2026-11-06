@@ -12,15 +12,16 @@ pub use emitter::{AgentEventEmitter, EventDeliveryConfig};
 #[allow(unused_imports)]
 pub use handler::{
     AgentAbortedEvent, AgentCompletedEvent, AgentEventHandler, AgentEventMeta, AgentFailedEvent,
-    AgentStartedEvent, AgentStateChangedEvent, AgentStoppedEvent, CompletionVerificationEndedEvent,
-    CompletionVerificationStartedEvent, ContentChunkEvent, ContentEndedEvent, ContentStartedEvent,
-    ContextCompactionCompletedEvent, ContextCompactionFailedEvent, ContextCompactionStartedEvent,
-    LifecycleBoundaryCommittedEvent, ModelRequestStartedEvent, ModelResponseCompletedEvent,
-    ModelResponseFailedEvent, ModelResponseStartedEvent, ModelRetryScheduledEvent,
-    ReasoningChunkEvent, ReasoningEndedEvent, ReasoningStartedEvent, RoundCompletedEvent,
-    RoundStartedEvent, RunApprovalRequestedEvent, RunInputAppliedEvent, SessionBoundEvent,
-    ToolApprovalRequestedEvent, ToolApprovalResolvedEvent, ToolCallChunkEvent, ToolCallEndedEvent,
-    ToolCallStartedEvent, ToolExecutionEndedEvent, ToolExecutionStartedEvent, UsageUpdatedEvent,
+    AgentStartedEvent, AgentStateChangedEvent, AgentStoppedEvent, AssistantMessageFinalizedEvent,
+    CompletionVerificationEndedEvent, CompletionVerificationStartedEvent, ContentChunkEvent,
+    ContentEndedEvent, ContentStartedEvent, ContextCompactionCompletedEvent,
+    ContextCompactionFailedEvent, ContextCompactionStartedEvent, LifecycleBoundaryCommittedEvent,
+    ModelRequestStartedEvent, ModelResponseCompletedEvent, ModelResponseFailedEvent,
+    ModelResponseStartedEvent, ModelRetryScheduledEvent, ReasoningChunkEvent, ReasoningEndedEvent,
+    ReasoningStartedEvent, RoundCompletedEvent, RoundStartedEvent, RunApprovalRequestedEvent,
+    RunInputAppliedEvent, SessionBoundEvent, ToolApprovalRequestedEvent, ToolApprovalResolvedEvent,
+    ToolCallChunkEvent, ToolCallEndedEvent, ToolCallStartedEvent, ToolExecutionEndedEvent,
+    ToolExecutionStartedEvent, UsageUpdatedEvent,
 };
 pub(crate) use model::RunModelEventSink;
 pub use subscription::{

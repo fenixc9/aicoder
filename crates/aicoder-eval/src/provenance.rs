@@ -114,6 +114,22 @@ impl EvaluationJournal {
 }
 #[async_trait]
 impl RunJournal for EvaluationJournal {
+    async fn record_finalization(
+        &self,
+        record: &aicoder_core::extensions::FinalizationRecord,
+    ) -> Result<()> {
+        self.record(json!({"kind":"assistant_finalization","data":record}))
+    }
+    async fn finalize_assistant(
+        &self,
+        index: usize,
+        record: &aicoder_core::extensions::FinalizationRecord,
+        message: &aicoder_core::model::Message,
+    ) -> Result<()> {
+        self.record(
+            json!({"kind":"finalized_assistant","index":index,"record":record,"message":message}),
+        )
+    }
     fn supports_custom_input(&self) -> bool {
         true
     }

@@ -150,6 +150,14 @@ impl EventTraceValidator {
                 );
                 self.state.transition(transition.current)?;
             }
+            AgentRawEvent::AssistantMessageFinalized { message, .. } => {
+                ensure!(
+                    message.role == crate::model::MessageRole::Assistant
+                        && !message.content.is_empty(),
+                    "invalid finalized assistant role/content"
+                );
+                ensure!(envelope.round.is_some(), "finalization lacks round scope");
+            }
             AgentRawEvent::RunInputApplied { input } => {
                 ensure!(
                     input.id > 0 && input.run_id == envelope.run_id.to_string(),

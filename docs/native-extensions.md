@@ -51,6 +51,8 @@ not introduce HTTP types into core or load from extension catalogs. [Shared Runt
 explicit context at successful round/settlement boundaries and can continue the same metered run.
 [Startup hooks](startup-hooks.md) additionally freeze run-level prefix/tool/context changes before
 turn validation. [Raw input hooks](input-hooks.md) transform or consume input before expansion/queueing.
+[Assistant finalization](assistant-finalization.md) transforms paid assistant text/visible reasoning
+before persistence, tool dispatch and verification. Stream events remain raw previews.
 Message transforms and session navigation veto remain open.
 
 HookSpec defines local ID, signed priority and a 1 ms–30 s timeout (default two seconds).
