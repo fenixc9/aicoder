@@ -294,7 +294,11 @@ impl AgentRuntime {
             },
         );
         self.approvals.clear();
-        self.agent = agent;
+        self.agent = Arc::new(
+            Arc::try_unwrap(agent)
+                .map_err(|_| anyhow::anyhow!("new agent unexpectedly shared"))?
+                .with_custom_inbox(self.agent.custom_inbox())?,
+        );
         self.runtime = Arc::new(runtime);
         Ok(())
     }

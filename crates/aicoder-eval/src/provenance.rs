@@ -114,6 +114,15 @@ impl EvaluationJournal {
 }
 #[async_trait]
 impl RunJournal for EvaluationJournal {
+    fn supports_custom_input(&self) -> bool {
+        true
+    }
+    async fn input_custom(&self, index: usize, input: &aicoder_core::RunInput) -> Result<()> {
+        input
+            .custom_message()?
+            .ok_or_else(|| anyhow::anyhow!("custom input metadata missing"))?;
+        self.record(json!({"kind":"custom_input","index":index,"input":input}))
+    }
     async fn record_input_hooks(
         &self,
         record: &aicoder_core::extensions::InputHookRecord,

@@ -1,4 +1,5 @@
 //! Executes one agent turn through its model, tool, and completion-verification rounds.
+mod custom_delivery;
 mod input;
 mod lifecycle;
 mod request_view;
@@ -641,6 +642,9 @@ impl TurnExecutor {
                 crate::agent_prompt::validate_custom_message(message)?;
             }
         }
+        if let Some(control) = &context.control {
+            control.configure_custom_delivery(journal.supports_custom_input())?;
+        }
         self.admit_input_preparation(prepared_user, input_committed, context, journal, limits)
             .await?;
 
@@ -712,6 +716,21 @@ impl TurnExecutor {
             let round_events = events.for_round(round);
             round_events.emit(AgentRawEvent::RoundStarted);
             transition_state(state, &round_events, AgentRunState::AwaitingModel { round })?;
+            if round > 1 {
+                self.flush_custom_context(
+                    custom_delivery::CustomScope {
+                        request: &base_request,
+                        messages: &mut context_messages,
+                        progress,
+                        context,
+                        limits,
+                        journal,
+                        events: &round_events,
+                    },
+                    None,
+                )
+                .await?;
+            }
             let inputs_changed = apply_inputs(
                 &mut context_messages,
                 progress,
@@ -1301,6 +1320,19 @@ impl TurnExecutor {
                     &round_events,
                     AgentRunState::VerifyingCompletion { round },
                 )?;
+                self.flush_custom_context(
+                    custom_delivery::CustomScope {
+                        request: &request,
+                        messages: &mut context_messages,
+                        progress,
+                        context,
+                        limits,
+                        journal,
+                        events: &round_events,
+                    },
+                    Some((assistant_index, &assistant_message)),
+                )
+                .await?;
                 if !self.boundary_hooks.is_empty() {
                     checkpoint(journal, assistant_index, &assistant_message, context).await?;
                     if self
@@ -1390,31 +1422,61 @@ impl TurnExecutor {
                             )
                             .await?
                         };
-                        let queued_after_boundary = if !self.boundary_hooks.is_empty()
-                            && context
-                                .control
-                                .as_ref()
-                                .is_some_and(|c| c.next(true, !boundary_again).is_some())
+                        let mut queued_after_boundary = false;
+                        if !self.boundary_hooks.is_empty()
+                            || context.control.as_ref().is_some_and(|c| c.has_context())
                         {
-                            checkpoint(journal, assistant_index, &assistant_message, context)
+                            loop {
+                                self.flush_custom_context(
+                                    custom_delivery::CustomScope {
+                                        request: &base_request,
+                                        messages: &mut context_messages,
+                                        progress,
+                                        context,
+                                        limits,
+                                        journal,
+                                        events: &round_events,
+                                    },
+                                    Some((assistant_index, &assistant_message)),
+                                )
                                 .await?;
-                            apply_inputs(
-                                &mut context_messages,
-                                progress,
-                                context,
-                                (journal, limits),
-                                InputBoundary::AfterCompletion {
-                                    round_limit: self.config.max_rounds,
-                                },
-                                &round_events,
-                                |messages, message| {
-                                    self.validate_control_input(&base_request, messages, message)
-                                },
-                            )
-                            .await?
-                        } else {
-                            false
-                        };
+                                if context
+                                    .control
+                                    .as_ref()
+                                    .is_some_and(|c| c.next(true, !boundary_again).is_some())
+                                {
+                                    checkpoint(
+                                        journal,
+                                        assistant_index,
+                                        &assistant_message,
+                                        context,
+                                    )
+                                    .await?;
+                                    queued_after_boundary = apply_inputs(
+                                        &mut context_messages,
+                                        progress,
+                                        context,
+                                        (journal, limits),
+                                        InputBoundary::AfterCompletion {
+                                            round_limit: self.config.max_rounds,
+                                        },
+                                        &round_events,
+                                        |messages, input| {
+                                            self.validate_control_input(
+                                                &base_request,
+                                                messages,
+                                                input,
+                                            )
+                                        },
+                                    )
+                                    .await?;
+                                    break;
+                                }
+                                if !context.control.as_ref().is_some_and(|c| c.has_context()) {
+                                    break;
+                                }
+                            }
+                        }
                         if boundary_again || queued_after_boundary {
                             round_events.emit(AgentRawEvent::RoundCompleted {
                                 outcome: RoundOutcome::FinalAnswer,
@@ -1438,6 +1500,19 @@ impl TurnExecutor {
                         checkpoint(journal, progress.messages.len() - 1, &feedback, context)
                             .await?;
                         context_messages.push(feedback);
+                        self.flush_custom_context(
+                            custom_delivery::CustomScope {
+                                request: &base_request,
+                                messages: &mut context_messages,
+                                progress,
+                                context,
+                                limits,
+                                journal,
+                                events: &round_events,
+                            },
+                            None,
+                        )
+                        .await?;
                         round_events.emit(AgentRawEvent::RoundCompleted {
                             outcome: RoundOutcome::CompletionRejected,
                         });
@@ -1517,6 +1592,19 @@ impl TurnExecutor {
             };
             context_messages.extend(tool_messages);
             limits.check()?;
+            self.flush_custom_context(
+                custom_delivery::CustomScope {
+                    request: &request,
+                    messages: &mut context_messages,
+                    progress,
+                    context,
+                    limits,
+                    journal,
+                    events: &round_events,
+                },
+                None,
+            )
+            .await?;
             if !self.boundary_hooks.is_empty() {
                 let _ = self
                     .run_boundary(
@@ -1552,18 +1640,31 @@ impl TurnExecutor {
         &self,
         request: &ModelRequest,
         messages: &[Message],
-        message: &Message,
+        input: &crate::RunInput,
     ) -> Result<()> {
-        let input = crate::AgentInput::try_from(message.clone())?;
+        let message = match input.custom_message()? {
+            Some(custom) => custom.model_message(),
+            None => crate::AgentInput::try_from(input.message.clone())?.into_message(),
+        };
         let spec = self.provider.model_spec(&request.model)?;
         let mut projected = crate::tokens::model_messages(messages, &spec).into_owned();
-        projected.push(input.into_message());
+        projected.push(message);
         let mut check = ModelRequest::new(&request.model, projected);
         check.tools.clone_from(&request.tools);
         check.tool_choice.clone_from(&request.tool_choice);
         check.options.clone_from(&request.options);
         check.stream = request.stream;
         self.provider.validate_request(&check)?;
+        if input.custom.is_some() {
+            let count = self.counting.request(&check, &spec);
+            anyhow::ensure!(
+                !matches!(
+                    self.decide_context(&check, &spec, &count)?,
+                    crate::context_policy::ContextDecision::Reject { .. }
+                ),
+                "custom control exceeds context policy"
+            );
+        }
         Ok(())
     }
 }
@@ -1579,7 +1680,7 @@ async fn apply_inputs(
     accounting: (&dyn crate::RunJournal, &Arc<RunLimiter>),
     boundary: InputBoundary,
     events: &AgentEventEmitter,
-    validate: impl Fn(&[Message], &Message) -> Result<()>,
+    validate: impl Fn(&[Message], &crate::RunInput) -> Result<()>,
 ) -> Result<bool> {
     let (journal, limits) = accounting;
     let Some(control) = &context.control else {
@@ -1605,35 +1706,59 @@ async fn apply_inputs(
             }
             .into());
         }
-        validate(messages, &input.message)?;
-        let receipt = control.input_receipt(input.id);
-        if let Some(receipt) = &receipt {
-            let bytes = crate::extensions::size(
-                &crate::extensions::InputHookRecord::Prepared {
-                    receipt: receipt.for_record(),
-                },
-                crate::extensions::MAX_INPUT_HOOK_BYTES,
-            )?;
-            limits.charge_output_bytes(bytes)?;
-        }
-        let index = progress.messages.len();
-        progress.messages.push(input.message.clone());
-        tokio::select! {
-            biased;
-            cancelled=context.cancelled()=>return Err(cancelled.into()),
-            result=async{match &receipt{Some(receipt)=>journal.input_prepared(index,&input,receipt).await,None=>journal.input(index,&input).await}}=>{
-                result.map_err(|error|anyhow::Error::from(RunFailure::from_error(RunStage::Persistence,&error)))?;
-            }
-        }
-        control.applied(input.id);
-        messages.push(input.message.clone());
-        events.emit(AgentRawEvent::RunInputApplied {
-            input: Arc::new(input),
-        });
-        limits.check()?;
+        commit_run_input(
+            input,
+            messages,
+            progress,
+            context,
+            (journal, limits),
+            events,
+            &validate,
+        )
+        .await?;
         applied = true;
     }
     Ok(applied)
+}
+
+async fn commit_run_input(
+    input: crate::RunInput,
+    messages: &mut Vec<Message>,
+    progress: &mut RunProgress,
+    context: &TurnExecutionContext,
+    accounting: (&dyn crate::RunJournal, &Arc<RunLimiter>),
+    events: &AgentEventEmitter,
+    validate: &impl Fn(&[Message], &crate::RunInput) -> Result<()>,
+) -> Result<()> {
+    let (journal, limits) = accounting;
+    let control = context.control.as_ref().expect("controlled input");
+    validate(messages, &input)?;
+    let receipt = control.input_receipt(input.id);
+    if let Some(receipt) = &receipt {
+        let bytes = crate::extensions::size(
+            &crate::extensions::InputHookRecord::Prepared {
+                receipt: receipt.for_record(),
+            },
+            crate::extensions::MAX_INPUT_HOOK_BYTES,
+        )?;
+        limits.charge_output_bytes(bytes)?;
+    }
+    let index = progress.messages.len();
+    progress.messages.push(input.message.clone());
+    tokio::select! {
+        biased;
+        cancelled=context.cancelled()=>return Err(cancelled.into()),
+        result=async{if input.custom.is_some(){journal.input_custom(index,&input).await}else{match &receipt{Some(receipt)=>journal.input_prepared(index,&input,receipt).await,None=>journal.input(index,&input).await}}}=>{
+            result.map_err(|error|anyhow::Error::from(RunFailure::from_error(RunStage::Persistence,&error)))?;
+        }
+    }
+    control.applied(input.id);
+    messages.push(input.message.clone());
+    events.emit(AgentRawEvent::RunInputApplied {
+        input: Arc::new(input),
+    });
+    limits.check()?;
+    Ok(())
 }
 
 fn classify_stop(error: &anyhow::Error, limits: &RunLimiter, stage: RunStage) -> RunStop {

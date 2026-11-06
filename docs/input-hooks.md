@@ -110,8 +110,11 @@ cargo run --locked -p aicoder-runtime --example offline_input_hooks -- --handled
 It exercises raw-before-template order, actual owned tools/approvals, JSONL, archives and inert
 export with no external model. [Acceptance](s7-input-hooks-acceptance.md) also records RPC/Web
 adapters and real terminal input UI checks. See [migration](migrations.md). Message transforms,
-custom delivery while busy, session navigation veto and boundary context-edit /
+session navigation veto and boundary context-edit /
 compaction drafts remain in the [Pi audit](pi-parity-audit.md).
 
 [Custom triggers](custom-messages.md) are a separate canonical input type and skip this raw
 user processing stage, including skill/template expansion.
+
+[Busy custom delivery](custom-delivery.md) uses a separate typed queue path and does not run
+raw user hooks or template expansion.

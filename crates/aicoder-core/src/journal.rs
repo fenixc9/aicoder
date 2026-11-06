@@ -5,6 +5,12 @@ use async_trait::async_trait;
 pub trait RunJournal: Send + Sync {
     /// Index is a logical transcript position. Tool results reserve positions in original call order.
     async fn checkpoint(&self, index: usize, message: &Message) -> anyhow::Result<()>;
+    fn supports_custom_input(&self) -> bool {
+        false
+    }
+    async fn input_custom(&self, _index: usize, _input: &crate::RunInput) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support custom input")
+    }
     /// Persist an applied user control, optionally with its provenance, at this transcript position.
     async fn input(&self, index: usize, input: &crate::RunInput) -> anyhow::Result<()> {
         self.checkpoint(index, &input.message).await
@@ -95,6 +101,12 @@ pub trait RunJournal: Send + Sync {
 }
 #[async_trait]
 impl RunJournal for () {
+    fn supports_custom_input(&self) -> bool {
+        true
+    }
+    async fn input_custom(&self, _: usize, _: &crate::RunInput) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn record_input_hooks(
         &self,
         _: &crate::extensions::InputHookRecord,

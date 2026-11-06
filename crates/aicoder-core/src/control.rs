@@ -1,9 +1,13 @@
 //! Bounded, host-independent controls for one owned agent run.
+mod custom;
 mod input;
 use crate::{
     RunId, TurnExecutionContext,
     model::{ContentBlock, Message, MessageRole},
     tools::{ApprovalDecision, ApprovalRequest, ApprovalSessionInfo, ToolInvocation},
+};
+pub use custom::{
+    CustomDelivery, CustomSubmission, CustomSubmissionFuture, RejectedCustomSubmission,
 };
 pub use input::{InputSubmission, InputSubmissionFuture, RejectedInputSubmission};
 use serde::{Deserialize, Serialize};
@@ -41,9 +45,12 @@ impl Default for RunControlConfig {
 pub enum RunInputKind {
     Steer,
     FollowUp,
+    Context,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<crate::CustomMessageMetadata>,
     /// Ephemeral raw provenance retained for failure recovery; omitted from controls/events wire data.
     #[serde(skip)]
     pub provenance: Option<Arc<crate::extensions::InputReceipt>>,
@@ -53,6 +60,21 @@ pub struct RunInput {
     pub message: Message,
 }
 impl RunInput {
+    pub fn custom_message(&self) -> anyhow::Result<Option<crate::CustomMessage>> {
+        match &self.custom {
+            Some(metadata) => Ok(Some(crate::CustomMessage::from_canonical(
+                metadata.clone(),
+                self.message.clone(),
+            )?)),
+            None => {
+                anyhow::ensure!(
+                    self.message.role != MessageRole::Custom,
+                    "custom control lacks typed metadata"
+                );
+                Ok(None)
+            }
+        }
+    }
     pub fn original_message(&self) -> &Message {
         self.provenance
             .as_ref()
@@ -97,6 +119,9 @@ pub enum RunControlError {
     Closed,
     InputPreparationRequired,
     InputBindingMismatch,
+    CustomUnsupported,
+    CustomBusy,
+    SessionUnavailable,
     QueueFull,
     InputTooLarge,
     InvalidInput,
@@ -109,6 +134,9 @@ impl fmt::Display for RunControlError {
         f.write_str(match self {
             Self::Closed => "run no longer accepts controls",
             Self::InputPreparationRequired => "input hooks require asynchronous submit_input",
+            Self::CustomBusy => "next-turn custom messages are claimed by an active preparation",
+            Self::CustomUnsupported => "run journal does not support custom delivery",
+            Self::SessionUnavailable => "next-turn custom delivery requires a bound session",
             Self::InputBindingMismatch => {
                 "run input processor differs or raw inputs predate its installation"
             }
@@ -148,6 +176,10 @@ struct Approval {
     response: oneshot::Sender<ApprovalDecision>,
 }
 struct State {
+    custom_inbox: Option<Arc<crate::CustomInbox>>,
+    custom_capable: Option<bool>,
+    custom_total: usize,
+    custom_bytes: usize,
     input_pipeline: Option<Arc<crate::extensions::InputPipeline>>,
     input_error: Option<RunControlError>,
     inflight: std::collections::BTreeMap<u64, usize>,
@@ -200,6 +232,10 @@ impl RunHandle {
             id,
             config,
             state: Mutex::new(State {
+                custom_inbox: None,
+                custom_capable: None,
+                custom_total: 0,
+                custom_bytes: 0,
                 input_pipeline: None,
                 input_error: None,
                 inflight: input::empty_reservations(),
@@ -307,6 +343,7 @@ impl RunHandle {
             state.pending_bytes += counter.bytes;
             state.pending.push_back(Queued {
                 input: RunInput {
+                    custom: None,
                     provenance: None,
                     run_id: self.shared.id.to_string(),
                     id,
@@ -468,9 +505,24 @@ impl ControlState {
             .pending
             .iter()
             .find(|queued| queued.input.kind == RunInputKind::Steer)
-            .or_else(|| follow_up.then(|| state.pending.front()).flatten())
+            .or_else(|| {
+                follow_up
+                    .then(|| {
+                        state
+                            .pending
+                            .iter()
+                            .find(|q| q.input.kind == RunInputKind::FollowUp)
+                    })
+                    .flatten()
+            })
             .map(|queued| queued.input.clone());
-        if input.is_none() && close {
+        if input.is_none()
+            && close
+            && !state
+                .pending
+                .iter()
+                .any(|q| q.input.kind == RunInputKind::Context)
+        {
             state.status = RunControlStatus::Finishing;
             state.approval = None;
             self.update(&mut state);

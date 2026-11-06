@@ -25,7 +25,37 @@ impl<'de> Deserialize<'de> for CustomMessage {
         Ok(value)
     }
 }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CustomMessageMetadata {
+    pub source: String,
+    pub custom_type: String,
+    pub display: bool,
+    pub details: Option<Value>,
+}
 impl CustomMessage {
+    pub fn metadata(&self) -> CustomMessageMetadata {
+        CustomMessageMetadata {
+            source: self.source().into(),
+            custom_type: self.custom_type().into(),
+            display: self.display(),
+            details: self.details().cloned(),
+        }
+    }
+    pub(crate) fn from_canonical(
+        metadata: CustomMessageMetadata,
+        message: Message,
+    ) -> Result<Self> {
+        let value = Self(Arc::new(CustomData {
+            source: metadata.source,
+            custom_type: metadata.custom_type,
+            display: metadata.display,
+            details: metadata.details,
+            message,
+        }));
+        value.validate()?;
+        Ok(value)
+    }
     pub fn new(
         source: impl Into<String>,
         custom_type: impl Into<String>,

@@ -1,5 +1,36 @@
 # API migrations
 
+## S7: busy custom delivery and next-turn inboxes
+
+RunHandle adds begin_custom / submit_custom with CustomDelivery Steer/FollowUp/TurnEnd/NextTurn.
+Raw user hooks and templates are bypassed; canonical custom history uses the existing typed
+format. RunInput adds optional custom metadata (None for user literals); RunInputKind adds
+Context for custom-only deferred writes. Update exhaustive matches and strict v1 event-schema
+consumers. Old user serialization omits the new field. Event validation now checks typed pairing
+and owned run identity. See [contract](custom-delivery.md).
+
+RunJournal adds supports_custom_input (default false) and atomic input_custom. Custom journals
+must explicitly implement both to accept active custom data. Session/eval journals and () support
+them. Unsupported journals reject rather than recording a Custom message as an ordinary Message.
+Safe delivery receipts and typed entries use one transaction; acknowledged facts/usage survive
+later stops without repeating completed operations.
+
+Agent now owns a bounded workspace/session CustomInbox. NextTurn requires a bound session and
+waits for a later explicit user/custom trigger. Claims consume only after the initial transaction
+acknowledges; failure/drop releases them, new arrivals remain, and handled input consumes none.
+Reasoning clones and TUI reload retain the inbox. Hosts creating replacement Agents may explicitly
+share custom_inbox through with_custom_inbox; another workspace rejects. Pending queues/claim
+tokens never serialize or restore from history. Input IDs may have gaps after discarded futures.
+Delivery and consumption provenance use inert aicoder.custom-delivery.v1 /
+aicoder.custom-next-turn.v1 records; no session format version or dependency changed.
+
+Turn-end custom context is rechecked after verification and settle waits, including before a
+verification retry. A final assistant checkpoint precedes it. TUI keeps custom rows distinct from
+User rows and honors display intent. No new RPC/Web client-controlled authority or route is added.
+See [example](../crates/aicoder-runtime/examples/offline_custom_delivery.rs) and
+[acceptance](s7-custom-delivery-acceptance.md).
+
+
 ## S7: sourced custom messages and idle triggers
 
 Core adds CustomMessage, AgentPrompt and RunTrigger. Existing user entry points still accept

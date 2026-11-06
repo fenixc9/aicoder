@@ -108,6 +108,19 @@ jobs:
           cargo run --locked -p aicoder-runtime --example offline_custom_messages -- --record-only
           cargo build --locked -p aicoder-tui --example offline_extension_ui
           python3 scripts/check_custom_messages.py
+      - name: Busy custom delivery and next-turn claims
+        run: |
+          cargo test --locked -p aicoder-runtime --no-default-features --test custom_delivery
+          cargo run --locked -p aicoder-runtime --example offline_custom_delivery -- --delivery steer
+          cargo run --locked -p aicoder-runtime --example offline_custom_delivery -- --delivery follow_up
+          cargo run --locked -p aicoder-runtime --example offline_custom_delivery -- --delivery turn_end
+          cargo run --locked -p aicoder-runtime --example offline_custom_delivery -- --delivery next_turn
+          cargo run --locked -p aicoder-runtime --example offline_custom_delivery -- --deny
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_custom_delivery -- --code-mode --delivery steer
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_custom_delivery -- --code-mode --delivery follow_up
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_custom_delivery -- --code-mode --delivery turn_end
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_custom_delivery -- --code-mode --delivery next_turn
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_custom_delivery -- --code-mode --deny
       - name: Planning, protected paths and read-only worker Agent extensions
         run: cargo run --locked -p aicoder-runtime --example coding_extensions
       - name: Versioned process tools and owned-plan approval

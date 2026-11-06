@@ -25,10 +25,10 @@ impl Error for RejectedInputSubmission {
         Some(self.error.as_ref())
     }
 }
-struct Ticket {
+pub(super) struct Ticket {
     shared: Arc<ControlState>,
-    id: u64,
-    created: tokio::time::Instant,
+    pub(super) id: u64,
+    pub(super) created: tokio::time::Instant,
 }
 impl Drop for Ticket {
     fn drop(&mut self) {
@@ -40,7 +40,7 @@ impl Drop for Ticket {
     }
 }
 impl Ticket {
-    async fn turn(&self) {
+    pub(super) async fn turn(&self) {
         loop {
             let changed = self.shared.changed.notified();
             tokio::pin!(changed);
@@ -70,6 +70,12 @@ impl RunHandle {
         kind: RunInputKind,
         input: AgentInput,
     ) -> Result<InputSubmissionFuture, RejectedInputSubmission> {
+        if kind == RunInputKind::Context {
+            return Err(RejectedInputSubmission {
+                input,
+                error: RunControlError::InvalidInput.into(),
+            });
+        }
         let (ticket, processor) = match self.reserve_input(&input) {
             Ok(plan) => plan,
             Err(error) => return Err(RejectedInputSubmission { input, error }),
@@ -111,6 +117,15 @@ impl RunHandle {
             .map_err(|_| RunControlError::InputTooLarge)?,
             None => bytes,
         };
+        self.reserve_payload(bytes)
+    }
+    pub(super) fn reserve_payload(
+        &self,
+        bytes: usize,
+    ) -> anyhow::Result<(Ticket, Option<Arc<InputPipeline>>)> {
+        if self.context.is_cancelled() {
+            return Err(RunControlError::Closed.into());
+        }
         let (ticket, processor) = {
             let mut state = self.shared.state.lock().expect("run controls poisoned");
             ensure_open(&state)?;
@@ -175,6 +190,7 @@ impl RunHandle {
             let delivery = match kind {
                 RunInputKind::Steer => InputDelivery::Steer,
                 RunInputKind::FollowUp => InputDelivery::FollowUp,
+                RunInputKind::Context => return Err(RunControlError::InvalidInput.into()),
             };
             let prepared = match processor {
                 Some(processor) => {
@@ -227,6 +243,7 @@ impl RunHandle {
                     state.pending_bytes += complete;
                     state.pending.push_back(Queued {
                         input: RunInput {
+                            custom: None,
                             provenance: receipt.clone(),
                             run_id: self.shared.id.to_string(),
                             id: ticket.id,
@@ -250,7 +267,7 @@ impl RunHandle {
         }
     }
 }
-fn ensure_open(state: &State) -> Result<(), RunControlError> {
+pub(super) fn ensure_open(state: &State) -> Result<(), RunControlError> {
     if matches!(
         state.status,
         RunControlStatus::Waiting | RunControlStatus::Running
@@ -274,7 +291,7 @@ impl ControlState {
             (Some(old), Some(new)) if old.owner == new.owner => {}
             (None, None) => {}
             (None, Some(new)) => {
-                if new.requires_async() && !state.pending.is_empty() {
+                if new.requires_async() && state.pending.iter().any(|q| q.input.custom.is_none()) {
                     state.input_error = Some(RunControlError::InputBindingMismatch);
                 }
                 state.input_pipeline = pipeline;
@@ -294,7 +311,7 @@ impl ControlState {
             None => Ok(()),
         }
     }
-    async fn input_closed(&self) {
+    pub(super) async fn input_closed(&self) {
         loop {
             let changed = self.changed.notified();
             tokio::pin!(changed);

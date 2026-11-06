@@ -69,6 +69,32 @@ impl<'a> SessionJournal<'a> {
 }
 #[async_trait]
 impl RunJournal for SessionJournal<'_> {
+    fn supports_custom_input(&self) -> bool {
+        true
+    }
+    async fn input_custom(&self, index: usize, input: &crate::RunInput) -> Result<()> {
+        let custom = input
+            .custom_message()?
+            .ok_or_else(|| anyhow::anyhow!("custom control metadata missing"))?;
+        ensure!(
+            input.provenance.is_none(),
+            "custom control contains user provenance"
+        );
+        let mut state = self.state.lock().expect("session journal poisoned");
+        ensure!(
+            !state.saved.contains_key(&index),
+            "custom control position already saved"
+        );
+        self.write(&mut state,vec![SessionEntryData::Extension{namespace:"aicoder.custom-delivery.v1".into(),data:serde_json::json!({"run_id":input.run_id,"id":input.id,"kind":input.kind,"source":custom.source(),"custom_type":custom.custom_type()})},SessionEntryData::CustomMessage{custom}])?;
+        let id = state
+            .session
+            .metadata()
+            .leaf_id
+            .clone()
+            .expect("custom checkpoint");
+        state.saved.insert(index, id);
+        Ok(())
+    }
     async fn checkpoint(&self, index: usize, message: &Message) -> Result<()> {
         let mut state = self.state.lock().expect("session journal poisoned");
         if let Some(entry_id) = state.saved.get(&index) {

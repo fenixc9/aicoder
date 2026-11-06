@@ -94,6 +94,7 @@ impl AgentTurnOutcome {
     }
 }
 pub struct Agent {
+    custom_inbox: Arc<crate::CustomInbox>,
     follow_session_models: bool,
     follow_session_reasoning: bool,
     persist_reasoning_default: bool,
@@ -103,6 +104,9 @@ pub struct Agent {
 impl Agent {
     pub fn new(turn_executor: TurnExecutor, config: AgentConfig) -> Self {
         Self {
+            custom_inbox: Arc::new(crate::CustomInbox::at_workspace(
+                turn_executor.workspace_root().to_owned(),
+            )),
             turn_executor: Arc::new(turn_executor),
             config,
             follow_session_models: false,
@@ -131,6 +135,7 @@ impl Agent {
         let mut config = self.config.clone();
         config.options.reasoning_effort = effort;
         Self {
+            custom_inbox: self.custom_inbox.clone(),
             follow_session_models: self.follow_session_models,
             follow_session_reasoning: false,
             persist_reasoning_default: true,
@@ -261,12 +266,25 @@ impl Agent {
         Ok(report)
     }
 
+    pub fn custom_inbox(&self) -> Arc<crate::CustomInbox> {
+        self.custom_inbox.clone()
+    }
+    pub fn with_custom_inbox(mut self, inbox: Arc<crate::CustomInbox>) -> Result<Self> {
+        ensure!(
+            inbox.workspace() == self.turn_executor.workspace_root(),
+            "custom inbox belongs to another workspace"
+        );
+        self.custom_inbox = inbox;
+        Ok(self)
+    }
     pub fn control_channel(
         &self,
         parent: TurnExecutionContext,
         config: crate::RunControlConfig,
     ) -> Result<(crate::RunHandle, crate::RunControl), crate::RunControlError> {
-        self.turn_executor.control_channel(parent, config)
+        let (handle, control) = self.turn_executor.control_channel(parent, config)?;
+        control.shared.bind_custom_inbox(self.custom_inbox.clone());
+        Ok((handle, control))
     }
     pub fn turn_executor(&self) -> &TurnExecutor {
         &self.turn_executor
@@ -474,6 +492,7 @@ impl Agent {
         handler: Arc<dyn AgentEventHandler>,
         control: crate::RunControl,
     ) -> AgentTurnOutcome {
+        control.shared.bind_custom_inbox(self.custom_inbox.clone());
         control.shared.start();
         let mut outcome = self
             .run_prompt_with_session_outcome(
@@ -630,6 +649,8 @@ impl Agent {
             let message = prompt.message().clone();
             initial = self.system_messages();
             initial.push(message);
+            let pending_custom = self.custom_inbox.claim(&session.metadata().id)?;
+            initial.extend(pending_custom.messages.iter().map(|m| m.message().clone()));
             model?;
             let mut request = self.completion_request(initial.clone());
             request.model = requested_model;
@@ -675,6 +696,11 @@ impl Agent {
                 });
             }
             entries.push(prompt.entry());
+            let next_turn_messages = pending_custom.messages.len();
+            for (custom,origin) in pending_custom.messages.iter().cloned().zip(&pending_custom.origins){
+                entries.push(SessionEntryData::Extension{namespace:"aicoder.custom-next-turn.v1".into(),data:serde_json::json!({"queue_id":origin.id,"queued_run_id":origin.run_id,"queued_input_id":origin.input_id,"source":custom.source(),"custom_type":custom.custom_type()})});
+                entries.push(SessionEntryData::CustomMessage{custom});
+            }
             let startup_messages = input
                 .prepared_start
                 .as_ref()
@@ -684,6 +710,7 @@ impl Agent {
             }
             preparation_stage = RunStage::Persistence;
             session.append(repository, entries)?;
+            pending_custom.commit();
             input.input_committed = true;
             if let Some(start) = &mut input.prepared_start {
                 start.committed = true;
@@ -691,7 +718,7 @@ impl Agent {
             if let Some(source) = &mut input.source {
                 source.revision = session.metadata().revision;
                 source.leaf_id = session.metadata().leaf_id.clone();
-                source.recorded_messages += 1 + startup_messages;
+                source.recorded_messages += 1 + startup_messages + next_turn_messages;
             }
             Ok::<_, anyhow::Error>((
                 SessionJournal::new(repository, session, turn_id),

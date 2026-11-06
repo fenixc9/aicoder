@@ -105,8 +105,10 @@ that full product parity has already been achieved.
    [Idle custom messages](custom-messages.md) now support typed source/text/images/display/details,
    record-only and trigger-turn session paths, explicit startup trigger metadata, and native
    TUI/Web command submission without synthetic users. Canonical custom history stays separate
-   from JSON/SSE provider projections. Custom delivery while busy (steer/follow-up/next-turn and
-   deferred no-trigger append) remains open.
+   from JSON/SSE provider projections. [Busy custom delivery](custom-delivery.md) now supports
+   steer/follow-up, safe no-trigger context and bounded session next-turn inboxes. Claims, late
+   arrivals, cancellation, failed preparation, explicit generation transfer and verification
+   retries have separate executable evidence; stored metadata never restores queue authority.
    [Raw input interception](input-hooks.md) now implements ordered continue/transform/handled
    before expansion or steering notification. Explicit handled outcomes, ephemeral raw recovery,
    nonblocking RPC/TUI submission and authenticated Web initial input are exercised separately;

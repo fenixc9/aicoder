@@ -4,9 +4,12 @@
 //! CLI, TUI, server, or embedded application can choose its own configuration and presentation.
 
 pub mod agent;
+mod custom_inbox;
+pub use custom_inbox::{CustomInbox, PendingCustomMessage};
 mod agent_prompt;
 pub use agent_prompt::{
-    AgentPrompt, CUSTOM_MESSAGE_NAMESPACE, CustomMessage, MAX_CUSTOM_MESSAGE_BYTES, RunTrigger,
+    AgentPrompt, CUSTOM_MESSAGE_NAMESPACE, CustomMessage, CustomMessageMetadata,
+    MAX_CUSTOM_MESSAGE_BYTES, RunTrigger,
 };
 pub mod agent_input;
 pub use agent_input::{AgentInput, InputSource};
@@ -67,7 +70,8 @@ pub use run::{
 pub use journal::RunJournal;
 
 pub use control::{
-    ApprovalRequestId, InputSubmission, PendingRunApproval, RejectedInputSubmission,
-    RejectedRunInput, RunControl, RunControlConfig, RunControlError, RunControlSnapshot,
-    RunControlStatus, RunHandle, RunInput, RunInputKind,
+    ApprovalRequestId, CustomDelivery, CustomSubmission, CustomSubmissionFuture, InputSubmission,
+    PendingRunApproval, RejectedCustomSubmission, RejectedInputSubmission, RejectedRunInput,
+    RunControl, RunControlConfig, RunControlError, RunControlSnapshot, RunControlStatus, RunHandle,
+    RunInput, RunInputKind,
 };

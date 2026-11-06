@@ -70,10 +70,9 @@ TUI and authenticated Web command hosts use the same Agent session path after co
 with existing cancellation/supersession checks and host bounds. They add no synthetic User row
 or transcript message. Notice remains a no-run command result; Submit remains user input.
 
-This increment covers idle store/trigger paths. RunHandle still accepts user controls; custom
-steer/follow-up/next-turn delivery and deferred no-trigger custom messages while busy remain open,
-alongside message transforms, boundary context-edit/compaction drafts and session lifecycle veto.
-See the [Pi audit](pi-parity-audit.md).
+[Busy custom delivery](custom-delivery.md) adds steer/follow-up, deferred no-trigger context and
+session-scoped next-turn inboxes. Message transforms, session lifecycle veto and boundary
+context-edit/compaction drafts remain in the [Pi audit](pi-parity-audit.md).
 
 Run the [offline runtime example](../crates/aicoder-runtime/examples/offline_custom_messages.rs):
 

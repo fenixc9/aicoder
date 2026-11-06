@@ -150,6 +150,19 @@ impl EventTraceValidator {
                 );
                 self.state.transition(transition.current)?;
             }
+            AgentRawEvent::RunInputApplied { input } => {
+                ensure!(
+                    input.id > 0 && input.run_id == envelope.run_id.to_string(),
+                    "applied input identity differs from its run"
+                );
+                if input.custom_message()?.is_none() {
+                    crate::AgentInput::try_from(input.message.clone())?;
+                    ensure!(
+                        input.kind != crate::RunInputKind::Context,
+                        "context-only input requires custom metadata"
+                    );
+                }
+            }
             AgentRawEvent::RoundStarted => {
                 let round = envelope
                     .round

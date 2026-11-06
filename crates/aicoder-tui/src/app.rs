@@ -457,6 +457,10 @@ impl App {
         let result = match kind {
             RunInputKind::Steer => handle.steer(message),
             RunInputKind::FollowUp => handle.follow_up(message),
+            RunInputKind::Context => Err(aicoder_core::RejectedRunInput {
+                error: aicoder_core::RunControlError::InvalidInput,
+                message,
+            }),
         };
         let accepted = match result {
             Ok(id) => {
@@ -730,7 +734,9 @@ impl App {
                     "Applied {:?} #{}",
                     input.kind, input.id
                 )));
-                push_message(&mut self.timeline, &input.message);
+                if input.custom.as_ref().is_none_or(|custom| custom.display) {
+                    push_message(&mut self.timeline, &input.message);
+                }
             }
             AgentRawEvent::RunApprovalRequested { request } => {
                 if self.active_handle.as_ref().is_some_and(|handle| {
@@ -1735,5 +1741,39 @@ mod tests {
         assert!(!app.timeline.iter().any(
             |item| matches!(item,TimelineItem::Notice(text)if text.contains("CUSTOM_VISIBLE_FACT"))
         ));
+    }
+    #[test]
+    fn applied_custom_controls_render_as_extension_data_and_respect_hidden_display() {
+        for display in [false, true] {
+            let custom = aicoder_core::CustomMessage::text("sender", "note", "QUEUED_CUSTOM_ROW")
+                .unwrap()
+                .with_display(display);
+            let input = aicoder_core::RunInput {
+                custom: Some(custom.metadata()),
+                provenance: None,
+                run_id: aicoder_core::RunId::new().to_string(),
+                id: 1,
+                kind: RunInputKind::Context,
+                message: custom.message().clone(),
+            };
+            let mut app = App::new(vec![]);
+            app.apply(event(
+                1,
+                AgentRawEvent::RunInputApplied {
+                    input: Arc::new(input),
+                },
+            ));
+            assert!(
+                !app.timeline
+                    .iter()
+                    .any(|v| matches!(v, TimelineItem::User(_)))
+            );
+            assert_eq!(
+                app.timeline
+                    .iter()
+                    .any(|v| matches!(v,TimelineItem::Notice(t)if t.contains("QUEUED_CUSTOM_ROW"))),
+                display
+            );
+        }
     }
 }

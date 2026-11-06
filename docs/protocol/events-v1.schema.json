@@ -466,7 +466,8 @@
     "input_kind": {
       "enum": [
         "steer",
-        "follow_up"
+        "follow_up",
+        "context"
       ]
     },
     "input_ref": {
@@ -507,7 +508,17 @@
           "$ref": "#/$defs/input_kind"
         },
         "message": {
-          "$ref": "#/$defs/message"
+          "oneOf": [
+            {
+              "$ref": "#/$defs/user_control_message"
+            },
+            {
+              "$ref": "#/$defs/custom_input_message"
+            }
+          ]
+        },
+        "custom": {
+          "$ref": "#/$defs/custom_input_metadata"
         }
       },
       "required": [
@@ -515,6 +526,35 @@
         "id",
         "kind",
         "message"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "custom"
+            ]
+          },
+          "then": {
+            "properties": {
+              "message": {
+                "$ref": "#/$defs/custom_input_message"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "message": {
+                "$ref": "#/$defs/user_control_message"
+              },
+              "kind": {
+                "enum": [
+                  "steer",
+                  "follow_up"
+                ]
+              }
+            }
+          }
+        }
       ]
     },
     "approval_id": {
@@ -2691,6 +2731,70 @@
       "required": [
         "used",
         "estimated"
+      ]
+    },
+    "custom_input_metadata": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "custom_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "display": {
+          "type": "boolean"
+        },
+        "details": {}
+      },
+      "required": [
+        "source",
+        "custom_type",
+        "display"
+      ],
+      "additionalProperties": false
+    },
+    "custom_input_message": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "const": "custom"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/content"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ]
+    },
+    "user_control_message": {
+      "type": "object",
+      "properties": {
+        "role": {
+          "const": "user"
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/content"
+          }
+        }
+      },
+      "required": [
+        "role",
+        "content"
       ]
     }
   }

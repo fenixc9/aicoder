@@ -19,4 +19,19 @@ for path in paths:
         except (ValueError, jsonschema.ValidationError) as error:
             raise SystemExit(f"{path}:{line_number}: {error}") from error
         count += 1
+# Canonical custom controls preserve their role/metadata pairing in the same v1 envelope.
+frame = json.loads((ROOT / "docs/protocol/events-v1-trace.jsonl").read_text().splitlines()[0])
+frame["round"] = 1
+control = {"run_id": frame["run_id"], "id": 1, "kind": "context",
+           "message": {"role": "custom", "content": [{"type": "text", "text": "[aicoder custom fixture/note]\ncontext"}]},
+           "custom": {"source": "fixture", "custom_type": "note", "display": False, "details": {"inert": True}}}
+frame["event"] = {"type": "run_input_applied", "input": control}
+for kind in ("steer", "follow_up", "context"):
+    control["kind"] = kind
+    validator.validate(frame)
+    count += 1
+control.pop("custom")
+assert list(validator.iter_errors(frame)), "custom control without metadata was accepted"
+control["message"]["role"] = "user"
+assert list(validator.iter_errors(frame)), "user control used context-only delivery"
 print(f"Validated {count} event frames against schema v1")
