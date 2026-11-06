@@ -122,10 +122,12 @@ try:
             time.sleep(.1);fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',16,60,0,0));os.kill(child.pid,signal.SIGWINCH);time.sleep(.1);drain();assert child.poll() is None
             fcntl.ioctl(master,termios.TIOCSWINSZ,struct.pack('HHHH',30,140,0,0));os.kill(child.pid,signal.SIGWINCH);time.sleep(.1);drain()
             output.clear();send('hold\r');until(lambda:len(requests)==5,'held request')
-            command('/file context.txt','Attached context.txt');output.clear();send('steered-reference\r');until(lambda:marker('Queued Steer'),'steer')
+            # Differential drawing can reuse letters in 'Queued'; assert delivery suffixes,
+            # then verify the actual effective model messages below.
+            command('/file context.txt','Attached context.txt');output.clear();send('steered-reference\r');until(lambda:marker('Steer #'),'steer')
             # ANSI diff rendering can retain the unchanged 'Queued ' prefix from Steer.
             # The changed kind is visible; exact delivery is asserted against requests below.
-            output.clear();send('after');send('\x1b\r');until(lambda:marker('FollowUp'),'follow-up');release.set();finished(7,5)
+            output.clear();send('after');send('\x1b\r');until(lambda:marker('Up #'),'follow-up');release.set();finished(7,5)
             assert 'steered-reference' in requests[5]['messages'][-1]['content'] and 'changed on disk' in requests[5]['messages'][-1]['content'];assert requests[6]['messages'][-1]['content']=='after'
             output.clear();submit('mutate',8);until(lambda:len(requests)==8 and marker('Approval'),'prepared approval');assert not (workspace/'never.txt').exists()
             send('\x1b[200~y\n\x1b[201~');time.sleep(.15);drain();assert len(requests)==8 and not (workspace/'never.txt').exists()

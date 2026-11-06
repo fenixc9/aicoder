@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "phase": "S7 terminal exit timing follow-up",
+  "reference_revision": "9b4b468",
+  "tui_tests": 49,
+  "checks": [
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--check"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "aicoder-tui",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "aicoder-cli",
+        "-p",
+        "aicoder-tui",
+        "-p",
+        "aicoder-web",
+        "--features",
+        "server,images,code-mode",
+        "--bins"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "-p",
+        "aicoder-tui",
+        "--example",
+        "offline_extension_ui"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "scripts/check_tui_interaction.py"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "scripts/check_extension_ui.py"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "scripts/check_input_hooks.py"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "scripts/check_custom_messages.py"
+      ],
+      "exit_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "scripts/check_file_images.py",
+        "--generate-images"
+      ],
+      "exit_code": 0
+    }
+  ],
+  "regression_before_fix": {
+    "terminal_ctrl_c": 1,
+    "active_ctrl_c": 0
+  },
+  "regression_after_fix": "Both cases pass in the full TUI target suite.",
+  "additional_check": {
+    "command": [
+      "env",
+      "RUSTDOCFLAGS=-D warnings",
+      "cargo",
+      "doc",
+      "--locked",
+      "-p",
+      "aicoder-tui",
+      "--all-features",
+      "--no-deps"
+    ],
+    "exit_code": 0
+  },
+  "harness_finding": "Queued Steer was emitted as differential drawing fragments (Queud Steer #1); use delivery suffix and retain actual model-message assertions.",
+  "performance_report": "s7-matched-smoke-report.json",
+  "new_real_model_requests": 0,
+  "verification_input_sha256": {
+    "crates/aicoder-tui/src/lib.rs": "6487719ba8ff8c217a0b91b3bca7e211de3547d92ba56c52c79cc30b7e9dc852",
+    "scripts/check_tui_interaction.py": "36f3fd89b20a8a85929936dd2a87ad7701665d68e27ec030cfa970adde59cf56"
+  }
+}

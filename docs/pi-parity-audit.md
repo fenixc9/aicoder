@@ -134,3 +134,7 @@ original score/release requirements stay open; local scripted scores cannot subs
 
 The next implementation item is actionable lifecycle coverage. The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.
+
+[Terminal/performance follow-up](s7-terminal-exit-followup.md) records the TUI terminal-owner
+exit window and matched smoke sampling. It supplements the retained footprint observations;
+no real-model comparison or release-quality gate is closed by those measurements.

@@ -91,3 +91,8 @@ Terminal backends can buffer a complete paste event before the composer validate
 The 64 KiB limit bounds accepted drafts; it is not a transport-level memory ceiling for an
 arbitrarily large/incomplete terminal event. Legacy unbracketed text is indistinguishable
 from typed keys and cannot inherit bracketed-paste guarantees.
+
+Ctrl-C after an observed terminal run state requests exit even if the final owner result is
+still pending. Shutdown continues to cancel/drain owners, reference captures and input jobs
+before returning. During active work Ctrl-C cancels first; an active reference capture retains
+that cancellation behavior. This closes the terminal-event/owner-result timing window.

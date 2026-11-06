@@ -1,0 +1,367 @@
+{
+  "schema_version": 1,
+  "scope": "Same-host matched standalone-runtime release commands; ten interleaved AB/BA pairs, 125 cases each process, all samples retained. Source snapshots exclude the subsequent TUI-only fix. No actual credentials or external model; all benchmark payloads stay outside this report.",
+  "identity": {
+    "reference": {
+      "revision": "34ffa3dadd7d61bc7c1259d9c5514c3185a3d537",
+      "source_dirty": false,
+      "build_command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "aicoder-runtime",
+        "--example",
+        "offline_smoke",
+        "--target-dir",
+        "/home/fenix/project/aicoder/target"
+      ],
+      "bytes": 11353872,
+      "sha256": "c7f1313c5e33514a7c56a2bef5fd3eab931f997450581ffe390380dea082f820"
+    },
+    "candidate": {
+      "revision": "9b4b468eb7e80ba5263cdadea436a946ca7a81b3",
+      "source_dirty": false,
+      "build_command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "aicoder-runtime",
+        "--example",
+        "offline_smoke",
+        "--target-dir",
+        "/home/fenix/project/aicoder/target"
+      ],
+      "bytes": 11353872,
+      "sha256": "c7f1313c5e33514a7c56a2bef5fd3eab931f997450581ffe390380dea082f820"
+    }
+  },
+  "platform": "Linux-6.8.0-101-generic-x86_64-with-glibc2.35",
+  "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+  "load_before": [
+    "8.37",
+    "7.26",
+    "8.15"
+  ],
+  "load_after": [
+    "7.39",
+    "7.09",
+    "8.08"
+  ],
+  "records": [
+    {
+      "pair": 0,
+      "name": "reference",
+      "wall_ms": 469.54421792179346,
+      "case_total_ms": 431.678,
+      "case_medians_ms": {
+        "Edit": 4.357,
+        "Search": 0.794,
+        "ToolFailure": 0.369,
+        "Cancel": 0.22,
+        "SessionResume": 10.508
+      },
+      "max_case_ms": 16.282
+    },
+    {
+      "pair": 0,
+      "name": "candidate",
+      "wall_ms": 420.7572303712368,
+      "case_total_ms": 388.085,
+      "case_medians_ms": {
+        "Edit": 4.139,
+        "Search": 0.618,
+        "ToolFailure": 0.319,
+        "Cancel": 0.191,
+        "SessionResume": 9.987
+      },
+      "max_case_ms": 12.559
+    },
+    {
+      "pair": 1,
+      "name": "candidate",
+      "wall_ms": 400.1298937946558,
+      "case_total_ms": 369.085,
+      "case_medians_ms": {
+        "Edit": 3.806,
+        "Search": 0.487,
+        "ToolFailure": 0.249,
+        "Cancel": 0.149,
+        "SessionResume": 9.286
+      },
+      "max_case_ms": 16.072
+    },
+    {
+      "pair": 1,
+      "name": "reference",
+      "wall_ms": 819.5444867014885,
+      "case_total_ms": 784.862,
+      "case_medians_ms": {
+        "Edit": 3.948,
+        "Search": 0.552,
+        "ToolFailure": 0.278,
+        "Cancel": 0.174,
+        "SessionResume": 9.794
+      },
+      "max_case_ms": 393.825
+    },
+    {
+      "pair": 2,
+      "name": "reference",
+      "wall_ms": 542.2057481482625,
+      "case_total_ms": 499.028,
+      "case_medians_ms": {
+        "Edit": 4.623,
+        "Search": 0.779,
+        "ToolFailure": 0.414,
+        "Cancel": 0.271,
+        "SessionResume": 11.405
+      },
+      "max_case_ms": 24.716
+    },
+    {
+      "pair": 2,
+      "name": "candidate",
+      "wall_ms": 402.74074114859104,
+      "case_total_ms": 372.759,
+      "case_medians_ms": {
+        "Edit": 4.029,
+        "Search": 0.555,
+        "ToolFailure": 0.287,
+        "Cancel": 0.172,
+        "SessionResume": 9.593
+      },
+      "max_case_ms": 13.035
+    },
+    {
+      "pair": 3,
+      "name": "candidate",
+      "wall_ms": 377.0126113668084,
+      "case_total_ms": 351.063,
+      "case_medians_ms": {
+        "Edit": 3.848,
+        "Search": 0.497,
+        "ToolFailure": 0.252,
+        "Cancel": 0.148,
+        "SessionResume": 9.298
+      },
+      "max_case_ms": 9.834
+    },
+    {
+      "pair": 3,
+      "name": "reference",
+      "wall_ms": 376.35758239775896,
+      "case_total_ms": 350.719,
+      "case_medians_ms": {
+        "Edit": 3.819,
+        "Search": 0.478,
+        "ToolFailure": 0.243,
+        "Cancel": 0.144,
+        "SessionResume": 9.13
+      },
+      "max_case_ms": 9.747
+    },
+    {
+      "pair": 4,
+      "name": "reference",
+      "wall_ms": 375.5022697150707,
+      "case_total_ms": 349.619,
+      "case_medians_ms": {
+        "Edit": 3.747,
+        "Search": 0.486,
+        "ToolFailure": 0.244,
+        "Cancel": 0.147,
+        "SessionResume": 9.33
+      },
+      "max_case_ms": 10.113
+    },
+    {
+      "pair": 4,
+      "name": "candidate",
+      "wall_ms": 377.68958136439323,
+      "case_total_ms": 351.636,
+      "case_medians_ms": {
+        "Edit": 3.754,
+        "Search": 0.493,
+        "ToolFailure": 0.261,
+        "Cancel": 0.151,
+        "SessionResume": 9.361
+      },
+      "max_case_ms": 10.736
+    },
+    {
+      "pair": 5,
+      "name": "candidate",
+      "wall_ms": 386.0957147553563,
+      "case_total_ms": 359.902,
+      "case_medians_ms": {
+        "Edit": 3.891,
+        "Search": 0.498,
+        "ToolFailure": 0.262,
+        "Cancel": 0.156,
+        "SessionResume": 9.481
+      },
+      "max_case_ms": 11.823
+    },
+    {
+      "pair": 5,
+      "name": "reference",
+      "wall_ms": 390.8803528174758,
+      "case_total_ms": 364.046,
+      "case_medians_ms": {
+        "Edit": 3.916,
+        "Search": 0.502,
+        "ToolFailure": 0.26,
+        "Cancel": 0.157,
+        "SessionResume": 9.418
+      },
+      "max_case_ms": 11.347
+    },
+    {
+      "pair": 6,
+      "name": "reference",
+      "wall_ms": 678.1772999092937,
+      "case_total_ms": 621.385,
+      "case_medians_ms": {
+        "Edit": 6.342,
+        "Search": 1.504,
+        "ToolFailure": 0.734,
+        "Cancel": 0.406,
+        "SessionResume": 14.74
+      },
+      "max_case_ms": 22.247
+    },
+    {
+      "pair": 6,
+      "name": "candidate",
+      "wall_ms": 935.7860181480646,
+      "case_total_ms": 902.842,
+      "case_medians_ms": {
+        "Edit": 4.001,
+        "Search": 0.532,
+        "ToolFailure": 0.285,
+        "Cancel": 0.16,
+        "SessionResume": 9.92
+      },
+      "max_case_ms": 490.565
+    },
+    {
+      "pair": 7,
+      "name": "candidate",
+      "wall_ms": 449.6266394853592,
+      "case_total_ms": 415.325,
+      "case_medians_ms": {
+        "Edit": 4.114,
+        "Search": 0.599,
+        "ToolFailure": 0.293,
+        "Cancel": 0.163,
+        "SessionResume": 9.853
+      },
+      "max_case_ms": 17.694
+    },
+    {
+      "pair": 7,
+      "name": "reference",
+      "wall_ms": 390.50382003188133,
+      "case_total_ms": 363.414,
+      "case_medians_ms": {
+        "Edit": 3.855,
+        "Search": 0.512,
+        "ToolFailure": 0.248,
+        "Cancel": 0.15,
+        "SessionResume": 9.723
+      },
+      "max_case_ms": 11.406
+    },
+    {
+      "pair": 8,
+      "name": "reference",
+      "wall_ms": 386.88976131379604,
+      "case_total_ms": 360.042,
+      "case_medians_ms": {
+        "Edit": 3.892,
+        "Search": 0.515,
+        "ToolFailure": 0.251,
+        "Cancel": 0.15,
+        "SessionResume": 9.446
+      },
+      "max_case_ms": 10.239
+    },
+    {
+      "pair": 8,
+      "name": "candidate",
+      "wall_ms": 394.3666573613882,
+      "case_total_ms": 365.316,
+      "case_medians_ms": {
+        "Edit": 3.95,
+        "Search": 0.561,
+        "ToolFailure": 0.255,
+        "Cancel": 0.158,
+        "SessionResume": 9.62
+      },
+      "max_case_ms": 10.389
+    },
+    {
+      "pair": 9,
+      "name": "candidate",
+      "wall_ms": 403.8350488990545,
+      "case_total_ms": 375.201,
+      "case_medians_ms": {
+        "Edit": 4.012,
+        "Search": 0.584,
+        "ToolFailure": 0.277,
+        "Cancel": 0.158,
+        "SessionResume": 9.734
+      },
+      "max_case_ms": 13.136
+    },
+    {
+      "pair": 9,
+      "name": "reference",
+      "wall_ms": 381.0511473566294,
+      "case_total_ms": 355.848,
+      "case_medians_ms": {
+        "Edit": 3.781,
+        "Search": 0.493,
+        "ToolFailure": 0.25,
+        "Cancel": 0.142,
+        "SessionResume": 9.295
+      },
+      "max_case_ms": 11.477
+    }
+  ],
+  "summary": {
+    "reference": {
+      "wall_median_ms": 390.69208642467856,
+      "case_total_median_ms": 363.73,
+      "case_medians_ms": {
+        "Edit": 3.904,
+        "Search": 0.5135000000000001,
+        "ToolFailure": 0.2555,
+        "Cancel": 0.1535,
+        "SessionResume": 9.5845
+      }
+    },
+    "candidate": {
+      "wall_median_ms": 401.4353174716234,
+      "case_total_median_ms": 370.922,
+      "case_medians_ms": {
+        "Edit": 3.9755000000000003,
+        "Search": 0.5435000000000001,
+        "ToolFailure": 0.2695,
+        "Cancel": 0.158,
+        "SessionResume": 9.6065
+      }
+    }
+  },
+  "wall_change_percent": 2.7497948948131734,
+  "limitations": [
+    "Shared host/filesystem and warm cache; no CPU affinity, OS cache reset, cold build or allocator/section profile.",
+    "Standalone feature selection differs from prior workspace-default footprint samples; this supplements rather than replaces them.",
+    "This is scripted smoke performance, not real-model success, invoice or isolated peak RSS."
+  ],
+  "paired_wall_change_median_percent": 0.3782736116940355
+}

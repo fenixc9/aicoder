@@ -481,13 +481,17 @@ fn handle_paste(app: &mut App, text: &str) {
     }
 }
 
+fn handle_interrupt(app: &mut App) {
+    if app.reference.is_some() || app.is_running() && !app.state.is_terminal() {
+        app.cancel("Ctrl-C pressed");
+    } else {
+        app.should_quit = true;
+    }
+}
+
 fn handle_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) -> Result<()> {
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        if app.is_running() || app.reference.is_some() {
-            app.cancel("Ctrl-C pressed");
-        } else {
-            app.should_quit = true;
-        }
+        handle_interrupt(app);
         return Ok(());
     }
     if app.approval.is_some() {
@@ -1280,5 +1284,33 @@ mod tests {
         handle_paste(&mut app, "y\n");
         assert!(app.approval.is_some());
         assert_eq!(app.input.value(), "/exit\ny\n");
+    }
+    #[test]
+    fn ctrl_c_after_a_terminal_event_exits_even_while_the_owner_result_is_pending() {
+        for state in [
+            aicoder_core::AgentRunState::Completed { rounds: 1 },
+            aicoder_core::AgentRunState::Failed { round: Some(1) },
+            aicoder_core::AgentRunState::Aborted { round: Some(1) },
+            aicoder_core::AgentRunState::Stopped { round: Some(1) },
+        ] {
+            let mut app = App::new(vec![]);
+            app.begin_turn("active".into(), TurnExecutionContext::new());
+            app.state = state;
+            assert!(app.is_running());
+            handle_interrupt(&mut app);
+            assert!(app.should_quit);
+        }
+    }
+    #[test]
+    fn ctrl_c_during_active_work_cancels_before_exiting() {
+        let context = TurnExecutionContext::new();
+        let mut app = App::new(vec![]);
+        app.begin_turn("active".into(), context.clone());
+        handle_interrupt(&mut app);
+        assert!(context.is_cancelled());
+        assert!(!app.should_quit);
+        let mut idle = App::new(vec![]);
+        handle_interrupt(&mut idle);
+        assert!(idle.should_quit);
     }
 }
