@@ -773,6 +773,30 @@ impl App {
             }
             AgentRawEvent::StateChanged { transition } => self.state = transition.current,
             AgentRawEvent::ModelRequestStarted => self.response_start = self.timeline.len(),
+            AgentRawEvent::MessageFinalized {
+                message,
+                custom,
+                origin,
+                changed,
+            } => {
+                if changed
+                    && custom.as_ref().is_none_or(|m| m.display)
+                    && (matches!(
+                        origin,
+                        aicoder_core::extensions::MessageOrigin::Initial
+                            | aicoder_core::extensions::MessageOrigin::NextTurn
+                    ) || message.role == MessageRole::Tool)
+                    && message.role != MessageRole::Assistant
+                {
+                    let text = message
+                        .tool_result()
+                        .map_or_else(|| message.text_content(), |(_, v, _)| v.to_string());
+                    self.timeline.push(TimelineItem::Notice(format!(
+                        "[Finalized {:?} message]\n{text}",
+                        message.role
+                    )));
+                }
+            }
             AgentRawEvent::AssistantMessageFinalized { message, changed } => {
                 if changed {
                     let start = self.response_start.min(self.timeline.len());
@@ -1887,5 +1911,29 @@ mod tests {
                 .iter()
                 .any(|v| matches!(v, TimelineItem::Notice(text) if text=="during response"))
         );
+    }
+    #[test]
+    fn finalized_custom_events_respect_hidden_display_metadata() {
+        for display in [false, true] {
+            let custom = aicoder_core::CustomMessage::text("sender", "note", "FINAL_CUSTOM_UI")
+                .unwrap()
+                .with_display(display);
+            let mut app = App::new(vec![]);
+            app.apply(event(
+                1,
+                AgentRawEvent::MessageFinalized {
+                    message: Arc::new(custom.message().clone()),
+                    custom: Some(custom.metadata()),
+                    origin: aicoder_core::extensions::MessageOrigin::Initial,
+                    changed: true,
+                },
+            ));
+            assert_eq!(
+                app.timeline.iter().any(
+                    |v| matches!(v,TimelineItem::Notice(text)if text.contains("FINAL_CUSTOM_UI"))
+                ),
+                display
+            );
+        }
     }
 }

@@ -72,6 +72,7 @@ impl Default for DispatcherConfig {
 }
 
 pub struct ToolDispatcher {
+    pub(crate) message_finalizers: Option<Arc<crate::extensions::MessageFinalizers>>,
     call_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::ToolCallHook>>,
     result_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::ToolResultHook>>,
     counting: crate::tokens::TokenCounting,
@@ -92,6 +93,7 @@ impl ToolDispatcher {
         let context =
             ToolContext::new(workspace_root, config.tool_timeout, config.max_output_bytes)?;
         Ok(Self {
+            message_finalizers: None,
             call_hooks: Vec::new(),
             result_hooks: Vec::new(),
             counting: crate::tokens::TokenCounting::default(),
@@ -275,8 +277,33 @@ impl ToolDispatcher {
             )
             .await
         };
-        if let (Some((_, capture, journal)), Ok(message)) = (control, &result) {
+        if let (Some((limits, capture, journal)), Ok(message)) = (control, &result) {
             capture.0.lock().expect("tool progress poisoned")[index] = Some(message.clone());
+            if let Some(chain) = &self.message_finalizers {
+                let original = message.clone();
+                let prepared=async {
+                    let context=context.expect("recorded tool context");
+                    let journal=journal.ok_or_else(||anyhow::anyhow!("message finalization requires an explicit run journal"))?;
+                    limits.check()?;
+                    let finalized=chain.prepare(&original,None,crate::extensions::MessageOrigin::Tool,events.and_then(|e|e.round_scope()),context).await?.expect("installed message hooks");
+                    let (_,envelope,is_error)=finalized.message.tool_result().expect("validated tool result");
+                    let payload=&envelope[if is_error{"error"}else{"output"}];
+                    crate::extensions::size(payload,self.config.max_output_bytes)?;
+                    limits.charge_output_bytes(finalized.encoded_bytes()?)?;
+                    let commit=crate::extensions::MessageFinalizationCommit{index:journal.base_index+index,finalized:finalized.clone(),input:None,assistant:None};
+                    tokio::select!{biased;cancelled=context.cancelled()=>return Err(cancelled.into()),result=tokio::time::timeout(Duration::from_secs(30),journal.journal.finalize_message(&commit))=>result.map_err(|_|anyhow::anyhow!("tool finalization commit timed out")).and_then(|v|v).map_err(|e|RunFailure::from_error(RunStage::Persistence,&e))?}
+                    capture.0.lock().expect("tool progress poisoned")[index]=Some(finalized.message.clone());
+                    if let Some(events)=events {events.emit(finalized.event());}
+                    let message=finalized.message;limits.check()?;Ok::<_,anyhow::Error>(message)
+                }.await;
+                if let Err(error) = &prepared
+                    && let Some(failure) = error.downcast_ref::<RunFailure>()
+                    && failure.stage == RunStage::Persistence
+                {
+                    *capture.1.lock().expect("tool progress poisoned") = Some(failure.clone());
+                }
+                return prepared;
+            }
             if let Some(journal) = journal
                 && let Err(error) = journal
                     .journal
@@ -304,6 +331,10 @@ impl ToolDispatcher {
             Option<DispatchJournal<'_>>,
         )>,
     ) -> Result<Vec<Message>> {
+        anyhow::ensure!(
+            self.message_finalizers.is_none() || control.is_some(),
+            "message finalization requires an owned captured dispatch"
+        );
         if calls.len() > self.config.max_calls_per_round {
             anyhow::bail!(
                 "Tool call limit exceeded: {} > {}",

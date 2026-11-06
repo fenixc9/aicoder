@@ -53,6 +53,8 @@ explicit context at successful round/settlement boundaries and can continue the 
 turn validation. [Raw input hooks](input-hooks.md) transform or consume input before expansion/queueing.
 [Assistant finalization](assistant-finalization.md) transforms paid assistant text/visible reasoning
 before persistence, tool dispatch and verification. Stream events remain raw previews.
+[General message hooks](message-finalization.md) cover fresh messages across all canonical roles,
+including queued/idle custom messages and sourced context, without rewriting restored history.
 Message transforms and session navigation veto remain open.
 
 HookSpec defines local ID, signed priority and a 1 ms–30 s timeout (default two seconds).

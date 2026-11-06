@@ -134,7 +134,8 @@ impl TurnExecutor {
             .iter()
             .filter(|p| matches!(p.entry, BoundaryEntry::Context { .. }))
             .count();
-        let commit = BoundaryCommit {
+        let mut commit = BoundaryCommit {
+            message_finalizations: Vec::new(),
             startup: Some(StartupMetadata {
                 system_prefix_messages: input.system_prefix_len,
                 tools: input.request.tools.iter().map(|t| t.name.clone()).collect(),
@@ -147,6 +148,18 @@ impl TurnExecutor {
             continue_run: false,
             changes: boundary_changes,
         };
+        self.finalize_context_commit(&mut commit, context).await?;
+        if !commit.message_finalizations.is_empty() {
+            let messages = commit.messages();
+            let n = messages.len();
+            input
+                .history
+                .splice(input.history.len() - n.., messages.iter().cloned());
+            input
+                .request
+                .messages
+                .splice(input.request.messages.len() - n.., messages);
+        }
         size(&commit, 128 * 1024)?;
         let prefix = prefix_edited.then(|| &input.request.messages[..input.system_prefix_len]);
         size(&(&commit, commit.messages(), prefix), 256 * 1024)?;
@@ -222,6 +235,7 @@ impl TurnExecutor {
             progress.input_messages = prepared.commit.base_index;
             *prepared_view = None;
         }
+        Self::context_finalization_events(&prepared.commit, events);
         events.emit(AgentRawEvent::LifecycleBoundaryCommitted {
             boundary: BoundaryKind::BeforeStart,
             entries: prepared.commit.entries.len(),

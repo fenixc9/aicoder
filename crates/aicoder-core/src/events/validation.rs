@@ -150,6 +150,29 @@ impl EventTraceValidator {
                 );
                 self.state.transition(transition.current)?;
             }
+            AgentRawEvent::MessageFinalized {
+                message,
+                custom,
+                origin,
+                ..
+            } => {
+                ensure!(
+                    origin.accepts(message.role),
+                    "finalized event origin/role mismatch"
+                );
+                ensure!(!message.content.is_empty(), "empty finalized message");
+                if let Some(metadata) = custom {
+                    crate::CustomMessage::from_canonical(
+                        metadata.clone(),
+                        message.as_ref().clone(),
+                    )?;
+                } else {
+                    ensure!(
+                        message.role != crate::model::MessageRole::Custom,
+                        "finalized custom message lacks metadata"
+                    );
+                }
+            }
             AgentRawEvent::AssistantMessageFinalized { message, .. } => {
                 ensure!(
                     message.role == crate::model::MessageRole::Assistant

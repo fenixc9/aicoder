@@ -1,0 +1,432 @@
+{
+  "schema_version": 1,
+  "scope": "Two independent target directories, compiler-artifact source bindings and frozen distinct executable hashes; ten interleaved AB/BA pairs, 125 scripted cases per process, all samples retained. Candidate is the current implementation digest, reference the preceding committed assistant-finalization feature.",
+  "identity": {
+    "reference": {
+      "revision": "191fd8012ef53e4af2fe61e8d36dde2cb334d5e7",
+      "source_sha256": "56442e5c21ea52b6927ae2a69f0a02f9ef53e19222ba06b97c02d65d5a410c0e",
+      "source_dirty": false,
+      "build_command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "aicoder-runtime",
+        "--example",
+        "offline_smoke",
+        "--target-dir",
+        "<reference-target>",
+        "--message-format=json"
+      ],
+      "compiled_workspace_artifacts": {
+        "aicoder-core": [
+          {
+            "manifest_path": "<reference-checkout>/crates/aicoder-core/Cargo.toml",
+            "package_id": "path+<reference-checkout>/crates/aicoder-core#0.1.0",
+            "fresh": false
+          }
+        ],
+        "aicoder-providers": [
+          {
+            "manifest_path": "<reference-checkout>/crates/aicoder-providers/Cargo.toml",
+            "package_id": "path+<reference-checkout>/crates/aicoder-providers#0.1.0",
+            "fresh": false
+          }
+        ],
+        "aicoder-runtime": [
+          {
+            "manifest_path": "<reference-checkout>/crates/aicoder-runtime/Cargo.toml",
+            "package_id": "path+<reference-checkout>/crates/aicoder-runtime#0.1.0",
+            "fresh": false
+          }
+        ]
+      },
+      "bytes": 11557648,
+      "sha256": "26b4ebbdee9dcf93152ecc182210d63b013e1926a3b1d1c1c421a650fc4d0a1e"
+    },
+    "candidate": {
+      "revision": "191fd8012ef53e4af2fe61e8d36dde2cb334d5e7",
+      "source_sha256": "d741f68a75022051b1d6088e408625a4d08ee5a79dc00b6ec3ffc96915ad1fa5",
+      "source_dirty": true,
+      "build_command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "aicoder-runtime",
+        "--example",
+        "offline_smoke",
+        "--target-dir",
+        "<candidate-target>",
+        "--message-format=json"
+      ],
+      "compiled_workspace_artifacts": {
+        "aicoder-core": [
+          {
+            "manifest_path": "<candidate-checkout>/crates/aicoder-core/Cargo.toml",
+            "package_id": "path+<candidate-checkout>/crates/aicoder-core#0.1.0",
+            "fresh": false
+          }
+        ],
+        "aicoder-providers": [
+          {
+            "manifest_path": "<candidate-checkout>/crates/aicoder-providers/Cargo.toml",
+            "package_id": "path+<candidate-checkout>/crates/aicoder-providers#0.1.0",
+            "fresh": false
+          }
+        ],
+        "aicoder-runtime": [
+          {
+            "manifest_path": "<candidate-checkout>/crates/aicoder-runtime/Cargo.toml",
+            "package_id": "path+<candidate-checkout>/crates/aicoder-runtime#0.1.0",
+            "fresh": false
+          }
+        ]
+      },
+      "bytes": 11864904,
+      "sha256": "b49ae4517505af22104edee7cba8dc7f14d99151acae4ce95de1dcb4a6ec1645"
+    }
+  },
+  "platform": "Linux-6.8.0-101-generic-x86_64-with-glibc2.35",
+  "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)",
+  "load_before": [
+    "11.48",
+    "8.52",
+    "8.20"
+  ],
+  "load_after": [
+    "10.58",
+    "8.42",
+    "8.17"
+  ],
+  "records": [
+    {
+      "pair": 0,
+      "name": "reference",
+      "wall_ms": 400.2782730385661,
+      "case_total_ms": 369.274,
+      "case_medians_ms": {
+        "Edit": 3.91,
+        "Search": 0.603,
+        "ToolFailure": 0.325,
+        "Cancel": 0.195,
+        "SessionResume": 9.929
+      },
+      "max_case_ms": 10.192
+    },
+    {
+      "pair": 0,
+      "name": "candidate",
+      "wall_ms": 405.1909539848566,
+      "case_total_ms": 374.213,
+      "case_medians_ms": {
+        "Edit": 4.002,
+        "Search": 0.604,
+        "ToolFailure": 0.324,
+        "Cancel": 0.191,
+        "SessionResume": 10.046
+      },
+      "max_case_ms": 10.715
+    },
+    {
+      "pair": 1,
+      "name": "candidate",
+      "wall_ms": 385.90716663748026,
+      "case_total_ms": 358.633,
+      "case_medians_ms": {
+        "Edit": 3.825,
+        "Search": 0.48,
+        "ToolFailure": 0.25,
+        "Cancel": 0.142,
+        "SessionResume": 9.431
+      },
+      "max_case_ms": 10.992
+    },
+    {
+      "pair": 1,
+      "name": "reference",
+      "wall_ms": 406.4817298203707,
+      "case_total_ms": 376.358,
+      "case_medians_ms": {
+        "Edit": 4.058,
+        "Search": 0.616,
+        "ToolFailure": 0.322,
+        "Cancel": 0.191,
+        "SessionResume": 10.052
+      },
+      "max_case_ms": 11.369
+    },
+    {
+      "pair": 2,
+      "name": "reference",
+      "wall_ms": 404.52441945672035,
+      "case_total_ms": 373.997,
+      "case_medians_ms": {
+        "Edit": 4.106,
+        "Search": 0.624,
+        "ToolFailure": 0.321,
+        "Cancel": 0.192,
+        "SessionResume": 9.963
+      },
+      "max_case_ms": 11.38
+    },
+    {
+      "pair": 2,
+      "name": "candidate",
+      "wall_ms": 393.7600729987025,
+      "case_total_ms": 364.288,
+      "case_medians_ms": {
+        "Edit": 3.91,
+        "Search": 0.583,
+        "ToolFailure": 0.309,
+        "Cancel": 0.182,
+        "SessionResume": 9.546
+      },
+      "max_case_ms": 11.09
+    },
+    {
+      "pair": 3,
+      "name": "candidate",
+      "wall_ms": 406.1117712408304,
+      "case_total_ms": 376.188,
+      "case_medians_ms": {
+        "Edit": 4.076,
+        "Search": 0.611,
+        "ToolFailure": 0.318,
+        "Cancel": 0.192,
+        "SessionResume": 9.967
+      },
+      "max_case_ms": 10.387
+    },
+    {
+      "pair": 3,
+      "name": "reference",
+      "wall_ms": 392.7896497771144,
+      "case_total_ms": 364.072,
+      "case_medians_ms": {
+        "Edit": 3.866,
+        "Search": 0.541,
+        "ToolFailure": 0.302,
+        "Cancel": 0.183,
+        "SessionResume": 9.614
+      },
+      "max_case_ms": 11.949
+    },
+    {
+      "pair": 4,
+      "name": "reference",
+      "wall_ms": 401.61879267543554,
+      "case_total_ms": 371.38,
+      "case_medians_ms": {
+        "Edit": 4.001,
+        "Search": 0.599,
+        "ToolFailure": 0.32,
+        "Cancel": 0.19,
+        "SessionResume": 9.966
+      },
+      "max_case_ms": 12.119
+    },
+    {
+      "pair": 4,
+      "name": "candidate",
+      "wall_ms": 780.321704223752,
+      "case_total_ms": 754.243,
+      "case_medians_ms": {
+        "Edit": 3.787,
+        "Search": 0.462,
+        "ToolFailure": 0.231,
+        "Cancel": 0.138,
+        "SessionResume": 9.213
+      },
+      "max_case_ms": 407.282
+    },
+    {
+      "pair": 5,
+      "name": "candidate",
+      "wall_ms": 391.3299199193716,
+      "case_total_ms": 363.704,
+      "case_medians_ms": {
+        "Edit": 3.882,
+        "Search": 0.555,
+        "ToolFailure": 0.291,
+        "Cancel": 0.154,
+        "SessionResume": 9.501
+      },
+      "max_case_ms": 10.293
+    },
+    {
+      "pair": 5,
+      "name": "reference",
+      "wall_ms": 401.90204232931137,
+      "case_total_ms": 372.7,
+      "case_medians_ms": {
+        "Edit": 4.019,
+        "Search": 0.592,
+        "ToolFailure": 0.313,
+        "Cancel": 0.175,
+        "SessionResume": 9.876
+      },
+      "max_case_ms": 11.728
+    },
+    {
+      "pair": 6,
+      "name": "reference",
+      "wall_ms": 397.4624741822481,
+      "case_total_ms": 367.873,
+      "case_medians_ms": {
+        "Edit": 3.938,
+        "Search": 0.593,
+        "ToolFailure": 0.319,
+        "Cancel": 0.191,
+        "SessionResume": 9.677
+      },
+      "max_case_ms": 10.422
+    },
+    {
+      "pair": 6,
+      "name": "candidate",
+      "wall_ms": 398.6895214766264,
+      "case_total_ms": 370.384,
+      "case_medians_ms": {
+        "Edit": 3.848,
+        "Search": 0.569,
+        "ToolFailure": 0.314,
+        "Cancel": 0.179,
+        "SessionResume": 9.912
+      },
+      "max_case_ms": 13.151
+    },
+    {
+      "pair": 7,
+      "name": "candidate",
+      "wall_ms": 399.42967612296343,
+      "case_total_ms": 371.953,
+      "case_medians_ms": {
+        "Edit": 4.017,
+        "Search": 0.546,
+        "ToolFailure": 0.264,
+        "Cancel": 0.154,
+        "SessionResume": 9.688
+      },
+      "max_case_ms": 12.554
+    },
+    {
+      "pair": 7,
+      "name": "reference",
+      "wall_ms": 389.0479365363717,
+      "case_total_ms": 361.668,
+      "case_medians_ms": {
+        "Edit": 3.888,
+        "Search": 0.518,
+        "ToolFailure": 0.244,
+        "Cancel": 0.144,
+        "SessionResume": 9.416
+      },
+      "max_case_ms": 12.023
+    },
+    {
+      "pair": 8,
+      "name": "reference",
+      "wall_ms": 383.5761733353138,
+      "case_total_ms": 356.015,
+      "case_medians_ms": {
+        "Edit": 3.788,
+        "Search": 0.528,
+        "ToolFailure": 0.263,
+        "Cancel": 0.142,
+        "SessionResume": 9.15
+      },
+      "max_case_ms": 10.484
+    },
+    {
+      "pair": 8,
+      "name": "candidate",
+      "wall_ms": 399.3176016956568,
+      "case_total_ms": 370.537,
+      "case_medians_ms": {
+        "Edit": 3.909,
+        "Search": 0.57,
+        "ToolFailure": 0.272,
+        "Cancel": 0.162,
+        "SessionResume": 9.617
+      },
+      "max_case_ms": 14.007
+    },
+    {
+      "pair": 9,
+      "name": "candidate",
+      "wall_ms": 401.5921698883176,
+      "case_total_ms": 372.819,
+      "case_medians_ms": {
+        "Edit": 3.799,
+        "Search": 0.567,
+        "ToolFailure": 0.278,
+        "Cancel": 0.148,
+        "SessionResume": 9.815
+      },
+      "max_case_ms": 17.011
+    },
+    {
+      "pair": 9,
+      "name": "reference",
+      "wall_ms": 397.5661862641573,
+      "case_total_ms": 367.325,
+      "case_medians_ms": {
+        "Edit": 3.959,
+        "Search": 0.575,
+        "ToolFailure": 0.309,
+        "Cancel": 0.189,
+        "SessionResume": 9.771
+      },
+      "max_case_ms": 11.669
+    }
+  ],
+  "summary": {
+    "reference": {
+      "wall_median_ms": 398.9222296513617,
+      "case_total_median_ms": 368.57349999999997,
+      "case_medians_ms": {
+        "Edit": 3.9485,
+        "Search": 0.5925,
+        "ToolFailure": 0.316,
+        "Cancel": 0.1895,
+        "SessionResume": 9.8235
+      }
+    },
+    "candidate": {
+      "wall_median_ms": 399.3736389093101,
+      "case_total_median_ms": 371.245,
+      "case_medians_ms": {
+        "Edit": 3.8955,
+        "Search": 0.568,
+        "ToolFailure": 0.2845,
+        "Cancel": 0.158,
+        "SessionResume": 9.6525
+      }
+    }
+  },
+  "wall_change_percent": 0.11315720819642383,
+  "paired_wall_change_percent": [
+    1.2273164139031678,
+    -5.061620651925136,
+    -2.660988049244206,
+    3.391668154004468,
+    94.29412130481695,
+    -2.6305221910957965,
+    0.3087202878467643,
+    2.668498817656917,
+    4.103859794904974,
+    1.0126574550998857
+  ],
+  "paired_wall_change_median_percent": 1.1199869345015268,
+  "limitations": [
+    "Shared host/filesystem and warm cache; no CPU affinity, OS cache reset, allocator/section profile or isolated process memory.",
+    "Independent builds verify source identity; their build times are not a controlled compilation benchmark.",
+    "Standalone runtime features differ from workspace-unified footprint samples; these supplement rather than replace them.",
+    "This is scripted performance, not real-model success, cost, or active-hook latency."
+  ],
+  "paths_normalized": true,
+  "source_binding_validation": "Every workspace library and example artifact was compiled fresh from its declared checkout manifest; candidate content digest matched the frozen workspace samples before building. Both owned checkouts and independent target directories were removed afterward."
+}

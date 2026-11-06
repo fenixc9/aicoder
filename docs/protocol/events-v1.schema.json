@@ -2223,6 +2223,219 @@
             "changed"
           ],
           "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "const": "message_finalized"
+            },
+            "message": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/message"
+                },
+                {
+                  "$ref": "#/$defs/custom_input_message"
+                }
+              ],
+              "properties": {
+                "content": {
+                  "minItems": 1
+                }
+              }
+            },
+            "custom": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/custom_input_metadata"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "origin": {
+              "enum": [
+                "initial",
+                "next_turn",
+                "idle_custom",
+                "steer",
+                "follow_up",
+                "deferred",
+                "assistant",
+                "tool",
+                "startup",
+                "boundary"
+              ]
+            },
+            "changed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "type",
+            "message",
+            "custom",
+            "origin",
+            "changed"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "message": {
+                    "properties": {
+                      "role": {
+                        "const": "custom"
+                      }
+                    }
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "custom": {
+                    "$ref": "#/$defs/custom_input_metadata"
+                  }
+                }
+              },
+              "else": {
+                "properties": {
+                  "custom": {
+                    "type": "null"
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "origin": {
+                    "enum": [
+                      "assistant"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "message": {
+                    "properties": {
+                      "role": {
+                        "enum": [
+                          "assistant"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "origin": {
+                    "enum": [
+                      "tool"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "message": {
+                    "properties": {
+                      "role": {
+                        "enum": [
+                          "tool"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "origin": {
+                    "enum": [
+                      "startup",
+                      "boundary"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "message": {
+                    "properties": {
+                      "role": {
+                        "enum": [
+                          "system"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "origin": {
+                    "enum": [
+                      "idle_custom",
+                      "next_turn",
+                      "deferred"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "message": {
+                    "properties": {
+                      "role": {
+                        "enum": [
+                          "custom"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "origin": {
+                    "enum": [
+                      "initial",
+                      "steer",
+                      "follow_up"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "message": {
+                    "properties": {
+                      "role": {
+                        "enum": [
+                          "user",
+                          "custom"
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
         }
       ]
     },

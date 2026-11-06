@@ -40,4 +40,15 @@ validator.validate(frame)
 count += 1
 frame["event"]["message"]["role"] = "user"
 assert list(validator.iter_errors(frame)), "finalized assistant accepted a user role"
+frame["event"]={"type":"message_finalized","origin":"initial","changed":True,"custom":None,"message":{"role":"user","content":[{"type":"text","text":"effective"}]}}
+validator.validate(frame);count+=1
+frame["event"]["message"]["role"]="custom"
+assert list(validator.iter_errors(frame)), "finalized custom without metadata accepted"
+frame["event"]["custom"]={"source":"fixture","custom_type":"note","display":False,"details":None}
+validator.validate(frame);count+=1
+frame["event"]["message"]["role"]="user"
+assert list(validator.iter_errors(frame)), "finalized user acquired custom provenance"
+frame["event"]["custom"]=None
+frame["event"]["origin"]="tool"
+assert list(validator.iter_errors(frame)), "tool finalization accepted a user role"
 print(f"Validated {count} event frames against schema v1")

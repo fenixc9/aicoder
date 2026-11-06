@@ -3,6 +3,18 @@ use crate::{RunOutcome, model::Message};
 use async_trait::async_trait;
 #[async_trait]
 pub trait RunJournal: Send + Sync {
+    async fn record_message_finalization(
+        &self,
+        _record: &crate::extensions::MessageFinalizationRecord,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support message finalization")
+    }
+    async fn finalize_message(
+        &self,
+        _commit: &crate::extensions::MessageFinalizationCommit,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support atomic message finalization")
+    }
     /// Index is a logical transcript position. Tool results reserve positions in original call order.
     async fn checkpoint(&self, index: usize, message: &Message) -> anyhow::Result<()>;
     /// Probe/record installed finalizers before provider IO. Unsupported journals fail closed.
@@ -118,6 +130,18 @@ pub trait RunJournal: Send + Sync {
 }
 #[async_trait]
 impl RunJournal for () {
+    async fn record_message_finalization(
+        &self,
+        _: &crate::extensions::MessageFinalizationRecord,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn finalize_message(
+        &self,
+        _: &crate::extensions::MessageFinalizationCommit,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn record_finalization(
         &self,
         _: &crate::extensions::FinalizationRecord,

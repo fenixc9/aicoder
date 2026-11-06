@@ -41,11 +41,16 @@ impl TurnExecutor {
             journal,
             events,
         } = scope;
-        if self.finalizers.is_empty() {
+        if self.finalizers.is_empty() && self.message_finalizers.is_none() {
             return Ok(original);
         }
         limits.check()?;
-        let original_bytes = crate::extensions::size(&original, MAX_FINAL_MESSAGE_BYTES)?;
+        let original_limit = if self.finalizers.is_empty() {
+            MAX_MESSAGE_FINALIZATION_BYTES
+        } else {
+            MAX_FINAL_MESSAGE_BYTES
+        };
+        let original_bytes = crate::extensions::size(&original, original_limit)?;
         let mut message = original.clone();
         let mut changes = Vec::new();
         let mut bytes = 0usize;
@@ -86,20 +91,52 @@ impl TurnExecutor {
         };
         tokio::select! {biased;cancelled=context.cancelled()=>return Err(cancelled.into()),result=tokio::time::timeout(std::time::Duration::from_secs(30),work)=>result.map_err(|_|anyhow::anyhow!("assistant finalization phase timed out"))??}
         limits.check()?;
-        let effective_bytes = crate::extensions::size(&message, MAX_FINAL_MESSAGE_BYTES)?;
-        let record = FinalizationRecord::Applied {
+        let legacy = (!self.finalizers.is_empty()).then(|| FinalizationRecord::Applied {
             round,
             original_bytes,
-            effective_bytes,
+            effective_bytes: crate::extensions::size(&message, MAX_FINAL_MESSAGE_BYTES)
+                .expect("validated message"),
             changes,
-        };
-        crate::extensions::size(&record, 64 * 1024)?;
-        let retained =
-            crate::extensions::size(&(&record, &message), MAX_FINAL_MESSAGE_BYTES + 64 * 1024)?;
-        limits.charge_output_bytes(retained)?;
+        });
+        let finalized = self
+            .prepare_message_finalization(
+                &message,
+                None,
+                MessageOrigin::Assistant,
+                Some(round),
+                context,
+            )
+            .await?;
+        limits.check()?;
+        if let Some(value) = &finalized {
+            message = value.message.clone();
+        }
         let index = progress.messages.len() - 1;
-        tokio::select! {biased;cancelled=context.cancelled()=>return Err(cancelled.into()),result=tokio::time::timeout(std::time::Duration::from_secs(30),journal.finalize_assistant(index,&record,&message))=>result.map_err(|_|anyhow::anyhow!("assistant finalization commit timed out")).and_then(|v|v).map_err(|e|RunFailure::from_error(RunStage::Persistence,&e))?}
+        if let Some(finalized) = &finalized {
+            let commit = MessageFinalizationCommit {
+                index,
+                finalized: finalized.clone(),
+                input: None,
+                assistant: legacy,
+            };
+            limits.charge_output_bytes(crate::extensions::size(
+                &commit,
+                MAX_MESSAGE_FINALIZATION_BYTES + 128 * 1024,
+            )?)?;
+            tokio::select! {biased;cancelled=context.cancelled()=>return Err(cancelled.into()),result=tokio::time::timeout(std::time::Duration::from_secs(30),journal.finalize_message(&commit))=>result.map_err(|_|anyhow::anyhow!("assistant message finalization commit timed out")).and_then(|v|v).map_err(|e|RunFailure::from_error(RunStage::Persistence,&e))?}
+        } else {
+            let record = legacy.expect("installed assistant hooks");
+            crate::extensions::size(&record, 64 * 1024)?;
+            limits.charge_output_bytes(crate::extensions::size(
+                &(&record, &message),
+                MAX_FINAL_MESSAGE_BYTES + 64 * 1024,
+            )?)?;
+            tokio::select! {biased;cancelled=context.cancelled()=>return Err(cancelled.into()),result=tokio::time::timeout(std::time::Duration::from_secs(30),journal.finalize_assistant(index,&record,&message))=>result.map_err(|_|anyhow::anyhow!("assistant finalization commit timed out")).and_then(|v|v).map_err(|e|RunFailure::from_error(RunStage::Persistence,&e))?}
+        }
         progress.messages[index] = message.clone();
+        if let Some(value) = finalized {
+            events.emit(value.event());
+        }
         events.emit(AgentRawEvent::AssistantMessageFinalized {
             message: Arc::new(message.clone()),
             changed: message != original,

@@ -128,6 +128,9 @@ impl AgentEventEmitter {
     pub fn source(&self) -> EventSource {
         self.source.clone()
     }
+    pub(crate) fn round_scope(&self) -> Option<usize> {
+        self.round
+    }
     pub(crate) fn for_round(&self, round: usize) -> Self {
         let mut emitter = self.clone();
         emitter.round = Some(round);

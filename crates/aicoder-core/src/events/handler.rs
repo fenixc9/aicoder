@@ -280,6 +280,14 @@ pub struct RunInputAppliedEvent {
 }
 
 #[derive(Debug, Clone)]
+pub struct MessageFinalizedEvent {
+    pub meta: AgentEventMeta,
+    pub message: Arc<crate::model::Message>,
+    pub custom: Option<crate::CustomMessageMetadata>,
+    pub origin: crate::extensions::MessageOrigin,
+    pub changed: bool,
+}
+#[derive(Debug, Clone)]
 pub struct AssistantMessageFinalizedEvent {
     pub meta: AgentEventMeta,
     pub message: Arc<crate::model::Message>,
@@ -301,6 +309,7 @@ pub trait AgentEventHandler: Send + Sync + 'static {
 
     fn on_run_approval_requested(&self, _event: RunApprovalRequestedEvent) {}
     fn on_run_input_applied(&self, _event: RunInputAppliedEvent) {}
+    fn on_message_finalized(&self, _event: MessageFinalizedEvent) {}
     fn on_assistant_message_finalized(&self, _event: AssistantMessageFinalizedEvent) {}
     fn on_agent_started(&self, _event: AgentStartedEvent) {}
     fn on_agent_completed(&self, _event: AgentCompletedEvent) {}
@@ -362,6 +371,18 @@ pub(crate) fn dispatch_event(handler: &dyn AgentEventHandler, envelope: &AgentRa
     handler.on_raw_event(envelope);
     let meta = AgentEventMeta::from(envelope);
     match &envelope.event {
+        AgentRawEvent::MessageFinalized {
+            message,
+            custom,
+            origin,
+            changed,
+        } => handler.on_message_finalized(MessageFinalizedEvent {
+            meta,
+            message: message.clone(),
+            custom: custom.clone(),
+            origin: *origin,
+            changed: *changed,
+        }),
         AgentRawEvent::AssistantMessageFinalized { message, changed } => handler
             .on_assistant_message_finalized(AssistantMessageFinalizedEvent {
                 meta,

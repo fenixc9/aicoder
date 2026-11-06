@@ -540,6 +540,9 @@ impl ControlState {
             notified.await;
         }
     }
+    pub(crate) fn input_byte_limit(&self) -> usize {
+        self.config.max_input_bytes
+    }
     pub(crate) fn max_pending_inputs(&self) -> usize {
         self.config.max_pending_inputs
     }

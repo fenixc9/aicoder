@@ -1,5 +1,37 @@
 # API migrations
 
+## S7: general fresh-message finalization
+
+Extension adds message_hook(HookSpec, Arc<dyn MessageHook>). Its ordered immutable input identifies
+origin/role/round, original/current content and optional custom metadata. It runs after user raw
+hooks/expansion, specialized assistant finalizers or specialized tool-result edits, as applicable.
+Fresh Agent inputs, custom idle/next-turn/queued delivery and native startup/boundary context are
+covered. Existing ModelRequest/ExecutionInput histories remain histories. See [contract](message-finalization.md).
+
+RunJournal adds record_message_finalization and finalize_message with unsupported defaults. A chain
+probes support before provider IO; commit must atomically bind effective content, safe receipts,
+the canonical index and any input/assistant companion metadata. SessionJournal, explicit transient
+`()` and EvaluationJournal support it. Initial Agent session writes and context boundary writes
+include their finalization receipts in the existing atomic transaction. History restores data only.
+
+BoundaryCommit adds message_finalizations with serde default/empty omission; update Rust literals
+with Vec::new(). Session versions stay unchanged. Receipts use inert Extension records under
+aicoder.message-finalization.v1; original content is not stored in receipts. Captured originals of
+completed operations survive failures in normal progress/history when storage remains available.
+
+AgentRawEvent adds MessageFinalized {message, custom, origin, changed}; typed handlers gain a default
+on_message_finalized and the v1 schema validates origin/role/custom metadata pairing. Assistant
+finalization also emits the existing AssistantMessageFinalized event for frontend compatibility.
+Use only one as your assistant display trigger. Other changed messages are labelled explicitly in
+stock frontends; hidden custom metadata stays hidden. Streaming/earlier tool observations remain
+previews, and event delivery cannot assert that every observer received them.
+
+Tool status/artifact edits belong to ToolResultHook, before MessageHook. Generic tool edits preserve
+call identity, delivered status, error class/details, capture fields and typed media; output/message
+text may change within owned limits. Assistant actions/opaque state and custom/context source labels
+remain protected. Runtime instruction prefixes use BeforeStartHook rather than message finalization.
+See [acceptance](s7-message-finalization-acceptance.md).
+
 ## S7: assistant message finalization
 
 Extension adds assistant_message_hook(HookSpec, Arc<dyn AssistantMessageHook>). The input includes

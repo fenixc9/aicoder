@@ -115,7 +115,7 @@ impl TurnExecutor {
         self.check_preparation_budget(&input)?;
         Ok(input)
     }
-    fn preparation_budget_error(
+    pub(crate) fn preparation_budget_error(
         &self,
         started: tokio::time::Instant,
     ) -> crate::run::BudgetExceeded {
@@ -132,6 +132,10 @@ impl TurnExecutor {
             .as_ref()
             .map_or(0, |p| p.receipt_bytes)
             .saturating_add(input.prepared_start.as_ref().map_or(0, |p| p.encoded.len()));
+        let mut retained = retained;
+        for finalized in &input.finalized_messages {
+            retained = retained.saturating_add(finalized.encoded_bytes()?);
+        }
         if let Some(limit) = self.config.budget.max_output_bytes {
             ensure!(
                 retained <= limit,

@@ -116,6 +116,12 @@ pub enum AgentRawEvent {
     RunInputApplied {
         input: Arc<crate::RunInput>,
     },
+    MessageFinalized {
+        message: Arc<crate::model::Message>,
+        custom: Option<crate::CustomMessageMetadata>,
+        origin: crate::extensions::MessageOrigin,
+        changed: bool,
+    },
     AssistantMessageFinalized {
         message: Arc<crate::model::Message>,
         changed: bool,

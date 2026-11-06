@@ -114,6 +114,18 @@ impl EvaluationJournal {
 }
 #[async_trait]
 impl RunJournal for EvaluationJournal {
+    async fn record_message_finalization(
+        &self,
+        record: &aicoder_core::extensions::MessageFinalizationRecord,
+    ) -> Result<()> {
+        self.record(json!({"kind":"message_finalization","data":record}))
+    }
+    async fn finalize_message(
+        &self,
+        commit: &aicoder_core::extensions::MessageFinalizationCommit,
+    ) -> Result<()> {
+        self.record(json!({"kind":"message_finalization_commit","data":commit}))
+    }
     async fn record_finalization(
         &self,
         record: &aicoder_core::extensions::FinalizationRecord,

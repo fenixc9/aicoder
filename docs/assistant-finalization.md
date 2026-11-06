@@ -54,6 +54,6 @@ The example uses actual owned file tools, JSONL, bounded archives, inert HTML ex
 validation with no model/network credentials. `scripts/check_assistant_finalization.py` exercises
 the native TUI fixture through a real PTY. See [acceptance](s7-assistant-finalization-acceptance.md).
 
-This implements the assistant subset of Pi's message-finalization capability. Generic User/Custom/
-Tool message transforms, session lifecycle/navigation veto and boundary context-edit/compaction
-remain separate open work in the [audit](pi-parity-audit.md).
+This API implements the assistant subset of Pi's message-finalization capability. The subsequent
+[general message hook](message-finalization.md) covers fresh messages across all roles. Session
+lifecycle/navigation veto and boundary context-edit/compaction remain open in the [audit](pi-parity-audit.md).

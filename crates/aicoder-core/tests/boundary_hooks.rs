@@ -773,6 +773,7 @@ async fn tool_round_boundary_runs_after_paired_results_and_before_the_next_model
 async fn explicit_context_is_summary_data_but_inert_boundary_entries_are_never_promoted() {
     let provider = model();
     let commit = BoundaryCommit {
+        message_finalizations: Vec::new(),
         startup: None,
         kind: BoundaryKind::TurnEnd,
         round: 1,

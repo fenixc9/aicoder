@@ -23,6 +23,11 @@ pub enum InputSource {
 }
 
 impl AgentInput {
+    pub(crate) fn replace_finalized_message(&mut self, message: Message) -> Result<()> {
+        let validated = Self::try_from(message)?;
+        self.message = validated.message;
+        Ok(())
+    }
     pub fn preparation_receipt(&self) -> Option<&crate::extensions::InputReceipt> {
         self.prepared.as_ref().and_then(|p| p.receipt.as_deref())
     }

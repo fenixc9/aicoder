@@ -205,6 +205,7 @@ impl ToolDispatcher {
             let child = Self {
                 call_hooks: self.call_hooks.clone(),
                 result_hooks: self.result_hooks.clone(),
+                message_finalizers: self.message_finalizers.clone(),
                 counting: self.counting.clone(),
                 hooks: self.hooks.clone(),
                 registry: self.registry.clone(),

@@ -129,6 +129,27 @@ impl InputHook for RawUi {
         }
     }
 }
+struct GeneralFinalize;
+#[async_trait]
+impl MessageHook for GeneralFinalize {
+    async fn finalize(
+        &self,
+        input: MessageHookInput<'_>,
+        _: ExtensionCancellation,
+    ) -> anyhow::Result<Option<Message>> {
+        Ok(
+            match (input.message.role, input.message.text_content().as_str()) {
+                (MessageRole::User, "message-finalization-demo") => {
+                    Some(Message::text(MessageRole::User, "EFFECTIVE_TUI_USER"))
+                }
+                (MessageRole::Assistant, "Reviewed input: EFFECTIVE_TUI_USER") => Some(
+                    Message::text(MessageRole::Assistant, "FINALIZED_ALL_ROLE_ANSWER"),
+                ),
+                _ => None,
+            },
+        )
+    }
+}
 struct Offline;
 struct Finalize;
 #[async_trait]
@@ -221,6 +242,10 @@ async fn main() -> anyhow::Result<()> {
     raw.timeout = Duration::from_secs(10);
     extension.input_hook(raw, Arc::new(RawUi))?;
     extension.assistant_message_hook(HookSpec::new("final-answer"), Arc::new(Finalize))?;
+    extension.message_hook(
+        HookSpec::new("all-role-final-answer"),
+        Arc::new(GeneralFinalize),
+    )?;
     let mut registry = ExtensionRegistry::new();
     registry.install(extension)?;
     aicoder_tui::run_with_provider(runtime, Arc::new(Offline), Arc::new(registry.finish())).await

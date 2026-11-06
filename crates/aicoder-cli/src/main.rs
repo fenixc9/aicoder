@@ -358,6 +358,24 @@ impl ApprovalHandler for ConsoleApproval {
 }
 
 impl AgentEventHandler for ConsoleEvents {
+    fn on_message_finalized(&self, event: aicoder_core::events::MessageFinalizedEvent) {
+        if event.changed
+            && matches!(
+                event.message.role,
+                aicoder_core::model::MessageRole::User
+                    | aicoder_core::model::MessageRole::Tool
+                    | aicoder_core::model::MessageRole::Custom
+            )
+            && event.custom.as_ref().is_none_or(|m| m.display)
+        {
+            let text = event
+                .message
+                .tool_result()
+                .map_or_else(|| event.message.text_content(), |(_, v, _)| v.to_string());
+            println!("\n[Finalized {:?} message]\n{text}", event.message.role);
+        }
+    }
+
     fn on_assistant_message_finalized(
         &self,
         event: aicoder_core::events::AssistantMessageFinalizedEvent,

@@ -97,6 +97,15 @@ jobs:
           cargo run --locked -p aicoder-runtime --features code-mode --example offline_assistant_finalization -- --code-mode --deny
           cargo build --locked -p aicoder-tui --example offline_extension_ui
           python3 scripts/check_assistant_finalization.py
+      - name: Fresh messages across canonical roles
+        run: |
+          cargo test --locked -p aicoder-runtime --no-default-features --test message_finalization
+          cargo run --locked -p aicoder-runtime --example offline_message_finalization
+          cargo run --locked -p aicoder-runtime --example offline_message_finalization -- --deny
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_message_finalization -- --code-mode
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_message_finalization -- --code-mode --deny
+          cargo build --locked -p aicoder-tui --example offline_extension_ui
+          python3 scripts/check_message_finalization.py
       - name: Raw input before expansion and ordered controls
         run: |
           cargo test --locked -p aicoder-runtime --no-default-features --test input_hooks

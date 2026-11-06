@@ -43,7 +43,7 @@ impl TurnExecutor {
                     messages,
                     progress,
                     context,
-                    (journal, limits),
+                    (journal, limits, self.message_finalizers.as_deref()),
                     events,
                     &|messages, input| self.validate_control_input(request, messages, input),
                 )

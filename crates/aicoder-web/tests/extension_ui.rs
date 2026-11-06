@@ -151,6 +151,9 @@ impl Server {
         Self::with_input(write, false).await
     }
     async fn with_input(write: bool, inputs: bool) -> Self {
+        Self::with_setup(write, inputs, false).await
+    }
+    async fn with_setup(write: bool, inputs: bool, messages: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         if inputs {
             std::fs::create_dir_all(root.path().join(".aicoder/prompts")).unwrap();
@@ -200,6 +203,11 @@ impl Server {
         if inputs {
             extension
                 .input_hook(HookSpec::new("raw"), Arc::new(WebInput))
+                .unwrap();
+        }
+        if messages {
+            extension
+                .message_hook(HookSpec::new("finalize"), Arc::new(WebFinalize))
                 .unwrap();
         }
         let mut registry = ExtensionRegistry::new();
@@ -591,5 +599,92 @@ async fn authenticated_custom_commands_trigger_the_shared_agent_with_bound_sourc
     };
     assert!(body.contains("CUSTOM_WEB_FACT") && body.contains("aicoder custom ui-test/wake"));
     assert!(!body.contains("CUSTOM_WEB_DETAILS"));
+    server.close().await;
+}
+
+struct WebFinalize;
+#[async_trait]
+impl MessageHook for WebFinalize {
+    async fn finalize(
+        &self,
+        input: MessageHookInput<'_>,
+        _: ExtensionCancellation,
+    ) -> anyhow::Result<Option<Message>> {
+        Ok(match input.message.role {
+            MessageRole::User => Some(Message::text(MessageRole::User, "WEB_FINAL_USER")),
+            MessageRole::Assistant => {
+                Some(Message::text(MessageRole::Assistant, "WEB_FINAL_ASSISTANT"))
+            }
+            _ => None,
+        })
+    }
+}
+#[tokio::test]
+async fn authenticated_web_sse_delivers_effective_user_and_assistant_after_finalization() {
+    let server = Server::with_setup(false, false, true).await;
+    assert_eq!(
+        server
+            .client
+            .post(format!("{}/api/runs", server.url))
+            .json(&json!({"id":1,"text":"private input"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 0);
+    let response = server
+        .post("/api/runs", json!({"id":1,"text":"private input"}))
+        .await;
+    assert_eq!(response.status(), 202);
+    let run = response.json::<Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let done = server
+        .wait(&format!("/api/runs/{run}"), |v| !v["result"].is_null())
+        .await;
+    assert_eq!(done["result"]["status"], "completed");
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        server.model.requests.lock().unwrap()[0]
+            .messages
+            .last()
+            .unwrap()
+            .text_content(),
+        "WEB_FINAL_USER"
+    );
+    let text = server
+        .client
+        .get(format!("{}/api/runs/{run}/events", server.url))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    let frames = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    let finalized = frames
+        .iter()
+        .filter(|f| f["event"]["type"] == "message_finalized")
+        .collect::<Vec<_>>();
+    assert_eq!(finalized.len(), 2);
+    assert_eq!(
+        finalized[0]["event"]["message"]["content"][0]["text"],
+        "WEB_FINAL_USER"
+    );
+    assert_eq!(
+        finalized[1]["event"]["message"]["content"][0]["text"],
+        "WEB_FINAL_ASSISTANT"
+    );
+    assert!(!text.contains("private input"));
     server.close().await;
 }

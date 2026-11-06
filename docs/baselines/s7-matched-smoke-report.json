@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "scope": "Same-host matched standalone-runtime release commands; ten interleaved AB/BA pairs, 125 cases each process, all samples retained. Source snapshots exclude the subsequent TUI-only fix. No actual credentials or external model; all benchmark payloads stay outside this report.",
+  "scope": "Historical labelled timings retained. The requested candidate revision was not independently bound to its executable; this is not a verified two-revision performance comparison.",
   "identity": {
     "reference": {
       "revision": "34ffa3dadd7d61bc7c1259d9c5514c3185a3d537",
@@ -36,7 +36,8 @@
         "/home/fenix/project/aicoder/target"
       ],
       "bytes": 11353872,
-      "sha256": "c7f1313c5e33514a7c56a2bef5fd3eab931f997450581ffe390380dea082f820"
+      "sha256": "c7f1313c5e33514a7c56a2bef5fd3eab931f997450581ffe390380dea082f820",
+      "execution_source_verified": false
     }
   },
   "platform": "Linux-6.8.0-101-generic-x86_64-with-glibc2.35",
@@ -361,7 +362,19 @@
   "limitations": [
     "Shared host/filesystem and warm cache; no CPU affinity, OS cache reset, cold build or allocator/section profile.",
     "Standalone feature selection differs from prior workspace-default footprint samples; this supplements rather than replaces them.",
-    "This is scripted smoke performance, not real-model success, invoice or isolated peak RSS."
+    "This is scripted smoke performance, not real-model success, invoice or isolated peak RSS.",
+    "Candidate source identity was not independently established: identical hashes and no candidate recompilation with a shared target directory. The historical timing ratios cannot verify the claimed revision comparison."
   ],
-  "paired_wall_change_median_percent": 0.3782736116940355
+  "paired_wall_change_median_percent": 0.3782736116940355,
+  "evidence_status": "Historical timing retained; candidate executable source binding was not independently verified, so the revision-comparison claim is unproven.",
+  "comparison_claims_verified": false,
+  "source_binding_correction": {
+    "observed_equal_executable_hashes": true,
+    "candidate_build_elapsed_seconds": 0.19,
+    "candidate_compile_messages_observed": false,
+    "shared_target_directory": true,
+    "conclusion": "These observations do not establish which candidate source was executed. Keep timing records and claimed revisions, but do not treat their ratio as evidence of a verified two-revision comparison.",
+    "new_independent_source_comparison": "s7-message-finalization-matched-report.json"
+  },
+  "original_scope": "Same-host matched standalone-runtime release commands; ten interleaved AB/BA pairs, 125 cases each process, all samples retained. Source snapshots exclude the subsequent TUI-only fix. No actual credentials or external model; all benchmark payloads stay outside this report."
 }

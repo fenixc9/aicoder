@@ -34,6 +34,7 @@ pub struct ModelContextInfo {
 }
 #[derive(Debug, Clone)]
 pub struct ExecutionInput {
+    pub(crate) finalized_messages: Vec<crate::extensions::FinalizedMessage>,
     pub(crate) trigger: Option<crate::RunTrigger>,
     pub(crate) prepared_user: Option<crate::extensions::PreparedUserInput>,
     pub(crate) input_committed: bool,
@@ -55,6 +56,7 @@ impl ExecutionInput {
             .take_while(|message| message.role == MessageRole::System)
             .count();
         Self {
+            finalized_messages: Vec::new(),
             history: request.messages.clone(),
             request,
             system_prefix_len: prefix,
@@ -95,6 +97,7 @@ impl ExecutionInput {
             "history and model context must share the declared system prefix"
         );
         Ok(Self {
+            finalized_messages: Vec::new(),
             request,
             history,
             system_prefix_len,

@@ -91,6 +91,8 @@ pub struct BoundaryChange {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoundaryCommit {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub message_finalizations: Vec<MessageFinalizationReceipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub startup: Option<StartupMetadata>,
     pub kind: BoundaryKind,
@@ -103,12 +105,29 @@ pub struct BoundaryCommit {
 impl BoundaryCommit {
     pub(crate) fn session_entries(&self) -> anyhow::Result<Vec<crate::session::SessionEntryData>> {
         use crate::session::{NativeContextSource, SessionEntryData};
+        if !self.message_finalizations.is_empty() {
+            let messages = self.messages();
+            anyhow::ensure!(
+                self.message_finalizations.len() == messages.len(),
+                "context finalization count mismatch"
+            );
+            for (receipt, message) in self.message_finalizations.iter().zip(&messages) {
+                anyhow::ensure!(
+                    receipt.role == MessageRole::System
+                        && receipt.effective_bytes == size(message, 64 * 1024)?,
+                    "context finalization message mismatch"
+                );
+            }
+        }
         let mut entries = vec![SessionEntryData::Extension {
             namespace: LIFECYCLE_NAMESPACE.into(),
             data: serde_json::to_value(LifecycleRecord::Applied {
                 commit: self.clone(),
             })?,
         }];
+        for receipt in &self.message_finalizations {
+            entries.push(receipt_entry(receipt)?);
+        }
         for proposal in &self.entries {
             if let BoundaryEntry::Context { kind, text } = &proposal.entry {
                 entries.push(SessionEntryData::native_context(

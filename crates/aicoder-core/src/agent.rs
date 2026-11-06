@@ -336,7 +336,34 @@ impl Agent {
         let mut initial = self.system_messages();
         initial.push(prompt.message().clone());
         match prompt.prepare(&self.turn_executor, &context, started).await {
-            Ok(crate::agent_prompt::PromptPreparation::Ready(input)) => {
+            Ok(crate::agent_prompt::PromptPreparation::Ready(mut input)) => {
+                let finalized = match self
+                    .turn_executor
+                    .prepare_prompt_finalization(&mut input, &context, started)
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let mut progress = RunProgress::new(initial);
+                        progress.elapsed = started.elapsed();
+                        progress.stage = RunStage::Preparing;
+                        let stop = preparation_stop(&error, RunStage::Preparing);
+                        return from_execution(
+                            self.turn_executor
+                                .finish_preparation(
+                                    scope,
+                                    RunOutcome::Interrupted(InterruptedTurn {
+                                        stop,
+                                        progress,
+                                        persistence_error: None,
+                                    }),
+                                    &context,
+                                )
+                                .await,
+                            None,
+                        );
+                    }
+                };
                 let prepared_user = input.prepared_user().cloned();
                 let trigger = Some(input.trigger());
                 let mut messages = self.system_messages();
@@ -346,6 +373,7 @@ impl Agent {
                 input.started = Some(started);
                 input.prepared_user = prepared_user;
                 input.trigger = trigger;
+                input.finalized_messages.extend(finalized);
                 from_execution(
                     self.turn_executor
                         .run_scoped_input(input, context, &(), scope)
@@ -407,12 +435,13 @@ impl Agent {
         &self,
         repository: &dyn SessionRepository,
         id: &str,
-        custom: crate::CustomMessage,
+        mut custom: crate::CustomMessage,
         context: TurnExecutionContext,
     ) -> Result<SessionMetadata> {
         if context.is_cancelled() {
             return Err(context.error().into());
         }
+        let started = tokio::time::Instant::now();
         custom.validate()?;
         let mut session = repository.open_run(id)?;
         ensure!(
@@ -424,23 +453,49 @@ impl Agent {
             session.unfinished_turn().is_none(),
             "recover the unfinished turn before appending idle custom context"
         );
+        let finalized = self
+            .turn_executor
+            .prepare_message_finalization(
+                custom.message(),
+                Some(&custom.metadata()),
+                crate::extensions::MessageOrigin::IdleCustom,
+                None,
+                &context,
+            )
+            .await?;
+        self.turn_executor
+            .check_message_preparation_duration(started)?;
+        if let Some(value) = &finalized {
+            custom =
+                crate::CustomMessage::from_canonical(custom.metadata(), value.message.clone())?;
+        }
         let mut request = self.completion_request(self.system_messages());
         request.model = self.selected_model(&session)?;
         self.apply_session_reasoning(&mut request, &session)?;
         request.messages.push(custom.message().clone());
-        let input = self
+        let mut input = self
             .turn_executor
             .prepare_input(
-                crate::ExecutionInput::from_run_session(request, &session)?,
+                {
+                    let mut input = crate::ExecutionInput::from_run_session(request, &session)?;
+                    input.started = Some(started);
+                    input
+                },
                 &context,
             )
             .await?;
+        input.finalized_messages.extend(finalized.clone());
         self.turn_executor.validate_model_selection(&input)?;
         self.turn_executor.check_preparation_budget(&input)?;
         if context.is_cancelled() {
             return Err(context.error().into());
         }
-        session.append(repository, vec![SessionEntryData::CustomMessage { custom }])?;
+        let mut entries = Vec::new();
+        if let Some(value) = finalized {
+            entries.push(value.receipt_entry()?);
+        }
+        entries.push(SessionEntryData::CustomMessage { custom });
+        session.append(repository, entries)?;
         Ok(session.metadata().clone())
     }
     pub async fn compact_session(
@@ -634,7 +689,7 @@ impl Agent {
             preparation_stage = RunStage::Persistence;
             let lease = session.acquire(repository)?;
             preparation_stage = RunStage::Preparing;
-            let prompt = match prompt
+            let mut prompt = match prompt
                 .prepare(&self.turn_executor, &context, started)
                 .await?
             {
@@ -644,12 +699,21 @@ impl Agent {
                     return Err(handled.into());
                 }
             };
+            let mut finalized_messages=Vec::new();
+            finalized_messages.extend(self.turn_executor.prepare_prompt_finalization(&mut prompt,&context,started).await?);
             let prepared_user = prompt.prepared_user().cloned();
             let trigger = Some(prompt.trigger());
             let message = prompt.message().clone();
             initial = self.system_messages();
             initial.push(message);
-            let pending_custom = self.custom_inbox.claim(&session.metadata().id)?;
+            let mut pending_custom = self.custom_inbox.claim(&session.metadata().id)?;
+            for custom in &mut pending_custom.messages {
+                self.turn_executor.check_message_preparation_duration(started)?;
+                if let Some(value)=self.turn_executor.prepare_message_finalization(custom.message(),Some(&custom.metadata()),crate::extensions::MessageOrigin::NextTurn,None,&context).await? {
+                    *custom=crate::CustomMessage::from_canonical(custom.metadata(),value.message.clone())?;finalized_messages.push(value);
+                    self.turn_executor.check_message_preparation_duration(started)?;
+                }
+            }
             initial.extend(pending_custom.messages.iter().map(|m| m.message().clone()));
             model?;
             let mut request = self.completion_request(initial.clone());
@@ -659,6 +723,7 @@ impl Agent {
             input.started = Some(started);
             input.prepared_user = prepared_user.clone();
             input.trigger = trigger;
+            input.finalized_messages=finalized_messages;
             let mut input = self.turn_executor.prepare_input(input, &context).await?;
             let report = self.turn_executor.validate_model_selection(&input)?;
             self.turn_executor.check_preparation_budget(&input)?;
@@ -695,6 +760,7 @@ impl Agent {
                     })?,
                 });
             }
+            for finalized in &input.finalized_messages {entries.push(finalized.receipt_entry()?);}
             entries.push(prompt.entry());
             let next_turn_messages = pending_custom.messages.len();
             for (custom,origin) in pending_custom.messages.iter().cloned().zip(&pending_custom.origins){

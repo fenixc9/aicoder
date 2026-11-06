@@ -222,6 +222,15 @@ pub(crate) enum PromptPreparation {
     Handled(InputHandled),
 }
 impl AgentPrompt {
+    pub(crate) fn replace_finalized_message(&mut self, message: Message) -> Result<()> {
+        match self {
+            Self::User(input) => input.replace_finalized_message(message),
+            Self::Custom(custom) => {
+                *custom = CustomMessage::from_canonical(custom.metadata(), message)?;
+                Ok(())
+            }
+        }
+    }
     pub fn message(&self) -> &Message {
         match self {
             Self::User(input) => input.message(),

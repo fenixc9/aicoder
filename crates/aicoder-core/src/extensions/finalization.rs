@@ -45,6 +45,13 @@ pub enum FinalizationRecord {
     },
 }
 pub(crate) fn validate_edit(original: &Message, next: &Message) -> anyhow::Result<()> {
+    validate_assistant_edit(original, next, MAX_FINAL_MESSAGE_BYTES)
+}
+pub(crate) fn validate_assistant_edit(
+    original: &Message,
+    next: &Message,
+    limit: usize,
+) -> anyhow::Result<()> {
     anyhow::ensure!(
         next.role == MessageRole::Assistant && !next.content.is_empty(),
         "assistant finalization must preserve role and nonempty content"
@@ -65,7 +72,7 @@ pub(crate) fn validate_edit(original: &Message, next: &Message) -> anyhow::Resul
         protected(original) == protected(next),
         "assistant finalization changed protected action or provider state"
     );
-    size(next, MAX_FINAL_MESSAGE_BYTES)?;
+    size(next, limit)?;
     Ok(())
 }
 

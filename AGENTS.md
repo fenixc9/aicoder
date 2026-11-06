@@ -135,6 +135,10 @@
   provider state. Atomically acknowledge the effective message before verification/dispatch;
   retain completed responses on callback failure and never repeat provider IO on receipt failure.
   Streamed previews remain distinct from canonical final messages and cannot promise redaction.
+  General message hooks finalize fresh accepted entries, never restored history or runtime
+  prefixes. Preserve custom/context sources, tool identity/status/capture/media and input
+  provenance. Keep pending inputs recoverable on failure; retain original completed tool results
+  until atomic finalization acknowledges, including cancellation and late duration expiry.
 - Process tools use explicit host launch settings and conservative capabilities. Keep remote
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership

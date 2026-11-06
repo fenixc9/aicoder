@@ -35,27 +35,28 @@ RUSTDOCFLAGS='-D warnings' cargo doc --locked -p aicoder-tui --all-features --no
 ## Smoke comparison
 
 The preceding [delivery footprint report](baselines/s7-custom-delivery-report.json) retains the
-22.14% wall median increase and its long tails. A supplementary comparison freezes source
-revisions 34ffa3d (before busy custom delivery) and 9b4b468 (after delivery), builds both with the
-same standalone runtime release command, copies/hashes the executables, warms them and runs ten
-interleaved AB/BA pairs. Each process runs 125 scripted cases, 2,500 cases total. The subsequent
-TUI-only fix is outside these source snapshots. No source changes or credentials were introduced
-into comparison worktrees; temporary checkouts were removed after measurement.
+22.14% wall median increase and its long tails. The historical supplementary run selected
+34ffa3d and 9b4b468 and requested the same standalone runtime release command with a shared target.
+Review later found that both executable hashes were identical and the candidate command completed
+in 0.19 seconds without compilation messages. Candidate source binding was not independently
+established. The [historical report](baselines/s7-matched-smoke-report.json) is now explicitly marked
+unverified for revision-comparison claims; all raw timing records, hashes and claimed revisions
+remain unchanged.
 
-| Observation | Reference | Candidate |
+| Historical observed label | Reference | Candidate |
 | --- | --- | --- |
 | Process wall median | 390.69 ms | 401.44 ms |
 | Recorded case total median | 363.73 ms | 370.92 ms |
 | Edit case median | 3.904 ms | 3.976 ms |
 | SessionResume case median | 9.585 ms | 9.607 ms |
 
-The ratio of process medians is **+2.75%**; the median of the ten paired percentage changes is
-**+0.38%**. All 20 samples, source IDs, executable hashes, build command, compiler/platform and
-load observations are in the [matched report](baselines/s7-matched-smoke-report.json). These are
-different statistics, so neither replaces the earlier three-sample workspace baseline.
+The +2.75% ratio of labelled medians and +0.38% median paired change describe those observed
+samples. They do not prove that both requested revisions were executed or resolve the earlier
+22.14% source comparison. The terminal-exit regression evidence above is unaffected.
 
-The 22% magnitude was not reproduced under this comparison. Shared host/filesystem, warm cache,
-no CPU affinity and standalone feature selection prevent a causal attribution or exclusion of a
-smaller regression. No cold-build, allocator, binary-section or isolated RSS profile was done.
-This does not measure real-model quality, vision, billing or the latency of active custom hooks.
-Controlled profiling and final Spark/Pi/release acceptance remain roadmap work.
+A later [independent comparison](baselines/s7-message-finalization-matched-report.json) uses the
+assistant-finalization commit versus the subsequent general message-finalization source digest,
+with separate target directories and fresh compiler-artifact manifest checks for both libraries
+and examples. It measures different source revisions; see [acceptance](s7-message-finalization-acceptance.md).
+Shared host/filesystem, warm cache and lack of affinity/allocator/section profiling still limit
+causal performance conclusions. Final Spark/Pi and release-quality acceptance remain open.

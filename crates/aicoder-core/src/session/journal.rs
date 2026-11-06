@@ -69,6 +69,40 @@ impl<'a> SessionJournal<'a> {
 }
 #[async_trait]
 impl RunJournal for SessionJournal<'_> {
+    async fn record_message_finalization(
+        &self,
+        record: &crate::extensions::MessageFinalizationRecord,
+    ) -> Result<()> {
+        crate::extensions::size(record, 64 * 1024)?;
+        let mut state = self.state.lock().expect("session journal poisoned");
+        self.write(
+            &mut state,
+            vec![SessionEntryData::Extension {
+                namespace: crate::extensions::MESSAGE_FINALIZATION_NAMESPACE.into(),
+                data: serde_json::to_value(record)?,
+            }],
+        )
+    }
+    async fn finalize_message(
+        &self,
+        commit: &crate::extensions::MessageFinalizationCommit,
+    ) -> Result<()> {
+        let entries = commit.session_entries()?;
+        let mut state = self.state.lock().expect("session journal poisoned");
+        ensure!(
+            !state.saved.contains_key(&commit.index),
+            "finalized message position already saved"
+        );
+        self.write(&mut state, entries)?;
+        let id = state
+            .session
+            .metadata()
+            .leaf_id
+            .clone()
+            .expect("finalized message checkpoint");
+        state.saved.insert(commit.index, id);
+        Ok(())
+    }
     async fn record_finalization(
         &self,
         record: &crate::extensions::FinalizationRecord,

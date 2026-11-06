@@ -101,8 +101,13 @@ that full product parity has already been achieved.
    [Assistant finalization](assistant-finalization.md) now provides ordered text/visible-reasoning
    edits after paid provider completion, atomically persisting the effective message before tool
    dispatch and verification. Role, action blocks and opaque provider state remain protected;
-   raw streaming previews remain separate. Generic User/Custom/Tool finalization remains open;
-   existing input/tool hooks do not establish complete all-role message_end equivalence.
+   raw streaming previews remain separate. [General message finalization](message-finalization.md)
+   now covers fresh User/Custom/Tool and sourced System context, including raw/expanded input,
+   idle/queued/next-turn delivery and startup/boundary transactions. Actual tool status/capture/media
+   and custom/context provenance remain protected; specialized hooks handle status/argument edits.
+   [Acceptance](s7-message-finalization-acceptance.md) includes real owned tools, Code Mode, PTY and
+   authenticated SSE. Existing histories are not re-finalized; benchmark hosts needing fresh-input
+   hooks use the same AgentPrompt APIs. Native failure policy/limits and TypeScript ABI still differ.
    [Startup hooks](startup-hooks.md) now freeze run-level System prefix replacement, admitted root
    selection and sourced context before turn validation/persistence. Empty catalogs, once-only
    preparation, queueing while busy, restored context and expiring private overrides are verified.
@@ -136,8 +141,8 @@ passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /
 incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
 original score/release requirements stay open; local scripted scores cannot substitute for them.
 
-The next implementation items are all-role message finalization, session lifecycle/navigation
-veto and boundary context-edit/compaction drafts. The final audit must rerun the matrix
+The next implementation items are session lifecycle/navigation veto and boundary context-edit/
+compaction drafts. The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.
 
 [Terminal/performance follow-up](s7-terminal-exit-followup.md) records the TUI terminal-owner

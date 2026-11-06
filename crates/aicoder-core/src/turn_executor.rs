@@ -3,6 +3,7 @@ mod custom_delivery;
 mod finalization;
 mod input;
 mod lifecycle;
+mod messages;
 mod request_view;
 mod startup;
 
@@ -52,6 +53,7 @@ pub(crate) struct RunScope {
     state: AgentRunStateMachine,
 }
 struct RunPreparation {
+    finalized_messages: Vec<crate::extensions::FinalizedMessage>,
     request: ModelRequest,
     system_prefix_len: usize,
     prepared_request: Option<crate::extensions::PreparedRequestView>,
@@ -61,6 +63,7 @@ struct RunPreparation {
     trigger: Option<crate::RunTrigger>,
 }
 pub struct TurnExecutor {
+    pub(crate) message_finalizers: Option<Arc<crate::extensions::MessageFinalizers>>,
     finalizers: Vec<crate::extensions::Registered<dyn crate::extensions::AssistantMessageHook>>,
     input_hooks: Vec<crate::extensions::Registered<dyn crate::extensions::InputHook>>,
     input_expander: Option<Arc<dyn crate::extensions::InputExpander>>,
@@ -117,6 +120,7 @@ impl TurnExecutor {
         config: TurnExecutionConfig,
     ) -> Self {
         Self {
+            message_finalizers: dispatcher.message_finalizers.clone(),
             finalizers: Vec::new(),
             input_hooks: Vec::new(),
             input_expander: None,
@@ -408,6 +412,7 @@ impl TurnExecutor {
         scope: RunScope,
     ) -> RunOutcome {
         let crate::ExecutionInput {
+            finalized_messages,
             trigger,
             request,
             history,
@@ -463,6 +468,7 @@ impl TurnExecutor {
             Ok(()) => {
                 let inner = self.run_inner(
                     RunPreparation {
+                        finalized_messages,
                         request,
                         system_prefix_len,
                         prepared_request,
@@ -627,6 +633,7 @@ impl TurnExecutor {
         control: (&Arc<RunLimiter>, &dyn crate::RunJournal),
     ) -> Result<(Message, Option<StopReason>)> {
         let RunPreparation {
+            finalized_messages,
             mut request,
             system_prefix_len,
             mut prepared_request,
@@ -688,6 +695,14 @@ impl TurnExecutor {
 
         self.start_lifecycle(journal, context).await?;
         self.start_finalization(journal, context).await?;
+        if let Some(chain) = &self.message_finalizers {
+            let record = chain.started();
+            tokio::select! {biased;cancelled=context.cancelled()=>return Err(cancelled.into()),result=tokio::time::timeout(std::time::Duration::from_secs(30),journal.record_message_finalization(&record))=>result.map_err(|_|anyhow::anyhow!("message finalization journal timed out")).and_then(|v|v).map_err(|e|RunFailure::from_error(RunStage::Persistence,&e))?}
+        }
+        for finalized in finalized_messages {
+            limits.charge_output_bytes(finalized.encoded_bytes()?)?;
+            events.emit(finalized.event());
+        }
         request.stream = self.config.stream;
         if prepared_start.is_none() {
             self.prepare_model_tools(&mut request)?;
@@ -739,7 +754,7 @@ impl TurnExecutor {
                 &mut context_messages,
                 progress,
                 context,
-                (journal, limits),
+                (journal, limits, self.message_finalizers.as_deref()),
                 InputBoundary::BeforeModel,
                 &round_events,
                 |messages, message| self.validate_control_input(&base_request, messages, message),
@@ -1406,7 +1421,7 @@ impl TurnExecutor {
                                 &mut context_messages,
                                 progress,
                                 context,
-                                (journal, limits),
+                                (journal, limits, self.message_finalizers.as_deref()),
                                 InputBoundary::AfterCompletion {
                                     round_limit: self.config.max_rounds,
                                 },
@@ -1473,7 +1488,7 @@ impl TurnExecutor {
                                         &mut context_messages,
                                         progress,
                                         context,
-                                        (journal, limits),
+                                        (journal, limits, self.message_finalizers.as_deref()),
                                         InputBoundary::AfterCompletion {
                                             round_limit: self.config.max_rounds,
                                         },
@@ -1694,12 +1709,16 @@ async fn apply_inputs(
     messages: &mut Vec<Message>,
     progress: &mut RunProgress,
     context: &TurnExecutionContext,
-    accounting: (&dyn crate::RunJournal, &Arc<RunLimiter>),
+    accounting: (
+        &dyn crate::RunJournal,
+        &Arc<RunLimiter>,
+        Option<&crate::extensions::MessageFinalizers>,
+    ),
     boundary: InputBoundary,
     events: &AgentEventEmitter,
     validate: impl Fn(&[Message], &crate::RunInput) -> Result<()>,
 ) -> Result<bool> {
-    let (journal, limits) = accounting;
+    let (journal, limits, finalizers) = accounting;
     let Some(control) = &context.control else {
         return Ok(false);
     };
@@ -1728,7 +1747,7 @@ async fn apply_inputs(
             messages,
             progress,
             context,
-            (journal, limits),
+            (journal, limits, finalizers),
             events,
             &validate,
         )
@@ -1739,17 +1758,46 @@ async fn apply_inputs(
 }
 
 async fn commit_run_input(
-    input: crate::RunInput,
+    mut input: crate::RunInput,
     messages: &mut Vec<Message>,
     progress: &mut RunProgress,
     context: &TurnExecutionContext,
-    accounting: (&dyn crate::RunJournal, &Arc<RunLimiter>),
+    accounting: (
+        &dyn crate::RunJournal,
+        &Arc<RunLimiter>,
+        Option<&crate::extensions::MessageFinalizers>,
+    ),
     events: &AgentEventEmitter,
     validate: &impl Fn(&[Message], &crate::RunInput) -> Result<()>,
 ) -> Result<()> {
-    let (journal, limits) = accounting;
+    let (journal, limits, finalizers) = accounting;
     let control = context.control.as_ref().expect("controlled input");
     validate(messages, &input)?;
+    limits.check()?;
+    let finalized = match finalizers {
+        Some(chain) => {
+            chain
+                .prepare(
+                    &input.message,
+                    input.custom.as_ref(),
+                    match input.kind {
+                        crate::RunInputKind::Steer => crate::extensions::MessageOrigin::Steer,
+                        crate::RunInputKind::FollowUp => crate::extensions::MessageOrigin::FollowUp,
+                        crate::RunInputKind::Context => crate::extensions::MessageOrigin::Deferred,
+                    },
+                    Some(progress.rounds),
+                    context,
+                )
+                .await?
+        }
+        None => None,
+    };
+    if let Some(value) = &finalized {
+        input.message = value.message.clone();
+        crate::extensions::size(&input, control.input_byte_limit())?;
+        validate(messages, &input)?;
+        limits.charge_output_bytes(value.encoded_bytes()?)?;
+    }
     let receipt = control.input_receipt(input.id);
     if let Some(receipt) = &receipt {
         let bytes = crate::extensions::size(
@@ -1761,13 +1809,33 @@ async fn commit_run_input(
         limits.charge_output_bytes(bytes)?;
     }
     let index = progress.messages.len();
-    progress.messages.push(input.message.clone());
+    if finalized.is_none() {
+        progress.messages.push(input.message.clone());
+    }
+    let final_commit =
+        finalized
+            .as_ref()
+            .map(|value| crate::extensions::MessageFinalizationCommit {
+                index,
+                finalized: value.clone(),
+                input: Some(crate::extensions::FinalizedInput {
+                    run_id: input.run_id.clone(),
+                    id: input.id,
+                    kind: input.kind,
+                    receipt: receipt.as_deref().map(|r| r.for_record()),
+                }),
+                assistant: None,
+            });
     tokio::select! {
         biased;
         cancelled=context.cancelled()=>return Err(cancelled.into()),
-        result=async{if input.custom.is_some(){journal.input_custom(index,&input).await}else{match &receipt{Some(receipt)=>journal.input_prepared(index,&input,receipt).await,None=>journal.input(index,&input).await}}}=>{
+        result=async{if let Some(commit)=&final_commit{journal.finalize_message(commit).await}else if input.custom.is_some(){journal.input_custom(index,&input).await}else{match &receipt{Some(receipt)=>journal.input_prepared(index,&input,receipt).await,None=>journal.input(index,&input).await}}}=>{
             result.map_err(|error|anyhow::Error::from(RunFailure::from_error(RunStage::Persistence,&error)))?;
         }
+    }
+    if let Some(value) = finalized {
+        progress.messages.push(input.message.clone());
+        events.emit(value.event());
     }
     control.applied(input.id);
     messages.push(input.message.clone());
@@ -2044,6 +2112,12 @@ impl TurnExecutorBuilder {
             dispatcher = dispatcher.with_artifact_store(store)?;
         }
         if let Some(extensions) = &self.extensions {
+            let hooks = extensions.message_hooks();
+            if !hooks.is_empty() {
+                dispatcher.message_finalizers = Some(Arc::new(
+                    crate::extensions::MessageFinalizers::new(dispatcher.workspace_root(), hooks),
+                ));
+            }
             dispatcher = dispatcher
                 .with_tool_hooks(extensions.tool_hooks())
                 .with_interception(extensions.call_hooks(), extensions.result_hooks());

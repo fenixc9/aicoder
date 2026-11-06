@@ -166,7 +166,8 @@ impl TurnExecutor {
             }
             .into());
         }
-        let commit = BoundaryCommit {
+        let mut commit = BoundaryCommit {
+            message_finalizations: Vec::new(),
             startup: None,
             kind,
             round: progress.rounds,
@@ -175,6 +176,8 @@ impl TurnExecutor {
             continue_run: again,
             changes,
         };
+        self.finalize_context_commit(&mut commit, context).await?;
+        limits.check()?;
         crate::extensions::size(&commit, 128 * 1024)?;
         let messages = commit.messages();
         if !messages.is_empty() {
@@ -193,6 +196,7 @@ impl TurnExecutor {
         let message_count = messages.len();
         progress.messages.extend(messages.iter().cloned());
         model_context.extend(messages);
+        Self::context_finalization_events(&commit, events);
         events.emit(AgentRawEvent::LifecycleBoundaryCommitted {
             boundary: kind,
             entries: commit.entries.len(),
