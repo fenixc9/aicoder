@@ -284,6 +284,24 @@ impl JsonlSessionRepository {
     }
 }
 impl SessionRepository for JsonlSessionRepository {
+    fn prepare_fork(
+        &self,
+        source: &RunSession,
+        point: ForkPoint,
+        limits: SessionForkLimits,
+        context: &aicoder_core::TurnExecutionContext,
+    ) -> Result<SessionForkPlan> {
+        super::archive::prepare_fork(self, source, point, limits, context)
+    }
+    fn publish_fork(
+        &self,
+        source: &RunSession,
+        plan: SessionForkPlan,
+        context: &aicoder_core::TurnExecutionContext,
+    ) -> Result<PublishedSessionFork> {
+        super::fork::publish(self, source, plan, context)
+    }
+
     fn extension_state(
         &self,
         id: &str,
@@ -460,7 +478,7 @@ impl SessionRepository for JsonlSessionRepository {
         )
     }
 }
-fn header(metadata: &SessionMetadata) -> Result<Vec<u8>> {
+pub(super) fn header(metadata: &SessionMetadata) -> Result<Vec<u8>> {
     line(
         &serde_json::json!({"type":"session","version":SESSION_VERSION,"id":metadata.id,"created_at":metadata.created_at,"cwd":metadata.cwd}),
     )
@@ -686,7 +704,10 @@ fn options() -> OpenOptions {
     }
     options
 }
-fn create_private(path: &Path) -> std::io::Result<File> {
+pub(super) fn create_private_readwrite(path: &Path) -> std::io::Result<File> {
+    options().read(true).write(true).create_new(true).open(path)
+}
+pub(super) fn create_private(path: &Path) -> std::io::Result<File> {
     options().write(true).create_new(true).open(path)
 }
 pub(super) fn open_data(path: &Path, read: bool, write: bool) -> Result<File> {

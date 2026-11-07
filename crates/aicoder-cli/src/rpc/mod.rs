@@ -68,10 +68,26 @@ struct FinishedBody<'a> {
 
 type InputReply = (u64, Result<Value, Failure>);
 type InputJobUpdate = Option<Result<InputReply, tokio::task::JoinError>>;
+struct SessionJobOutput {
+    session: aicoder_core::session::RunSession,
+    reports: Vec<aicoder_core::session::SessionActionReport>,
+    editor: Option<aicoder_core::session::ForkEditor>,
+    provenance: Option<aicoder_core::session::ForkProvenance>,
+}
+impl From<aicoder_core::session::SessionSelectionOutcome> for SessionJobOutput {
+    fn from(s: aicoder_core::session::SessionSelectionOutcome) -> Self {
+        Self {
+            session: s.session,
+            reports: s.reports,
+            editor: None,
+            provenance: None,
+        }
+    }
+}
 struct SessionJob {
     id: u64,
     context: TurnExecutionContext,
-    owner: JoinHandle<Result<aicoder_core::session::SessionSelectionOutcome, String>>,
+    owner: JoinHandle<Result<SessionJobOutput, String>>,
 }
 struct Host<'a> {
     runtime: &'a Runtime,
@@ -174,7 +190,7 @@ impl<'a> Host<'a> {
         match command {
             Command::Initialize => Ok(
                 json!({"protocol_version":VERSION,"event_schema_version":aicoder_core::events::EVENT_SCHEMA_VERSION,
-                "commands":["initialize","prompt","status","steer","follow_up","cancel","approve","select_session","cancel_session_selection","session_tree","session_search","permissions","revoke","shutdown"],
+                "commands":["initialize","prompt","status","steer","follow_up","cancel","approve","select_session","fork_session","cancel_session_selection","session_tree","session_search","permissions","revoke","shutdown"],
                 "limits":{"input_line_bytes":input::MAX_INPUT,"frame_bytes":transport::MAX_FRAME,"output_queue_bytes":transport::MAX_BYTES,"output_queue_frames":transport::MAX_FRAMES,"output_stall_ms":transport::STALL.as_millis(),"max_request_id":protocol::MAX_ID,"active_runs":1},
                 "model":self.runtime.config().provider.model,"automatic_approval":self.automatic}),
             ),
@@ -266,6 +282,7 @@ impl<'a> Host<'a> {
                     .respond_approval_decision(&approval_id, decision)?;
                 Ok(json!({"answered":true}))
             }
+            Command::ForkSession { .. } => anyhow::bail!("Fork requires asynchronous dispatch"),
             Command::SelectSession { session_id } => {
                 anyhow::ensure!(
                     !self.agent.has_session_hooks(),
@@ -369,6 +386,47 @@ impl<'a> Host<'a> {
             agent
                 .select_session(repository.as_ref(), current.as_deref(), selection, owned)
                 .await
+                .map(SessionJobOutput::from)
+                .map_err(|e| aicoder_core::redaction::sanitize_text(&e.to_string(), 2048))
+        });
+        self.session_job = Some(SessionJob { id, context, owner });
+        Ok(())
+    }
+    fn begin_fork(
+        &mut self,
+        id: u64,
+        point: aicoder_core::session::ForkPoint,
+    ) -> Result<(), Failure> {
+        if self.active.is_some() || self.session_job.is_some() {
+            return Err(Failure::new(
+                "busy",
+                "Wait for the owned operation before forking",
+            ));
+        }
+        let SessionSelection::Existing(source) = &self.selection else {
+            return Err(Failure::new("no_session", "Select a stored session first"));
+        };
+        let source = source.clone();
+        let agent = self.agent.clone();
+        let repository = self.repository.clone();
+        let context = TurnExecutionContext::new().with_approval_sessions(self.approvals.clone());
+        let owned = context.clone();
+        let owner = tokio::spawn(async move {
+            agent
+                .fork_session(
+                    repository.as_ref(),
+                    &source,
+                    point,
+                    aicoder_core::session::SessionForkLimits::default(),
+                    owned,
+                )
+                .await
+                .map(|f| SessionJobOutput {
+                    session: f.session,
+                    reports: f.reports,
+                    editor: f.editor,
+                    provenance: Some(f.provenance),
+                })
                 .map_err(|e| aicoder_core::redaction::sanitize_text(&e.to_string(), 2048))
         });
         self.session_job = Some(SessionJob { id, context, owner });
@@ -376,7 +434,7 @@ impl<'a> Host<'a> {
     }
     fn finish_session_selection(
         &mut self,
-        result: Result<aicoder_core::session::SessionSelectionOutcome, String>,
+        result: Result<SessionJobOutput, String>,
     ) -> Result<Value, Failure> {
         match result {
             Ok(output) => {
@@ -384,7 +442,12 @@ impl<'a> Host<'a> {
                 self.adopted_session = Some(output.session.metadata().id.clone());
                 self.selection = SessionSelection::Existing(output.session.metadata().id.clone());
                 self.last = None;
-                Ok(json!({"session_id":self.session_id(),"session_lifecycle":output.reports}))
+                let mut reply =
+                    json!({"session_id":self.session_id(),"session_lifecycle":output.reports});
+                if let Some(provenance) = output.provenance {
+                    reply["fork"] = json!({"provenance":provenance,"editor":output.editor});
+                }
+                Ok(reply)
             }
             Err(message) => Err(Failure::new("session_selection_failed", message)),
         }
@@ -561,12 +624,7 @@ async fn serve(host: &mut Host<'_>) -> Result<()> {
             Input(Result<Option<String>>),
             Run(Update),
             InputPrepared(InputJobUpdate),
-            SessionSelected(
-                Result<
-                    Result<aicoder_core::session::SessionSelectionOutcome, String>,
-                    tokio::task::JoinError,
-                >,
-            ),
+            SessionSelected(Result<Result<SessionJobOutput, String>, tokio::task::JoinError>),
             Signal,
         }
         let action = tokio::select! {
@@ -621,6 +679,10 @@ async fn serve(host: &mut Host<'_>) -> Result<()> {
                             Err(error) => Response::new(Some(id), Err(error)),
                         }
                     }
+                    Ok((id, Command::ForkSession { point })) => match host.begin_fork(id, point) {
+                        Ok(()) => continue,
+                        Err(error) => Response::new(Some(id), Err(error)),
+                    },
                     Ok((id, command)) => Response::new(Some(id), host.command(command)),
                     Err(response) => response,
                 };
@@ -938,5 +1000,48 @@ mod input_tests {
         let job = host.session_job.take().unwrap();
         assert!(job.context.is_cancelled());
         assert!(job.owner.await.unwrap().is_err());
+    }
+    #[tokio::test]
+    async fn rpc_fork_is_owned_and_adopts_a_distinct_session_with_an_inert_editor_result() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = runtime(root.path());
+        let cli = Cli::parse_from(["aicoder", "--no-session", "--yes"]);
+        let mut host = Host::new(&cli, &runtime).unwrap();
+        let mut session = host.repository.create(root.path()).unwrap();
+        host.repository
+            .append_entries(
+                &mut session,
+                vec![
+                    aicoder_core::session::SessionEntryData::Message {
+                        message: Message::text(MessageRole::User, "restore this draft"),
+                    },
+                    aicoder_core::session::SessionEntryData::Message {
+                        message: Message::text(MessageRole::Assistant, "answer"),
+                    },
+                ],
+            )
+            .unwrap();
+        let source = session.metadata().id.clone();
+        host.selection = SessionSelection::Existing(source.clone());
+        host.begin_fork(10, aicoder_core::session::ForkPoint::BeforeLastUser)
+            .unwrap();
+        assert!(
+            host.command(Command::Prompt {
+                text: "must wait".into()
+            })
+            .is_err()
+        );
+        assert!(
+            host.begin_fork(11, aicoder_core::session::ForkPoint::Current)
+                .is_err()
+        );
+        let job = host.session_job.take().unwrap();
+        let output = job.owner.await.unwrap().unwrap();
+        let reply = host.finish_session_selection(Ok(output)).unwrap();
+        let target = reply["session_id"].as_str().unwrap();
+        assert_ne!(target, source);
+        assert_eq!(reply["fork"]["editor"]["text"], "restore this draft");
+        assert!(host.repository.open(target).unwrap().messages().is_empty());
+        assert_eq!(host.repository.open(&source).unwrap().messages().len(), 2);
     }
 }

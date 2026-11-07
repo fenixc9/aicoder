@@ -1,5 +1,37 @@
 # API migrations
 
+## S7: cross-session fork and clone
+
+Agent adds fork_session / apply_fork over PreparedSessionFork and SessionForkPlan. ForkPoint selects
+Current (clone), Root, BeforeLastUser, Before(user ID/label) or At(entry ID/label). Plans retain source
+ownership, exact target IDs, bounded copied records, provenance and optional editor text. No plan or
+backend pin is serializable. SessionRepository adds prepare_fork / publish_fork; unsupported defaults
+fail before publication. Memory and JSONL implementations return a target plus its owned lease.
+Custom backends must publish the exact target once and distinguish post-visibility failure.
+See [contract](session-fork.md) and [acceptance](s7-session-fork-acceptance.md).
+
+SessionOperation adds Fork; lifecycle/shutdown reasons add Fork. Update exhaustive Rust matches.
+After publication, Shutdown/Started reports preserve actual target metadata even if observation
+fails or cancellation races. Source and target grants expire at publication; queue/transport/runtime
+authority stays outside copied history. SessionForkPublishFailure carries visible target metadata
+when publication visibility is known but later identity/durability checks fail. Inspect it before
+another explicit request; completed publication is never retried automatically.
+
+Original record IDs/parent links and summary anchors remain intact. Navigation labels that refer
+outside copied ancestry become inert sourced metadata, with the original data retained; resolved
+labels for copied records and the global title are appended as target metadata. A cut partial turn
+gets a sourced fork-boundary terminal record with unknown accounting, not an invented completion.
+Session versions stay unchanged; aicoder.session.fork.v1 records provenance. Original source files
+are not rewritten, and copied observations do not restore executable authority.
+
+CLI adds fork-session ID [ENTRY] [--at] and clone-session ID. TUI adds /fork [USER_ENTRY_OR_LABEL],
+/fork-at ENTRY_OR_LABEL and /clone. Optional command completion no longer inserts help placeholders.
+Historical editor text is a bounded draft; it never submits automatically or replaces a newer draft.
+Images omitted from an editor preview are explicit. RPC adds asynchronous fork_session {point},
+sharing the owned session-operation slot and targeted cancellation. Web adds authenticated fork,
+operation-status/UI/cancel endpoints and browser controls. Request IDs remain monotonic; disconnect
+does not cancel an owner, and host shutdown awaits it.
+
 ## S7: guarded session navigation and host lifecycle
 
 Extension adds session_hook(HookSpec, Arc<dyn SessionHook>). before receives immutable resolved

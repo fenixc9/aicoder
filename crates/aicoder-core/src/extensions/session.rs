@@ -7,15 +7,26 @@ use std::{path::Path, time::Duration};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum SessionOperation {
-    Navigation { action: ArchiveNavigation },
+    Navigation {
+        action: ArchiveNavigation,
+    },
+    Fork {
+        source_session_id: String,
+        point: ForkPoint,
+    },
     New,
-    Resume { session_id: String },
-    Shutdown { reason: SessionShutdownReason },
+    Resume {
+        session_id: String,
+    },
+    Shutdown {
+        reason: SessionShutdownReason,
+    },
     Reload,
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionShutdownReason {
+    Fork,
     Quit,
     Reload,
     New,
@@ -61,6 +72,7 @@ pub enum SessionEventKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionLifecycleReason {
+    Fork,
     Startup,
     New,
     Resume,

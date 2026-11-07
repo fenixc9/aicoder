@@ -73,6 +73,7 @@ pub struct SessionChange {
     pub session: Option<aicoder_core::session::RunSession>,
     pub info: Option<SessionInfo>,
     pub deleted: Option<String>,
+    pub editor: Option<aicoder_core::session::ForkEditor>,
     pub notices: Vec<String>,
 }
 pub enum CapturedInput {
@@ -478,6 +479,7 @@ impl AgentRuntime {
                 Ok::<_, anyhow::Error>(SessionChange {
                     info,
                     deleted: None,
+                    editor: None,
                     session: Some(output.session),
                     notices,
                 })
@@ -540,6 +542,7 @@ impl AgentRuntime {
                     }
                     SessionChange {
                         deleted: None,
+                        editor: None,
                         info: repository.session_info(&id).ok(),
                         session: Some(output.session),
                         notices,
@@ -578,8 +581,63 @@ impl AgentRuntime {
                 }
                 let deleted=if context.is_cancelled(){notices.push("Deletion cancelled; the session remains stored.".into());None}
                 else{match repository.delete(&id){Ok(())=>{approvals.remove(&workspace,&id);notices.push("Session deleted.".into());Some(id)},Err(error)=>{if session.is_none(){return Err(error)}notices.push("New session selected, but the previous session could not be deleted; inspect it before retrying.".into());None}}};
-                Ok::<_,anyhow::Error>(SessionChange{session,info,deleted,notices})
+                Ok::<_,anyhow::Error>(SessionChange{session,info,deleted,editor:None,notices})
             }.await.map_err(|e|aicoder_core::redaction::sanitize_text(&e.to_string(),2048));
+            let _ = sent.send(work);
+        });
+        ActiveRun {
+            events: None,
+            completion: RunCompletion::Navigation(received),
+        }
+    }
+    pub fn start_fork(
+        &self,
+        selection: SessionSelection,
+        point: aicoder_core::session::ForkPoint,
+        context: TurnExecutionContext,
+    ) -> ActiveRun {
+        let agent = self.agent.clone();
+        let repository = self.repository.clone();
+        let adopted = self.adopted_session.clone();
+        let approvals = self.approvals.clone();
+        let workspace = self.workspace.clone();
+        let (sent, received) = oneshot::channel();
+        tokio::spawn(async move {
+            let work = async {
+                let SessionSelection::Existing(id) = selection else {
+                    anyhow::bail!("Select a stored session first")
+                };
+                let output = agent
+                    .fork_session(
+                        repository.as_ref(),
+                        &id,
+                        point,
+                        aicoder_core::session::SessionForkLimits::default(),
+                        context,
+                    )
+                    .await?;
+                let target = output.session.metadata().id.clone();
+                *adopted.lock().expect("TUI session binding") = Some(target.clone());
+                approvals.remove(&workspace, &id);
+                approvals.remove(&workspace, &target);
+                let mut notices = vec![format!("New forked session: {target}")];
+                if output
+                    .reports
+                    .iter()
+                    .any(|r| !r.delivery.failures.is_empty())
+                {
+                    notices.push("Fork published; lifecycle observations were incomplete.".into());
+                }
+                Ok::<_, anyhow::Error>(SessionChange {
+                    info: repository.session_info(&target).ok(),
+                    session: Some(output.session),
+                    deleted: None,
+                    editor: output.editor,
+                    notices,
+                })
+            }
+            .await
+            .map_err(|e| aicoder_core::redaction::sanitize_text(&e.to_string(), 2048));
             let _ = sent.send(work);
         });
         ActiveRun {
@@ -615,6 +673,7 @@ impl AgentRuntime {
                 session: None,
                 info: None,
                 deleted: None,
+                editor: None,
                 notices,
             }));
         });

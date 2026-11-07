@@ -837,6 +837,9 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                     | commands::SlashCommand::Unlabel
                     | commands::SlashCommand::Checkout
                     | commands::SlashCommand::Branch
+                    | commands::SlashCommand::Fork
+                    | commands::SlashCommand::ForkAt
+                    | commands::SlashCommand::Clone
                     | commands::SlashCommand::Recover
                     | commands::SlashCommand::Model),
                 )) => {
@@ -848,6 +851,28 @@ fn handle_input_key(app: &mut App, runtime: &mut AgentRuntime, key: KeyEvent) {
                         return;
                     }
                     let args = commands::arguments(&prompt);
+                    if matches!(
+                        command,
+                        commands::SlashCommand::Fork
+                            | commands::SlashCommand::ForkAt
+                            | commands::SlashCommand::Clone
+                    ) {
+                        use aicoder_core::session::ForkPoint;
+                        let point = match command {
+                            commands::SlashCommand::Clone => ForkPoint::Current,
+                            commands::SlashCommand::ForkAt => ForkPoint::At(args.into()),
+                            _ if args.is_empty() => ForkPoint::BeforeLastUser,
+                            _ => ForkPoint::Before(args.into()),
+                        };
+                        let context = app.ui_context(runtime.execution_context());
+                        app.run = Some(runtime.start_fork(
+                            app.session_selection.clone(),
+                            point,
+                            context.clone(),
+                        ));
+                        app.begin_session_change(context);
+                        return;
+                    }
                     if command == commands::SlashCommand::Model {
                         if let aicoder_core::SessionSelection::Existing(id) =
                             app.session_selection.clone()
@@ -1118,6 +1143,9 @@ fn handle_slash_command(app: &mut App, input: &str) -> bool {
             | commands::SlashCommand::Unlabel
             | commands::SlashCommand::Checkout
             | commands::SlashCommand::Branch
+            | commands::SlashCommand::Fork
+            | commands::SlashCommand::ForkAt
+            | commands::SlashCommand::Clone
             | commands::SlashCommand::Recover
             | commands::SlashCommand::Model
             | commands::SlashCommand::Thinking

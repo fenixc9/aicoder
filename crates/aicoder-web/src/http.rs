@@ -47,6 +47,13 @@ pub(crate) fn router(host: WebHost) -> Router {
         )
         .route("/api/state", get(state))
         .route("/api/runs", post(start))
+        .route("/api/session/fork", post(start_fork))
+        .route("/api/session/operation", get(session_operation))
+        .route(
+            "/api/session/operation/{id}/cancel",
+            post(cancel_session_operation),
+        )
+        .route("/api/session/operation/{id}/ui", post(session_operation_ui))
         .route("/api/commands", get(commands).post(start_command))
         .route("/api/commands/{id}", get(command_status))
         .route("/api/commands/{id}/ui", post(command_ui))
@@ -127,7 +134,7 @@ fn authorized(headers: &HeaderMap, token: &str) -> bool {
 async fn state(State(host): State<WebHost>) -> Response {
     let s = host.0.state.lock().expect("Web state");
     bounded_json(
-        &json!({"version":1,"closing":s.closing,"next_prompt_id":s.last_id.checked_add(1).filter(|id|*id<=MAX_ID),"run":s.current.as_ref().map(|r|r.snapshot()),"command":s.command.as_ref().map(|job|job.snapshot())}),
+        &json!({"version":1,"closing":s.closing,"session_id":match &s.selection{aicoder_core::SessionSelection::Existing(id)=>Some(id),_=>None},"next_prompt_id":s.last_id.checked_add(1).filter(|id|*id<=MAX_ID),"run":s.current.as_ref().map(|r|r.snapshot()),"command":s.command.as_ref().map(|job|job.snapshot()),"session_operation":s.session_operation.as_ref().map(|job|job.snapshot())}),
     )
 }
 #[derive(Deserialize)]
@@ -156,6 +163,83 @@ async fn start(
     match host.start(payload.id,&payload.text){
         Ok(run)=>(StatusCode::ACCEPTED,Json(json!({"version":1,"run_id":run.handle.run_id(),"events":format!("/api/runs/{}/events",run.handle.run_id())}))).into_response(),
         Err((code,message))=>error(if code=="invalid_input"{StatusCode::BAD_REQUEST}else{StatusCode::CONFLICT},code,message),
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ForkInput {
+    id: u64,
+    point: aicoder_core::session::ForkPoint,
+}
+async fn start_fork(
+    State(host): State<WebHost>,
+    payload: Result<Json<ForkInput>, JsonRejection>,
+) -> Response {
+    let p = match body(payload) {
+        Ok(v) => v,
+        Err(r) => return *r,
+    };
+    match host.start_fork(p.id, p.point) {
+        Ok(job) => (
+            StatusCode::ACCEPTED,
+            Json(json!({"version":1,"operation_id":job.id,"request_id":job.request_id})),
+        )
+            .into_response(),
+        Err((code, message)) => error(StatusCode::CONFLICT, code, message),
+    }
+}
+async fn session_operation(State(host): State<WebHost>) -> Response {
+    bounded_json(
+        &json!({"version":1,"operation":host.session_operation().map(|job|job.snapshot())}),
+    )
+}
+async fn cancel_session_operation(
+    State(host): State<WebHost>,
+    Path(id): Path<String>,
+    payload: Result<Json<Empty>, JsonRejection>,
+) -> Response {
+    if let Err(response) = body(payload) {
+        return *response;
+    }
+    let Some(job) = host.session_operation().filter(|job| job.id == id) else {
+        return error(
+            StatusCode::NOT_FOUND,
+            "unknown_operation",
+            "No owned session operation matches",
+        );
+    };
+    job.cancel("Web session operation cancelled");
+    bounded_json(&json!({"cancel_requested":true}))
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionUiInput {
+    question_id: aicoder_core::ui::UiRequestId,
+    answer: aicoder_core::ui::UiAnswer,
+}
+async fn session_operation_ui(
+    State(host): State<WebHost>,
+    Path(id): Path<String>,
+    payload: Result<Json<SessionUiInput>, JsonRejection>,
+) -> Response {
+    let p = match body(payload) {
+        Ok(v) => v,
+        Err(r) => return *r,
+    };
+    let Some(job) = host.session_operation().filter(|job| job.id == id) else {
+        return error(
+            StatusCode::NOT_FOUND,
+            "unknown_operation",
+            "No owned session operation matches",
+        );
+    };
+    match job.ui.answer(p.question_id, p.answer) {
+        Ok(()) => bounded_json(&json!({"answered":true})),
+        Err(_) => error(
+            StatusCode::CONFLICT,
+            "invalid_ui_answer",
+            "Question expired or answer invalid",
+        ),
     }
 }
 async fn commands(State(host): State<WebHost>) -> Response {

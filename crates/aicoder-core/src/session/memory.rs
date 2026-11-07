@@ -36,6 +36,55 @@ impl Drop for Lease {
     }
 }
 impl SessionRepository for MemorySessionRepository {
+    fn publish_fork(
+        &self,
+        source: &RunSession,
+        plan: SessionForkPlan,
+        context: &crate::TurnExecutionContext,
+    ) -> Result<PublishedSessionFork> {
+        plan.validate_source(source)?;
+        if context.is_cancelled() {
+            return Err(context.error().into());
+        }
+        let mut state = self.state.lock().expect("memory repository poisoned");
+        let actual = state
+            .sessions
+            .get(&plan.source().id)
+            .context("fork source missing")?;
+        ensure!(actual.metadata() == plan.source(), "fork source changed");
+        let token = match source {
+            RunSession::Full(s) => s.run_token(),
+            RunSession::Window(w) => w.run_token(),
+        };
+        ensure!(
+            state
+                .runs
+                .get(&plan.source().id)
+                .is_some_and(|t| Some(t.as_str()) == token),
+            "fork requires owned source"
+        );
+        let mut target = plan.snapshot().clone();
+        target.clear_backend_state();
+        target.attach_run_token(None);
+        let id = target.metadata().id.clone();
+        ensure!(
+            !state.sessions.contains_key(&id),
+            "fork target already exists"
+        );
+        let token = uuid::Uuid::new_v4().to_string();
+        state.sessions.insert(id.clone(), target.clone());
+        state.runs.insert(id.clone(), token.clone());
+        target.attach_run_token(Some(token.clone()));
+        Ok(PublishedSessionFork {
+            session: RunSession::Full(Box::new(target)),
+            lease: Box::new(Lease {
+                state: self.state.clone(),
+                id,
+                token,
+            }),
+        })
+    }
+
     fn create(&self, cwd: &Path) -> Result<Session> {
         let timestamp = now_millis()?;
         let id = uuid::Uuid::new_v4().to_string();

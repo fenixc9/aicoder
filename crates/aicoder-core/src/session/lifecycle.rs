@@ -317,6 +317,7 @@ impl Agent {
         let mut session = nav.open_run(id)?;
         let _lease = session.acquire(repository)?;
         let event_reason = match reason {
+            SessionShutdownReason::Fork => SessionLifecycleReason::Fork,
             SessionShutdownReason::Quit => SessionLifecycleReason::Quit,
             SessionShutdownReason::Reload => SessionLifecycleReason::Reload,
             SessionShutdownReason::New => SessionLifecycleReason::New,

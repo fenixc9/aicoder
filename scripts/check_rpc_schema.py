@@ -28,4 +28,8 @@ validator.validate(request);count+=1
 for invalid in (0,9007199254740992):
     request["command"]["request_id"]=invalid
     assert list(validator.iter_errors(request)), "unsafe session cancellation ID accepted"
+for point in ({"position":"current"},{"position":"before_last_user"},{"position":"before","entry":"user-entry"},{"position":"at","entry":"entry"}):
+    request={"version":1,"id":101,"command":{"type":"fork_session","point":point}};validator.validate(request);count+=1
+request["command"]["point"]={"position":"before"}
+assert list(validator.iter_errors(request)), "fork-before accepted a missing source entry"
 print(f"Validated {count} RPC frames against schema v1")

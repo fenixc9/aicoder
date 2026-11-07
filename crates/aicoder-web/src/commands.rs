@@ -102,6 +102,13 @@ impl WebHost {
         arguments: Value,
     ) -> Result<Arc<CommandJob>, (&'static str, &'static str)> {
         let mut state = self.0.state.lock().expect("Web state");
+        if state
+            .session_operation
+            .as_ref()
+            .is_some_and(|job| job.active())
+        {
+            return Err(("busy", "Wait for the owned session operation"));
+        }
         if state.closing {
             return Err(("closing", "Host is shutting down"));
         }

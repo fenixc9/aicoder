@@ -55,6 +55,8 @@ storage and verification, preserving paid usage, tool actions and provider state
 queued delivery, tool payloads and explicitly sourced startup/boundary context before adoption.
 [Session lifecycle hooks](docs/session-lifecycle.md) guard owned navigation and explicit host
 adoption, with bounded start/shutdown/reload observations and cancellable frontend operations.
+[Session fork/clone](docs/session-fork.md) copies a pinned branch into a new identity, preserving
+raw history and summary anchors through bounded, atomic publication and explicit draft restoration.
 [Explicit host launch files](docs/host-extensions.md) enable process/MCP tools in CLI, TUI and Web.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime

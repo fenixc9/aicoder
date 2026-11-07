@@ -1,3 +1,5 @@
+#[path = "session_ops.rs"]
+mod session_ops;
 use aicoder_core::{
     Agent, AgentTurnOutcome, ModelProvider, RunControlConfig, RunHandle, SessionSelection,
     TurnExecutionContext,
@@ -77,6 +79,7 @@ pub(crate) struct State {
     pub current: Option<Arc<Run>>,
     pub(crate) selection: SessionSelection,
     pub command: Option<Arc<crate::commands::CommandJob>>,
+    pub(crate) session_operation: Option<Arc<session_ops::SessionJob>>,
 }
 pub(crate) struct Run {
     pub handle: RunHandle,
@@ -110,6 +113,9 @@ impl Drop for Inner {
         }
         if let Some(command) = &self.state.lock().expect("Web state").command {
             command.cancel("Web host dropped");
+        }
+        if let Some(job) = &self.state.lock().expect("Web state").session_operation {
+            job.cancel("Web host dropped");
         }
         self.approvals.clear();
     }
@@ -180,6 +186,7 @@ impl WebHost {
                 current: None,
                 selection: SessionSelection::New,
                 command: None,
+                session_operation: None,
             }),
             approvals: ApprovalSessions::default(),
             streams: Arc::new(Semaphore::new(2)),
@@ -230,6 +237,10 @@ impl WebHost {
         }
         if let Some(command) = command {
             command.join().await;
+        }
+        if let Some(job) = self.session_operation() {
+            job.cancel("Web host shutdown");
+            job.join().await;
         }
         self.0.approvals.clear();
         let session = {
@@ -290,9 +301,13 @@ impl WebHost {
         }
         state.last_id = id;
         if state
-            .command
+            .session_operation
             .as_ref()
-            .is_some_and(|command| command.active())
+            .is_some_and(|job| job.active())
+            || state
+                .command
+                .as_ref()
+                .is_some_and(|command| command.active())
             || state
                 .current
                 .as_ref()

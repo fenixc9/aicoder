@@ -222,6 +222,17 @@ enum Command {
     RecoverSession {
         id: String,
     },
+    /// Copy selected ancestry to a new session; default point is before the latest user.
+    ForkSession {
+        id: String,
+        entry: Option<String>,
+        #[arg(long)]
+        at: bool,
+    },
+    /// Clone the complete selected branch into a new session identity.
+    CloneSession {
+        id: String,
+    },
     /// Check compatibility and record a model through the explicitly selected provider.
     SwitchSessionModel {
         id: String,
@@ -469,6 +480,40 @@ async fn guarded_navigation(
     }
     Ok(outcome.session)
 }
+async fn fork_cli(
+    runtime: &Runtime,
+    repository: &JsonlSessionRepository,
+    id: &str,
+    point: aicoder_core::session::ForkPoint,
+) -> Result<()> {
+    let agent = Agent::new(
+        runtime
+            .executor_builder(Arc::new(runtime.session_client()?))?
+            .build()?,
+        runtime.agent_config(),
+    )
+    .following_session_models()
+    .following_session_reasoning();
+    let context = aicoder_core::TurnExecutionContext::new();
+    let output = execution::cancellable(
+        context.clone(),
+        agent.fork_session(
+            repository,
+            id,
+            point,
+            aicoder_core::session::SessionForkLimits::default(),
+            context,
+        ),
+    )
+    .await??;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(
+            &serde_json::json!({"session":output.session.metadata(),"editor":output.editor,"provenance":output.provenance,"lifecycle":output.reports})
+        )?
+    );
+    Ok(())
+}
 async fn handle_session_command(
     cli: &Cli,
     runtime: &Runtime,
@@ -567,6 +612,26 @@ async fn handle_session_command(
             )
             .await?;
             println!("{}", serde_json::to_string_pretty(session.metadata())?);
+            Ok(true)
+        }
+        Some(Command::ForkSession { id, entry, at }) => {
+            let point = match (entry, at) {
+                (Some(id), true) => aicoder_core::session::ForkPoint::At(id.clone()),
+                (Some(id), false) => aicoder_core::session::ForkPoint::Before(id.clone()),
+                (None, false) => aicoder_core::session::ForkPoint::BeforeLastUser,
+                (None, true) => anyhow::bail!("--at requires an entry or label"),
+            };
+            fork_cli(runtime, repository, id, point).await?;
+            Ok(true)
+        }
+        Some(Command::CloneSession { id }) => {
+            fork_cli(
+                runtime,
+                repository,
+                id,
+                aicoder_core::session::ForkPoint::Current,
+            )
+            .await?;
             Ok(true)
         }
         Some(Command::RecoverSession { id }) => {

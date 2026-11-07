@@ -482,11 +482,18 @@ impl Reader {
     }
 }
 fn materialize(index: &ArchiveIndex, limits: &SessionLoadLimits) -> Result<SessionWindow> {
+    let mut reader = Reader::new(&index.path, limits.max_record_bytes)?;
+    materialize_using(index, limits, |location| reader.entry(location))
+}
+fn materialize_using(
+    index: &ArchiveIndex,
+    limits: &SessionLoadLimits,
+    mut read: impl FnMut(Location) -> Result<SessionEntry>,
+) -> Result<SessionWindow> {
     let branch = index.session.selected_branch();
     // Validate historical tool identities/turn boundaries using metadata descriptors only.
     branch.model_context()?;
     let selected = branch.entries();
-    let mut reader = Reader::new(&index.path, limits.max_record_bytes)?;
     let summary=selected.iter().rev().find(|entry|matches!(&entry.data,SessionEntryData::Extension {namespace,..} if namespace==SUMMARY_NAMESPACE));
     let summary_start = summary
         .map(|entry| {
@@ -510,7 +517,7 @@ fn materialize(index: &ArchiveIndex, limits: &SessionLoadLimits) -> Result<Sessi
             .session
             .entry_position(&entry.id)
             .expect("indexed entry");
-        let real = reader.entry(index.locations[ordinal])?;
+        let real = read(index.locations[ordinal])?;
         let size = serde_json::to_vec(&real)?.len();
         let is_message = real.data.as_message().is_some();
         if bytes.saturating_add(size) > limits.max_window_bytes
@@ -1194,6 +1201,205 @@ pub(super) fn extension_state(
         entry_id: actual.id,
         data,
     }))
+}
+
+pub(super) fn prepare_fork(
+    repository: &JsonlSessionRepository,
+    source: &RunSession,
+    point: ForkPoint,
+    fork_limits: SessionForkLimits,
+    context: &aicoder_core::TurnExecutionContext,
+) -> Result<SessionForkPlan> {
+    use super::fork::{ForkSourcePin, Stamp};
+    let fork_limits = fork_limits.validate()?;
+    let id = source.metadata().id.clone();
+    let _metadata = repository.metadata_lock(&id, false)?;
+    let cursor = match source {
+        RunSession::Full(s) => s.backend_state::<StorageCursor>().cloned(),
+        RunSession::Window(w) => w.backend_state::<WindowCursor>().map(|c| c.cursor.clone()),
+    }
+    .context("fork source has no native checkpoint")?;
+    ensure!(
+        cursor.path.parent() == Some(repository.root()) && repository.find(&id)? == cursor.path,
+        "fork source repository mismatch"
+    );
+    let mut file = open_data(&cursor.path, true, false)?;
+    let stamp = Stamp::new(&file.metadata()?);
+    let max_scan = fork_limits
+        .max_source_bytes
+        .min(repository.limits.max_scan_bytes);
+    let (len, hash, _) = hash_file(&mut file, None, max_scan)?;
+    ensure!(
+        len == cursor.expected_len && hash == cursor.fingerprint,
+        "fork source checkpoint changed"
+    );
+    let mut limits = repository.limits.clone();
+    limits.max_scan_bytes = max_scan;
+    limits.max_snapshot_bytes = limits.max_snapshot_bytes.min(fork_limits.max_source_bytes);
+    limits.max_index_entries = limits.max_index_entries.min(fork_limits.max_source_entries);
+    let version = read_header(&cursor.path)?.1;
+    let mut plan = if version == SESSION_VERSION {
+        file.seek(SeekFrom::Start(0))?;
+        let index = scan_file(&cursor.path, &limits, file.try_clone()?, Some(context))?;
+        ensure!(
+            index.session.metadata().id == id
+                && index.session.metadata().revision == source.metadata().revision
+                && index.session.metadata().leaf_id == source.metadata().leaf_id,
+            "fork source selection changed"
+        );
+        let (resolved, leaf, _) =
+            resolve_fork_point(&index.session, &point, fork_limits.max_editor_bytes)?;
+        let mut reader = Reader {
+            reader: BufReader::with_capacity(8192, file.try_clone()?),
+            record: None,
+            limit: limits.max_record_bytes,
+        };
+        let editor = if let ForkPoint::Before(entry_id) = &resolved {
+            let ordinal = index
+                .session
+                .entry_position(entry_id)
+                .context("fork editor source missing")?;
+            let entry = reader.entry(index.locations[ordinal])?;
+            let message = entry
+                .data
+                .as_message()
+                .filter(|m| m.role == MessageRole::User)
+                .context("fork editor requires real user content")?;
+            Some(fork_editor(entry_id, message, fork_limits.max_editor_bytes))
+        } else {
+            None
+        };
+        let branch = index.session.branch(leaf.as_deref())?;
+        let mut records = Vec::new();
+        let mut bytes = 0usize;
+        for entry in branch.entries() {
+            if context.is_cancelled() {
+                return Err(context.error().into());
+            }
+            ensure!(
+                records.len() < fork_limits.max_entries,
+                "fork entry budget exceeded"
+            );
+            let ordinal = index
+                .session
+                .entry_position(&entry.id)
+                .context("fork archive position missing")?;
+            let real = reader.entry(index.locations[ordinal])?;
+            bytes = bytes.saturating_add(super::fork::bounded_size(&real, fork_limits.max_bytes)?);
+            ensure!(
+                bytes <= fork_limits.max_bytes,
+                "fork prefix byte budget exceeded"
+            );
+            records.push(real);
+        }
+        SessionForkPlan::from_records(
+            source.metadata().clone(),
+            resolved,
+            leaf,
+            editor,
+            records,
+            index.session.labels().clone(),
+            index.expected_len - index.valid_len,
+            fork_limits,
+            context,
+        )?
+    } else {
+        file.seek(SeekFrom::Start(0))?;
+        let bytes = read_full(&mut file, &limits)?;
+        let session = load_bytes(&cursor.path, &bytes)?;
+        ensure!(
+            session.metadata() == source.metadata(),
+            "legacy fork source changed"
+        );
+        SessionForkPlan::prepare_full(&session, point, fork_limits, context)?
+    };
+    let (ranges, output_bytes) = super::fork::layout(&plan, repository.limits.max_record_bytes)?;
+    plan.set_publication_revision(ranges.len() as u64)?;
+    if output_bytes as u64 > repository.limits.max_snapshot_bytes {
+        let preview = fork_preview(repository, &plan, &ranges)?;
+        plan.set_window_preview(preview)?;
+    }
+    let pin = ForkSourcePin {
+        root: repository.root().to_owned(),
+        path: cursor.path,
+        file: std::sync::Mutex::new(file),
+        stamp,
+        expected_len: len,
+        hash,
+        max_scan,
+        ranges,
+        output_bytes,
+    };
+    super::fork::verify(&pin, context)?;
+    plan.attach_backend(pin);
+    Ok(plan)
+}
+
+/// Materialize the same bounded view before publication, using actual admitted source records.
+pub(super) fn fork_preview(
+    repository: &JsonlSessionRepository,
+    plan: &SessionForkPlan,
+    ranges: &[std::ops::Range<usize>],
+) -> Result<SessionWindow> {
+    let mut header_metadata = plan.target().clone();
+    header_metadata.revision = 0;
+    header_metadata.leaf_id = None;
+    header_metadata.title = None;
+    let bytes = header(&header_metadata)?;
+    let mut index = ArchiveIndex {
+        path: repository
+            .root()
+            .join(format!("{}.jsonl", plan.target().id)),
+        session: Session::from_entries(header_metadata, Vec::new())?,
+        locations: Vec::new(),
+        expected_len: bytes.len() as u64,
+        valid_len: bytes.len() as u64,
+        hash: fingerprint(&bytes),
+        valid_hash: fingerprint(&bytes),
+        separator: false,
+        index_bytes: 0,
+        title: None,
+    };
+    let mut offsets = std::collections::HashMap::new();
+    for (i, range) in ranges.iter().enumerate() {
+        let records = &plan.snapshot().entries()[range.clone()];
+        let leaf = records.last().map(|e| e.id.clone());
+        let bytes = transaction_line(i as u64 + 1, plan.target().updated_at, records, &leaf)?;
+        let offset = index.expected_len;
+        offsets.insert(offset, range.start);
+        accept(
+            &mut index,
+            records.to_vec(),
+            leaf,
+            i as u64 + 1,
+            plan.target().updated_at,
+            offset,
+            &repository.limits,
+        )?;
+        index.expected_len += bytes.len() as u64;
+        index.valid_len = index.expected_len;
+        index.hash = hash_more(index.hash, &bytes);
+        index.valid_hash = index.hash;
+    }
+    ensure!(
+        metadata(&index) == *plan.target(),
+        "fork preview metadata differs from publication"
+    );
+    materialize_using(&index, &repository.limits, |location| {
+        let start = offsets
+            .get(&location.offset)
+            .context("fork preview location missing")?;
+        plan.snapshot()
+            .entries()
+            .get(start + location.ordinal)
+            .cloned()
+            .context("fork preview ordinal changed")
+    })
+}
+pub(super) fn bind_fork_window(window: &mut SessionWindow, path: PathBuf, length: u64, hash: u64) {
+    window.attach_backend_state(WindowCursor {
+        cursor: cursor_for(path, length, length, false, hash),
+    });
 }
 
 #[cfg(test)]

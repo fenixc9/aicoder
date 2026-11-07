@@ -143,6 +143,10 @@
   the existing lease. Validate branch projections before adoption; never refresh a voted plan.
   Observers report delivery independently of completed changes. Host bindings, preparation
   clocks, backend previews and lifecycle registrations remain ephemeral and never restore grants.
+  Cross-session forks copy a complete pinned ancestry with stable record IDs, explicit source
+  provenance and bounded editor previews. Validate target windows before publication; stage the
+  full target and publish without overwrite after rechecking source identity. Preserve visible
+  failure receipts, partial-turn uncertainty and source bytes; never copy grants, inboxes or handles.
 - Process tools use explicit host launch settings and conservative capabilities. Keep remote
   plan tokens bound to the original connection and out of domain records; never retry an
   uncertain operation implicitly. Bound both pipes/queues/plans, retain leader ownership

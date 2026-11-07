@@ -787,3 +787,229 @@ async fn web_session_start_is_once_per_binding_and_shutdown_waits_owner_and_noti
     );
     server.close().await;
 }
+
+struct ForkChoice;
+#[async_trait]
+impl SessionHook for ForkChoice {
+    async fn before(
+        &self,
+        input: SessionHookInput<'_>,
+        c: ExtensionCancellation,
+    ) -> anyhow::Result<SessionDecision> {
+        if !matches!(input.operation, SessionOperation::Fork { .. }) {
+            return Ok(SessionDecision::Continue);
+        }
+        let answer = c
+            .ui()
+            .ask(UiPrompt::Select {
+                title: "Fork session?".into(),
+                options: vec![
+                    UiOption {
+                        id: "allow".into(),
+                        label: "Allow".into(),
+                    },
+                    UiOption {
+                        id: "deny".into(),
+                        label: "Deny".into(),
+                    },
+                ],
+            })
+            .await?;
+        Ok(if matches!(answer,UiAnswer::Choice{id}if id=="allow") {
+            SessionDecision::Continue
+        } else {
+            SessionDecision::Deny {
+                reason: "host denied fork".into(),
+            }
+        })
+    }
+}
+#[tokio::test]
+async fn web_fork_authenticates_reserves_one_owner_and_adopts_only_a_completed_new_session() {
+    let server = Server::with_session_hook(false, false, false, Some(Arc::new(ForkChoice))).await;
+    let response = server
+        .post("/api/runs", json!({"id":1,"text":"original"}))
+        .await;
+    let run = response.json::<Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let done = server
+        .wait(&format!("/api/runs/{run}"), |v| !v["result"].is_null())
+        .await;
+    let source = done["result"]["session_id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        server
+            .client
+            .post(format!("{}/api/session/fork", server.url))
+            .json(&json!({"id":2,"point":{"position":"current"}}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    let response = server
+        .post(
+            "/api/session/fork",
+            json!({"id":2,"point":{"position":"current"}}),
+        )
+        .await;
+    assert_eq!(response.status(), 202);
+    let op = response.json::<Value>().await.unwrap()["operation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let waiting = server
+        .wait("/api/session/operation", |v| {
+            v["operation"]["ui"]["questions"]
+                .as_array()
+                .is_some_and(|q| !q.is_empty())
+        })
+        .await;
+    assert_eq!(
+        server
+            .post("/api/runs", json!({"id":3,"text":"busy"}))
+            .await
+            .status(),
+        409
+    );
+    assert_eq!(
+        server
+            .post("/api/session/operation/foreign/cancel", json!({}))
+            .await
+            .status(),
+        404
+    );
+    let question = waiting["operation"]["ui"]["questions"][0]["id"].clone();
+    assert_eq!(server.post(&format!("/api/session/operation/{op}/ui"),json!({"question_id":question,"answer":{"kind":"choice","id":"allow","decision":"allow_session"}})).await.status(),422);
+    assert_eq!(
+        server
+            .post(
+                &format!("/api/session/operation/{op}/ui"),
+                json!({"question_id":question,"answer":{"kind":"choice","id":"allow"}})
+            )
+            .await
+            .status(),
+        200
+    );
+    let finished = server
+        .wait("/api/session/operation", |v| {
+            !v["operation"]["result"].is_null()
+        })
+        .await;
+    assert_eq!(finished["operation"]["result"]["status"], "completed");
+    let target = finished["operation"]["result"]["session"]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_ne!(target, source);
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        server
+            .post(
+                "/api/session/fork",
+                json!({"id":2,"point":{"position":"current"}})
+            )
+            .await
+            .status(),
+        409
+    );
+    let response = server
+        .post("/api/runs", json!({"id":4,"text":"continued"}))
+        .await;
+    let run = response.json::<Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let done = server
+        .wait(&format!("/api/runs/{run}"), |v| !v["result"].is_null())
+        .await;
+    assert_eq!(done["result"]["session_id"], target);
+    assert!(
+        server.model.requests.lock().unwrap()[1]
+            .messages
+            .iter()
+            .any(|m| m.text_content() == "original")
+    );
+    server.close().await;
+}
+#[tokio::test]
+async fn web_fork_cancellation_and_shutdown_expire_private_choices_without_creating_late_targets() {
+    let server = Server::with_session_hook(false, false, false, Some(Arc::new(ForkChoice))).await;
+    let response = server
+        .post("/api/runs", json!({"id":1,"text":"original"}))
+        .await;
+    let run = response.json::<Value>().await.unwrap()["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let done = server
+        .wait(&format!("/api/runs/{run}"), |v| !v["result"].is_null())
+        .await;
+    let source = done["result"]["session_id"].clone();
+    let response = server
+        .post(
+            "/api/session/fork",
+            json!({"id":2,"point":{"position":"before_last_user"}}),
+        )
+        .await;
+    let op = response.json::<Value>().await.unwrap()["operation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let waiting = server
+        .wait("/api/session/operation", |v| {
+            v["operation"]["ui"]["questions"]
+                .as_array()
+                .is_some_and(|q| !q.is_empty())
+        })
+        .await;
+    let question = waiting["operation"]["ui"]["questions"][0]["id"].clone();
+    assert_eq!(
+        server
+            .post(&format!("/api/session/operation/{op}/cancel"), json!({}))
+            .await
+            .status(),
+        200
+    );
+    let done = server
+        .wait("/api/session/operation", |v| {
+            !v["operation"]["result"].is_null()
+        })
+        .await;
+    assert_eq!(done["operation"]["result"]["status"], "failed");
+    assert_eq!(
+        server
+            .post(
+                &format!("/api/session/operation/{op}/ui"),
+                json!({"question_id":question,"answer":{"kind":"choice","id":"allow"}})
+            )
+            .await
+            .status(),
+        409
+    );
+    let response = server
+        .post(
+            "/api/session/fork",
+            json!({"id":3,"point":{"position":"current"}}),
+        )
+        .await;
+    assert_eq!(response.status(), 202);
+    server
+        .wait("/api/session/operation", |v| {
+            v["operation"]["ui"]["questions"]
+                .as_array()
+                .is_some_and(|q| !q.is_empty())
+        })
+        .await;
+    server.host.shutdown().await;
+    let done = server.get("/api/session/operation").await;
+    assert_eq!(done["operation"]["result"]["status"], "failed");
+    assert_eq!(
+        server.get(&format!("/api/runs/{run}")).await["result"]["session_id"],
+        source
+    );
+    assert_eq!(server.model.calls.load(Ordering::SeqCst), 1);
+    server.close().await;
+}

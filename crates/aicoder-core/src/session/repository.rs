@@ -31,6 +31,30 @@ pub struct SessionExtensionState {
 }
 /// Object-safe storage and transaction boundary, shared by all hosts.
 pub trait SessionRepository: Send + Sync {
+    fn prepare_fork(
+        &self,
+        source: &super::RunSession,
+        point: super::ForkPoint,
+        limits: super::SessionForkLimits,
+        context: &crate::TurnExecutionContext,
+    ) -> Result<super::SessionForkPlan> {
+        match source {
+            super::RunSession::Full(s) => {
+                super::SessionForkPlan::prepare_full(s, point, limits, context)
+            }
+            super::RunSession::Window(_) => {
+                anyhow::bail!("repository does not support bounded archive forks")
+            }
+        }
+    }
+    fn publish_fork(
+        &self,
+        _source: &super::RunSession,
+        _plan: super::SessionForkPlan,
+        _context: &crate::TurnExecutionContext,
+    ) -> Result<super::PublishedSessionFork> {
+        anyhow::bail!("repository does not support atomic fork publication")
+    }
     fn create(&self, cwd: &Path) -> Result<Session>;
     fn open(&self, id: &str) -> Result<Session>;
     /// Default compatibility path. Window-capable backends override without materializing cold payloads.

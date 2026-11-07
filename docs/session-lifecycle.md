@@ -68,6 +68,6 @@ cargo run --locked -p aicoder-runtime --example offline_session_lifecycle -- --o
 
 These scripted examples use real full/window JSONL navigation with no model credentials. The
 terminal fixture's --session-hooks mode exercises a private before-rename choice. See
-[acceptance](s7-session-lifecycle-acceptance.md). This increment does not implement cross-session
-fork/clone, tree-navigation summaries, before-compaction replacement or boundary context-edit /
-compaction drafts. Those capabilities and final real-model acceptance remain in the [audit](pi-parity-audit.md).
+[acceptance](s7-session-lifecycle-acceptance.md). The subsequent [fork/clone API](session-fork.md) implements independent-session branching.
+Tree-navigation summaries, before-compaction replacement and boundary context-edit/compaction drafts
+remain open. Those capabilities and final real-model acceptance remain in the [audit](pi-parity-audit.md).

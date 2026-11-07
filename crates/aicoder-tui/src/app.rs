@@ -656,6 +656,17 @@ impl App {
                                 info.title = session.metadata().title.clone();
                             }
                         }
+                        if let Some(editor) = change.editor {
+                            let complete = editor.text.len() <= 64 * 1024 && editor.text_complete;
+                            if self.input.value().is_empty() {
+                                self.input.replace(editor.text);
+                            } else {
+                                self.timeline.push(TimelineItem::Notice("Fork ready; your current draft was retained. Inspect the source entry for its historical draft.".into()));
+                            }
+                            if !complete || editor.image_blocks_omitted > 0 {
+                                self.timeline.push(TimelineItem::Notice(format!("Fork draft preview: complete text={complete}, omitted images={}; inspect the recorded input before submitting.",editor.image_blocks_omitted)));
+                            }
+                        }
                         self.timeline
                             .extend(change.notices.into_iter().map(TimelineItem::Notice));
                     }
@@ -1411,6 +1422,7 @@ mod tests {
                 session: Some(aicoder_core::session::RunSession::Full(Box::new(empty))),
                 info: None,
                 deleted: None,
+                editor: None,
                 notices: Vec::new(),
             },
         ))));
@@ -1600,7 +1612,7 @@ mod tests {
     fn slash_menu_tracks_filtering_selection_and_dismissal() {
         let mut app = App::new(Vec::new());
         app.input.insert('/');
-        assert_eq!(app.slash_suggestions().len(), 24);
+        assert_eq!(app.slash_suggestions().len(), 27);
         assert_eq!(app.selected_slash_command().unwrap().name, "exit");
 
         app.dismiss_slash_menu();
@@ -1698,6 +1710,7 @@ mod tests {
                 session: Some(aicoder_core::session::RunSession::Full(Box::new(empty))),
                 info: None,
                 deleted: None,
+                editor: None,
                 notices: Vec::new(),
             },
         ))));
@@ -2031,5 +2044,30 @@ mod tests {
             Some(Some(aicoder_core::model::ReasoningEffort::Low))
         );
         assert!(!app.is_running());
+    }
+    #[test]
+    fn fork_completion_does_not_overwrite_a_newer_draft_or_submit_the_historical_input() {
+        let mut app = App::new(vec![]);
+        app.input.replace("newer unsent draft".into());
+        app.apply(AppEvent::SessionChanged(Box::new(Ok(
+            crate::runtime::SessionChange {
+                session: None,
+                info: None,
+                deleted: None,
+                notices: Vec::new(),
+                editor: Some(aicoder_core::session::ForkEditor {
+                    source_entry_id: "old".into(),
+                    text: "historical draft".into(),
+                    text_complete: true,
+                    image_blocks_omitted: 0,
+                }),
+            },
+        ))));
+        assert_eq!(app.input.value(), "newer unsent draft");
+        assert!(
+            !app.timeline
+                .iter()
+                .any(|v| matches!(v, TimelineItem::User(_)))
+        );
     }
 }

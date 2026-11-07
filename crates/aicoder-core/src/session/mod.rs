@@ -5,8 +5,10 @@ pub use native_context::{NATIVE_CONTEXT_NAMESPACE, NativeContextSource};
 mod journal;
 pub(crate) use journal::SessionJournal;
 pub const SESSION_VERSION: u32 = 3;
+mod fork;
 mod lifecycle;
 mod memory;
+pub use fork::*;
 mod model_selection;
 pub use lifecycle::{
     SessionActionReport, SessionCreatedWithoutOwnership, SessionNavigationOutcome,

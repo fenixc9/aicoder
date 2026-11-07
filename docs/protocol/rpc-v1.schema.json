@@ -374,6 +374,22 @@
                 "request_id"
               ],
               "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "const": "fork_session"
+                },
+                "point": {
+                  "$ref": "#/$defs/fork_point"
+                }
+              },
+              "required": [
+                "type",
+                "point"
+              ],
+              "additionalProperties": false
             }
           ]
         }
@@ -737,6 +753,46 @@
         "result"
       ],
       "additionalProperties": false
+    },
+    "fork_point": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "position": {
+              "enum": [
+                "current",
+                "root",
+                "before_last_user"
+              ]
+            }
+          },
+          "required": [
+            "position"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "position": {
+              "enum": [
+                "before",
+                "at"
+              ]
+            },
+            "entry": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "position",
+            "entry"
+          ],
+          "additionalProperties": false
+        }
+      ]
     }
   }
 }

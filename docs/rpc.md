@@ -124,3 +124,9 @@ that owned request. Shutdown/EOF also cancel and await it. Native selection reso
 to its actual ID and may return session_lifecycle observations; these are inert data, not rules or
 restored authority. Completed adoption survives later observation cancellation. See
 [session lifecycle](session-lifecycle.md).
+
+`fork_session {point}` starts a bounded owned fork job for the selected session. Points use
+`{position:"current"|"root"|"before_last_user"}` or `{position:"before"|"at",entry:"ID_OR_LABEL"}`.
+It shares the session-selection owner slot, status and targeted cancellation. A completed reply
+returns the new session ID and inert fork provenance/editor data; editor text is never submitted
+automatically. See [session fork](session-fork.md).

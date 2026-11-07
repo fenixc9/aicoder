@@ -158,6 +158,31 @@ impl SessionHook for SessionPolicy {
         input: SessionHookInput<'_>,
         cancellation: ExtensionCancellation,
     ) -> anyhow::Result<SessionDecision> {
+        if matches!(input.operation, SessionOperation::Fork { .. }) {
+            let answer = cancellation
+                .ui()
+                .ask(UiPrompt::Select {
+                    title: "Session fork policy".into(),
+                    options: vec![
+                        UiOption {
+                            id: "allow".into(),
+                            label: "Allow fork".into(),
+                        },
+                        UiOption {
+                            id: "deny".into(),
+                            label: "Deny fork".into(),
+                        },
+                    ],
+                })
+                .await?;
+            return Ok(if matches!(answer,UiAnswer::Choice{id}if id=="allow") {
+                SessionDecision::Continue
+            } else {
+                SessionDecision::Deny {
+                    reason: "operator denied fork".into(),
+                }
+            });
+        }
         if matches!(input.operation,SessionOperation::Navigation{action:aicoder_core::session::ArchiveNavigation::Rename{title}}if title=="ask-rename")
         {
             let answer = cancellation

@@ -126,9 +126,13 @@ that full product parity has already been achieved.
    new/resume adoption, with start/shutdown/reload observations in SDK/CLI/RPC/TUI/Web. Plans fix
    targets/transactions under leases; window previews retain real history, model compatibility and
    source conflicts. Rejected changes retain the binding; post-commit callback failures retain facts.
-   This covers veto for in-session branch/checkout, not Pi's separate-session fork/clone and
-   skip-conversation-restore option. Tree summary customization and before-compaction replacement
-   remain unimplemented, alongside boundary drafts; no complete lifecycle equivalence claim is made.
+   [Independent session fork/clone](session-fork.md) now covers before/at/current ancestry,
+   frozen identities, summary/context/tool facts, bounded cold archives and atomic no-clobber
+   publication. SDK/CLI/RPC/TUI/Web and browser draft-only restoration have executable evidence;
+   visible publication failures retain the target identity without repeating work. The pinned
+   runtime's before-fork handler consumes cancellation; skipConversationRestore exists in its
+   declaration but is not consumed by that fork path. Tree summary customization, compaction
+   replacement and context-edit/compaction drafts remain open.
    Provider wrappers can cover some
    host integrations, but no exhaustive executable equivalence check exists. Observation-only
    events must not quietly become mutation channels or rewrite canonical facts.
@@ -148,8 +152,8 @@ passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /
 incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
 original score/release requirements stay open; local scripted scores cannot substitute for them.
 
-The next implementation items are cross-session fork/clone, tree-summary and compaction interception,
-and boundary context-edit/compaction drafts. The final audit must rerun the matrix
+The next implementation items are tree-summary and compaction interception, and boundary
+context-edit/compaction drafts. The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.
 
 [Terminal/performance follow-up](s7-terminal-exit-followup.md) records the TUI terminal-owner

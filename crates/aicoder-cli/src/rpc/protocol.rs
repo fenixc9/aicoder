@@ -40,6 +40,9 @@ pub enum Command {
         approval_id: ApprovalRequestId,
         decision: ApprovalDecision,
     },
+    ForkSession {
+        point: aicoder_core::session::ForkPoint,
+    },
     CancelSessionSelection {
         request_id: u64,
     },

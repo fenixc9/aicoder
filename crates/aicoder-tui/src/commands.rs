@@ -17,6 +17,9 @@ pub enum SlashCommand {
     Unlabel,
     Checkout,
     Branch,
+    Fork,
+    ForkAt,
+    Clone,
     Recover,
     Model,
     Thinking,
@@ -144,6 +147,27 @@ const COMMANDS: &[CommandSpec] = &[
         arguments: ArgumentPolicy::Optional,
     },
     CommandSpec {
+        command: SlashCommand::Fork,
+        name: "fork",
+        usage: "/fork [USER_ENTRY_OR_LABEL]",
+        description: "New session before a user message; restore its text draft",
+        arguments: ArgumentPolicy::Optional,
+    },
+    CommandSpec {
+        command: SlashCommand::ForkAt,
+        name: "fork-at",
+        usage: "/fork-at ENTRY_OR_LABEL",
+        description: "New session including the chosen entry",
+        arguments: ArgumentPolicy::Required,
+    },
+    CommandSpec {
+        command: SlashCommand::Clone,
+        name: "clone",
+        usage: "/clone",
+        description: "Clone the selected branch into a new session",
+        arguments: ArgumentPolicy::None,
+    },
+    CommandSpec {
         command: SlashCommand::Recover,
         name: "recover",
         usage: "/recover",
@@ -243,8 +267,8 @@ pub fn suggestions(input: &str) -> Vec<&'static CommandSpec> {
 }
 
 pub fn completion(spec: &CommandSpec) -> String {
-    if spec.command == SlashCommand::Extension {
-        "/ext".into()
+    if spec.command == SlashCommand::Extension || spec.arguments == ArgumentPolicy::Optional {
+        format!("/{}", spec.name)
     } else {
         spec.usage.to_owned()
     }
@@ -303,7 +327,7 @@ mod tests {
 
     #[test]
     fn registry_exposes_metadata_for_every_command() {
-        assert_eq!(all().len(), 24);
+        assert_eq!(all().len(), 27);
         assert_eq!(all()[0].usage, "/exit");
         assert!(!all()[0].description.is_empty());
     }
@@ -330,6 +354,9 @@ mod tests {
                 "unlabel",
                 "checkout",
                 "branch",
+                "fork",
+                "fork-at",
+                "clone",
                 "recover",
                 "model",
                 "thinking",
@@ -357,6 +384,16 @@ mod tests {
     #[test]
     fn completes_from_registered_usage() {
         assert_eq!(completion(suggestions("/ex")[0]), "/exit");
+        for command in [
+            SlashCommand::Fork,
+            SlashCommand::Branch,
+            SlashCommand::Thinking,
+        ] {
+            let spec = all().iter().find(|s| s.command == command).unwrap();
+            let completed = completion(spec);
+            assert!(!completed.contains('['));
+            assert_eq!(parse(&completed), Some(Ok(command)));
+        }
     }
 
     #[test]

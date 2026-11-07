@@ -116,6 +116,17 @@ jobs:
           cargo run --locked -p aicoder-runtime --example offline_session_lifecycle -- --observer-error
           cargo build --locked -p aicoder-tui --example offline_extension_ui
           python3 scripts/check_session_lifecycle.py
+      - name: Independent session fork and clone
+        run: |
+          cargo test --locked -p aicoder-runtime --no-default-features --test session_fork
+          cargo run --locked -p aicoder-runtime --example offline_session_fork
+          cargo run --locked -p aicoder-runtime --example offline_session_fork -- --window
+          cargo run --locked -p aicoder-runtime --example offline_session_fork -- --before
+          cargo run --locked -p aicoder-runtime --example offline_session_fork -- --window --before
+          cargo run --locked -p aicoder-runtime --example offline_session_fork -- --deny
+          cargo run --locked -p aicoder-runtime --example offline_session_fork -- --observer-error
+          cargo build --locked -p aicoder-tui --example offline_extension_ui
+          python3 scripts/check_session_fork.py
       - name: Raw input before expansion and ordered controls
         run: |
           cargo test --locked -p aicoder-runtime --no-default-features --test input_hooks

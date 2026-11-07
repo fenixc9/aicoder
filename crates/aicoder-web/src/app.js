@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 let token = "", current = null, nextId = 1, question = null, polling = null, streaming = null;
 const LIMIT = 256 * 1024;
 const noticeScopes = new Map();
+let sessionOperation = null, lastSessionResult = "", pendingForkDraft = null;
 let command = null, uiQuestion = null, uiTarget = null, uiQuestionKey = "", lastCommandResult = "", observedRun = null;
 function append(text) { const out = $("output"); const value = out.textContent + text; out.textContent = value.length > LIMIT ? "[Earlier preview omitted]\n" + value.slice(-LIMIT) : value; out.scrollTop = out.scrollHeight; }
 function fail(error) { $("error").textContent = error.message || String(error); }
@@ -31,18 +32,27 @@ function show(run) {
 }
 async function refresh() {
   const state = await api("/api/state"); nextId = state.next_prompt_id; show(state.run); command = state.command;
+  sessionOperation=state.session_operation;
+  const busySession=Boolean(sessionOperation&&!sessionOperation.result);
   const busyCommand = Boolean(command && !command.result), running = Boolean(state.run && !state.run.result);
-  $("submit").disabled = !token || running || busyCommand; $("extension-run").disabled = !token || running || busyCommand;
-  $("cancel").disabled = !(running || busyCommand);
+  $("submit").disabled = !token || running || busyCommand || busySession; $("extension-run").disabled = !token || running || busyCommand || busySession;
+  $("fork").disabled=$("clone").disabled=!token||running||busyCommand||busySession||!state.session_id;
+  $("cancel").disabled = !(running || busyCommand || busySession);
   $("cancel").textContent = busyCommand ? "Cancel command" : "Cancel run";
   if (busyCommand) { $("status").textContent = "Running command"; $("detail").textContent = "Command is awaiting completion"; }
   if (command?.result && lastCommandResult !== command.id) { lastCommandResult = command.id; if (command.result.notice) append("\n" + command.result.notice + "\n"); else if (command.result.message) append("\n[" + command.result.message + "]\n"); }
+  if(busySession){$("status").textContent="Forking session";$("detail").textContent="Waiting for the owned session operation";$("cancel").textContent="Cancel fork";}
+  if(sessionOperation?.result&&lastSessionResult!==sessionOperation.id){lastSessionResult=sessionOperation.id;const result=sessionOperation.result;
+    if(result.status==="completed"){append("\n[New forked conversation ready; earlier output previews belong to the source session.]\n");if(result.editor){if(pendingForkDraft?.id===sessionOperation.request_id&&$("prompt").value===pendingForkDraft.text)$("prompt").value=result.editor.text;else append("[Fork ready; your current draft was retained. Inspect the source entry for its historical draft.]\n");if(!result.editor.text_complete||result.editor.image_blocks_omitted)append("[Draft preview is incomplete or omits recorded images; inspect the original input before submitting.]\n");}}
+    else append("\n[Session operation: "+result.status+"] "+(result.message||"Inspect stored sessions before retrying.")+"\n");
+  }
   const commandUi = command && (!state.run || command.request_id > state.run.request_id);
-  const ui = commandUi ? command.ui : state.run?.ui;
-  uiTarget = commandUi ? `/api/commands/${command.id}/ui` : state.run ? `/api/runs/${state.run.run_id}/ui` : null;
-  const liveScopes = new Set([state.command?.ui?.scope, state.run?.ui?.scope]);
+  const sessionUi=sessionOperation&&sessionOperation.request_id>Math.max(command?.request_id||0,state.run?.request_id||0);
+  const ui = sessionUi?sessionOperation.ui:commandUi ? command.ui : state.run?.ui;
+  uiTarget = sessionUi?`/api/session/operation/${sessionOperation.id}/ui`:commandUi ? `/api/commands/${command.id}/ui` : state.run ? `/api/runs/${state.run.run_id}/ui` : null;
+  const liveScopes = new Set([state.command?.ui?.scope, state.run?.ui?.scope,sessionOperation?.ui?.scope]);
   for (const scope of noticeScopes.keys()) if (!liveScopes.has(scope)) noticeScopes.delete(scope);
-  showNotices(state.command?.ui); showNotices(state.run?.ui);
+  showNotices(state.command?.ui); showNotices(state.run?.ui);showNotices(sessionOperation?.ui);
   showUi(ui);
   if (command?.result?.status === "submitted" && state.run && command.result.run_id === state.run.run_id && observedRun !== state.run.run_id) observe(state.run.run_id, `/api/runs/${state.run.run_id}/events`);
   return state;
@@ -130,7 +140,7 @@ $("submit").addEventListener("click", async () => {
   catch (error) { fail(error); await refresh().catch(fail); }
 });
 $("revoke").addEventListener("click",()=>api("/api/permissions/revoke",{}).then(refresh).catch(fail));
-$("cancel").addEventListener("click",()=>api(command && !command.result ? `/api/commands/${command.id}/cancel` : `/api/runs/${current}/cancel`,{}).then(refresh).catch(fail));
+$("cancel").addEventListener("click",()=>api(sessionOperation&&!sessionOperation.result?`/api/session/operation/${sessionOperation.id}/cancel`:command && !command.result ? `/api/commands/${command.id}/cancel` : `/api/runs/${current}/cancel`,{}).then(refresh).catch(fail));
 $("extension-run").addEventListener("click", async()=>{
   try { const args = JSON.parse($("extension-arguments").value); await refresh(); await api("/api/commands",{id:nextId,name:$("extension-command").value,arguments:args}); await refresh(); } catch(error) {fail(error);await refresh().catch(fail);}
 });
@@ -145,3 +155,5 @@ for (const [id,decision] of [["deny","deny"],["once","allow_once"],["session","a
   const pending=question, run=current; if (!pending) return;
   try { await api(`/api/runs/${run}/approval`,{approval_id:pending.id,decision}); await refresh(); } catch(error) {fail(error);await refresh().catch(fail);}
 });
+
+for(const [id,position] of [["fork","before_last_user"],["clone","current"]]) $(id).addEventListener("click",async()=>{try{await refresh();pendingForkDraft={id:nextId,text:$("prompt").value};await api("/api/session/fork",{id:nextId,point:{position}});await refresh();}catch(error){fail(error);await refresh().catch(fail);}});
