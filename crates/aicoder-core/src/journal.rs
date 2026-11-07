@@ -3,6 +3,13 @@ use crate::{RunOutcome, model::Message};
 use async_trait::async_trait;
 #[async_trait]
 pub trait RunJournal: Send + Sync {
+    async fn record_compaction_hooks(
+        &self,
+        _record: &crate::summary::CompactionHookRecord,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("journal does not support compaction hooks")
+    }
+
     async fn boundary_context(
         &self,
     ) -> anyhow::Result<Option<crate::session::OwnedSessionContext>> {
@@ -165,6 +172,13 @@ pub trait RunJournal: Send + Sync {
 }
 #[async_trait]
 impl RunJournal for () {
+    async fn record_compaction_hooks(
+        &self,
+        _: &crate::summary::CompactionHookRecord,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     async fn record_message_finalization(
         &self,
         _: &crate::extensions::MessageFinalizationRecord,

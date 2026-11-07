@@ -60,5 +60,6 @@ See [migrations](migrations.md) and [acceptance](s7-summary-projection-acceptanc
 
 This closes projection-aware summary preparation for the built-in memory/JSONL Agent paths.
 [Boundary context-edit/compaction drafts](boundary-drafts.md) now share owned preparation and
-atomic publication. Compaction interception/replacement, tree-summary hooks and final isolated
-Spark/Pi/SWE quality/release acceptance remain separate work.
+atomic publication. [Compaction interception/replacement](compaction-hooks.md) shares the
+manual/automatic preparation path. Tree-summary hooks and final isolated Spark/Pi/SWE quality/release
+acceptance remain separate work.

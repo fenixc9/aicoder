@@ -66,7 +66,7 @@ checkpoint. [Projection-aware semantic summaries](summary-projection.md) now map
 through canonical IDs, so editing the newest retained unit does not require a fresh raw suffix.
 Custom window backends/journals without lineage support keep the old safe suffix path.
 [Live boundary drafts](boundary-drafts.md) now stage persistent edits and compactions atomically;
-before-compaction replacement and tree summaries remain open.
+[before-compaction replacement](compaction-hooks.md) now shares these plans; tree summaries remain open.
 This API is currently native SDK functionality, without a new stock frontend edit command or endpoint.
 
 Run the executable examples without credentials or network:

@@ -11,6 +11,7 @@ pub const MAX_BOUNDARY_BYTES: usize = 64 * 1024;
 #[serde(rename_all = "snake_case")]
 pub enum BoundaryKind {
     BeforeStart,
+    Compaction,
     TurnEnd,
     BeforeSettle,
 }

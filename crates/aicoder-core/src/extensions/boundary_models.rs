@@ -5,6 +5,7 @@ use anyhow::{Result, ensure};
 use std::sync::Arc;
 pub struct BoundaryModels<'a> {
     pub(crate) owner: &'a str,
+    pub(crate) phase: &'static str,
     pub(crate) hook: &'a str,
     pub(crate) limits: &'a RunLimiter,
     pub(crate) journal: &'a dyn RunJournal,
@@ -81,7 +82,7 @@ impl BoundaryModels<'_> {
         let _slot = tokio::select! {biased;_=self.cancellation.cancelled()=>anyhow::bail!("boundary model scope expired"),slot=self.limits.auxiliary_slot()=>slot?};
         let mut lease = self.limits.reserve_auxiliary(
             &model,
-            &format!("boundary:{}/{}", self.owner, self.hook),
+            &format!("{}:{}/{}", self.phase, self.owner, self.hook),
             count,
         )?;
         let attempt = lease.attempt();
@@ -111,7 +112,11 @@ impl BoundaryModels<'_> {
         {
             lease.reporter.record(response.usage.clone());
         }
-        lease.finish(if result.is_ok() { "completed" } else { "error" });
+        lease.finish(match &result {
+            Ok(_) => "completed",
+            Err(e) if e.kind == ProviderErrorKind::Cancelled => "interrupted",
+            Err(_) => "error",
+        });
         let result = result.map_err(anyhow::Error::from).and_then(|response| {
             response.validate()?;
             ensure!(

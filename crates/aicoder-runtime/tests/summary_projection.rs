@@ -350,3 +350,212 @@ fn live_window_projection_uses_only_admitted_records_and_rejects_stale_or_foreig
     );
     drop(lease);
 }
+
+struct Intercept {
+    provider: Arc<Provider>,
+    cancel: bool,
+    cold_target: Option<String>,
+    events: Mutex<Vec<extensions::CompactionEvent>>,
+}
+#[async_trait]
+impl extensions::CompactionHook for Intercept {
+    async fn before(
+        &self,
+        i: extensions::CompactionHookInput<'_>,
+        _: extensions::ExtensionCancellation,
+    ) -> anyhow::Result<Option<extensions::CompactionAction>> {
+        use extensions::*;
+        if self.cancel {
+            return Ok(Some(CompactionAction {
+                cancel: true,
+                ..Default::default()
+            }));
+        }
+        let mut r = ModelRequest::new(
+            "fixture",
+            vec![
+                Message::text(MessageRole::System, "Native historical summary"),
+                Message::text(MessageRole::User, "source facts"),
+            ],
+        );
+        r.tool_choice = ModelToolChoice::None;
+        r.options.max_output_tokens = Some(64);
+        let response = i.models.generate(self.provider.clone(), r).await?;
+        let id = self.cold_target.clone().or_else(|| {
+            i.session_context
+                .and_then(|s| s.entry_ids.iter().rev().flatten().next().cloned())
+        });
+        Ok(Some(CompactionAction {
+            replacement: Some(CompactionReplacement {
+                summary: response.message.text_content(),
+                first_kept_entry_id: id,
+                details: Some(json!({"not_in_model":"PRIVATE_NATIVE_DETAILS"})),
+            }),
+            ..Default::default()
+        }))
+    }
+    async fn after(
+        &self,
+        e: &extensions::CompactionEvent,
+        _: extensions::ExtensionCancellation,
+    ) -> anyhow::Result<()> {
+        self.events.lock().unwrap().push(e.clone());
+        Ok(())
+    }
+}
+fn hooked(root: &std::path::Path, p: Arc<Provider>, h: Arc<Intercept>) -> Agent {
+    use extensions::*;
+    let mut e = Extension::new("compact", "1").unwrap();
+    e.compaction_hook(HookSpec::new("native"), h).unwrap();
+    let mut r = ExtensionRegistry::new();
+    r.install(e).unwrap();
+    let mut c = SummaryConfig::new(ContextWindowConfig {
+        max_context_tokens: 1200,
+        reserved_output_tokens: 200,
+        preserve_recent_tokens: 1,
+    });
+    c.output_tokens = 128;
+    c.max_input_tokens = 4096;
+    c.failure_policy = SummaryFailurePolicy::Stop;
+    Agent::new(
+        TurnExecutor::builder_from_shared(p.clone())
+            .workspace(root)
+            .extensions(Arc::new(r.finish()))
+            .context_compactor(SemanticContextCompactor::new(p, "fixture", c).unwrap())
+            .build()
+            .unwrap(),
+        AgentConfig::new("fixture").system_prompt("runtime prefix"),
+    )
+}
+#[tokio::test]
+async fn manual_and_auto_native_interception_use_real_cold_window_anchors_and_receipts() {
+    for manual in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let store = tempfile::tempdir().unwrap();
+        let writer = JsonlSessionRepository::new(store.path()).unwrap();
+        let s = seed(&writer, root.path());
+        let original = std::fs::read(s.path().unwrap()).unwrap();
+        let repo = limited(store.path());
+        let p = Arc::new(Provider::default());
+        let h = Arc::new(Intercept {
+            provider: p.clone(),
+            cancel: false,
+            cold_target: None,
+            events: Mutex::new(vec![]),
+        });
+        let a = hooked(root.path(), p.clone(), h.clone());
+        if manual {
+            let report = a
+                .compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+                .await;
+            assert!(
+                report.succeeded() && report.checkpoint_entry_id.is_some(),
+                "{report:?}"
+            );
+            assert_eq!(report.usage.total_tokens, Some(10));
+            assert_eq!(report.auxiliary.len(), 1);
+            assert_eq!(report.branch_usage.unwrap().total_tokens, Some(10));
+            assert_eq!(report.attempts, 0);
+        } else {
+            let out = a
+                .run_with_session_outcome(
+                    &repo,
+                    SessionSelection::Existing(s.metadata().id.clone()),
+                    "fresh input",
+                    Arc::new(()),
+                    TurnExecutionContext::new(),
+                )
+                .await;
+            assert!(matches!(out, AgentTurnOutcome::Completed(_)), "{out:?}");
+            assert_eq!(out.progress().usage.total_tokens, Some(20));
+            assert_eq!(out.progress().auxiliary.len(), 1);
+        }
+        assert!(
+            std::fs::read(s.path().unwrap())
+                .unwrap()
+                .starts_with(&original)
+        );
+        let current = limited(store.path()).open_run(&s.metadata().id).unwrap();
+        let (_, view) = current.source_and_context().unwrap();
+        assert!(
+            view.iter()
+                .all(|m| !m.text_content().contains("private index"))
+        );
+        assert!(view.iter().any(|m| {
+            m.text_content()
+                .contains("Historical conversation summary from extension")
+        }));
+        assert_eq!(
+            h.events.lock().unwrap()[0].status,
+            extensions::CompactionStatus::Completed
+        );
+        assert!(h.events.lock().unwrap()[0].from_extension);
+    }
+}
+#[tokio::test]
+async fn cold_window_veto_does_not_call_models_or_replace_original_records() {
+    let root = tempfile::tempdir().unwrap();
+    let store = tempfile::tempdir().unwrap();
+    let writer = JsonlSessionRepository::new(store.path()).unwrap();
+    let s = seed(&writer, root.path());
+    let raw = s.selected_branch().chat_messages();
+    let repo = limited(store.path());
+    let p = Arc::new(Provider::default());
+    let h = Arc::new(Intercept {
+        provider: p.clone(),
+        cancel: true,
+        cold_target: None,
+        events: Mutex::new(vec![]),
+    });
+    let a = hooked(root.path(), p.clone(), h);
+    let report = a
+        .compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+        .await;
+    assert!(!report.succeeded());
+    assert!(report.checkpoint_entry_id.is_none());
+    assert!(p.0.lock().unwrap().is_empty());
+    assert_eq!(
+        writer
+            .open(&s.metadata().id)
+            .unwrap()
+            .selected_branch()
+            .chat_messages(),
+        raw
+    );
+}
+#[tokio::test]
+async fn rejected_cold_replacement_keeps_paid_native_work_without_service_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    let store = tempfile::tempdir().unwrap();
+    let writer = JsonlSessionRepository::new(store.path()).unwrap();
+    let s = seed(&writer, root.path());
+    let raw = s.selected_branch().chat_messages();
+    let repo = limited(store.path());
+    let p = Arc::new(Provider::default());
+    let h = Arc::new(Intercept {
+        provider: p.clone(),
+        cancel: false,
+        cold_target: Some(s.entries()[0].id.clone()),
+        events: Mutex::new(vec![]),
+    });
+    let a = hooked(root.path(), p.clone(), h.clone());
+    let report = a
+        .compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+        .await;
+    assert!(!report.succeeded());
+    assert!(report.checkpoint_entry_id.is_none());
+    assert_eq!(report.usage.total_tokens, Some(10));
+    assert_eq!(p.0.lock().unwrap().len(), 1);
+    assert_eq!(
+        writer
+            .open(&s.metadata().id)
+            .unwrap()
+            .selected_branch()
+            .chat_messages(),
+        raw
+    );
+    assert_eq!(
+        h.events.lock().unwrap()[0].status,
+        extensions::CompactionStatus::Failed
+    );
+}

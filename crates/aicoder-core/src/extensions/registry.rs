@@ -56,6 +56,7 @@ pub struct Extension {
     inputs: Vec<Registered<dyn InputHook>>,
     startups: Vec<Registered<dyn BeforeStartHook>>,
     boundaries: Vec<Registered<dyn BoundaryHook>>,
+    compactions: Vec<Registered<dyn CompactionHook>>,
     requests: Vec<RequestRegistration>,
     contexts: Vec<Registered<dyn ContextHook>>,
     guards: Vec<Registered<dyn ToolHook>>,
@@ -92,6 +93,7 @@ impl Extension {
             inputs: Vec::new(),
             startups: Vec::new(),
             boundaries: Vec::new(),
+            compactions: Vec::new(),
             requests: Vec::new(),
             contexts: Vec::new(),
             guards: Vec::new(),
@@ -318,6 +320,25 @@ impl Extension {
             size(&spec, 1024)?,
         )?;
         self.boundaries.push(Registered {
+            owner: self.manifest.id.clone(),
+            spec,
+            callback: hook,
+        });
+        Ok(self)
+    }
+    pub fn compaction_hook(
+        &mut self,
+        spec: HookSpec,
+        hook: Arc<dyn CompactionHook>,
+    ) -> Result<&mut Self> {
+        spec.validate()?;
+        self.register(
+            "compaction_hook",
+            &spec.id,
+            Some(spec.priority),
+            size(&spec, 1024)?,
+        )?;
+        self.compactions.push(Registered {
             owner: self.manifest.id.clone(),
             spec,
             callback: hook,
@@ -665,6 +686,13 @@ impl ExtensionSet {
             self.extensions
                 .iter()
                 .flat_map(|e| e.boundaries.iter().cloned()),
+        )
+    }
+    pub(crate) fn compaction_hooks(&self) -> Vec<Registered<dyn CompactionHook>> {
+        ordered(
+            self.extensions
+                .iter()
+                .flat_map(|e| e.compactions.iter().cloned()),
         )
     }
     pub(crate) fn request_hooks(&self) -> Vec<RequestRegistration> {

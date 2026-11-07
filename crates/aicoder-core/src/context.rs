@@ -63,6 +63,29 @@ pub trait ContextCompactor: Send + Sync {
         self.compact_counted(request, measure, context).await
     }
 
+    /// Native instruction customization is opt-in; unsupported strategies fail before model IO.
+    async fn compact_customized(
+        &self,
+        request: crate::summary::CompactionRequest<'_>,
+        measure: ContextMeasure,
+        projection: Option<&crate::summary::CompactionProjection>,
+        instructions: Option<&crate::extensions::SummaryInstructions>,
+        context: crate::TurnExecutionContext,
+    ) -> Result<crate::summary::RecordedCompaction> {
+        if instructions.is_some() {
+            return Err(crate::summary::SummaryFailure {
+                kind: crate::summary::SummaryFailureKind::InvalidResponse,
+                message: "context strategy does not support summary instructions".into(),
+                usage: ModelUsage::zero(),
+                tokens: Default::default(),
+                attempts: 0,
+            }
+            .into());
+        }
+        self.compact_projected(request, measure, projection, context)
+            .await
+    }
+
     /// Whether compaction may consume model tokens. Unknown implementations are accounted conservatively.
     fn uses_model(&self) -> bool {
         true

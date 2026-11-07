@@ -60,6 +60,10 @@
   Bind summary lineage to canonical IDs, exact views/history and declared runtime prefixes.
   Count v2 checkpoints across all real message contributors while preserving v1 rules; derive
   live window lineage only from admitted records and validated opaque backend cursors.
+  Automatic/manual compaction hooks share owned preparation, parent model budgets and durable
+  usage ownership. Instruction guidance stays ephemeral and cannot replace format/tool guards.
+  Observers never veto acknowledged checkpoints; preserve their IDs on late failure, and settle
+  interrupted idle auxiliary receipts without fabricating turns or repeating completed requests.
 - Output artifacts are explicit scoped host storage. Bound serialization, staging, disk
   admission and pages; keep raw bytes and capture completeness separate from previews.
   Archive failures must not repeat completed operations or publish partial data as complete.

@@ -114,6 +114,13 @@ impl EvaluationJournal {
 }
 #[async_trait]
 impl RunJournal for EvaluationJournal {
+    async fn record_compaction_hooks(
+        &self,
+        record: &aicoder_core::summary::CompactionHookRecord,
+    ) -> Result<()> {
+        self.record(json!({"kind":"compaction_hook","data":record}))
+    }
+
     async fn record_message_finalization(
         &self,
         record: &aicoder_core::extensions::MessageFinalizationRecord,
@@ -441,6 +448,95 @@ mod tool_catalog_tests {
                 .filter(|v| v["kind"] == "lifecycle_boundary")
                 .count(),
             1
+        );
+    }
+    struct Compact(Arc<BoundaryProvider>);
+    #[async_trait]
+    impl aicoder_core::extensions::CompactionHook for Compact {
+        async fn before(
+            &self,
+            i: aicoder_core::extensions::CompactionHookInput<'_>,
+            _: aicoder_core::extensions::ExtensionCancellation,
+        ) -> Result<Option<aicoder_core::extensions::CompactionAction>> {
+            use aicoder_core::extensions::*;
+            let mut r = ModelRequest::new(
+                "aux",
+                vec![Message::text(MessageRole::User, "public historical facts")],
+            );
+            r.tool_choice = ModelToolChoice::None;
+            r.options.max_output_tokens = Some(32);
+            let response = i.models.generate(self.0.clone(), r).await?;
+            Ok(Some(CompactionAction {
+                replacement: Some(CompactionReplacement {
+                    summary: response.message.text_content(),
+                    first_kept_entry_id: None,
+                    details: None,
+                }),
+                ..Default::default()
+            }))
+        }
+    }
+    #[tokio::test]
+    async fn evaluation_compaction_interception_preserves_trace_counts_and_separate_usage() {
+        use aicoder_core::{ContextWindowConfig, extensions::*, summary::*};
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(BoundaryProvider(std::sync::atomic::AtomicUsize::new(0)));
+        let mut e = Extension::new("compaction", "1").unwrap();
+        e.compaction_hook(
+            HookSpec::new("override"),
+            Arc::new(Compact(provider.clone())),
+        )
+        .unwrap();
+        let mut r = ExtensionRegistry::new();
+        r.install(e).unwrap();
+        let config = SummaryConfig::new(ContextWindowConfig {
+            max_context_tokens: 1200,
+            reserved_output_tokens: 200,
+            preserve_recent_tokens: 80,
+        });
+        let executor = TurnExecutor::builder_from_shared(provider.clone())
+            .workspace(root.path())
+            .extensions(Arc::new(r.finish()))
+            .context_compactor(
+                SemanticContextCompactor::new(provider.clone(), "main", config).unwrap(),
+            )
+            .build()
+            .unwrap();
+        let request = ModelRequest::new(
+            "main",
+            vec![
+                Message::text(MessageRole::System, "host prefix"),
+                Message::text(MessageRole::User, "x".repeat(8000)),
+                Message::text(MessageRole::User, "latest task"),
+            ],
+        );
+        let journal = EvaluationJournal::default();
+        let trace = crate::AgentTraceRecorder::shared();
+        let out = executor
+            .run_with_journal(
+                request,
+                trace.clone(),
+                TurnExecutionContext::new(),
+                &journal,
+            )
+            .await;
+        assert!(matches!(out, RunOutcome::Completed(_)), "{out:?}");
+        trace.trace().validate().unwrap();
+        assert_eq!(provider.0.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(out.progress().usage.total_tokens, Some(10));
+        assert_eq!(
+            out.progress().primary_usage.as_ref().unwrap().total_tokens,
+            Some(7)
+        );
+        assert_eq!(
+            out.progress().model_context.as_ref().unwrap().compactions,
+            1
+        );
+        assert!(
+            journal
+                .records()
+                .iter()
+                .any(|v| v["kind"] == "compaction_hook")
         );
     }
 }

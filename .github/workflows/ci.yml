@@ -127,6 +127,21 @@ jobs:
           cargo run --locked -p aicoder-runtime --example offline_session_fork -- --observer-error
           cargo build --locked -p aicoder-tui --example offline_extension_ui
           python3 scripts/check_session_fork.py
+      - name: Automatic and manual compaction hooks
+        run: |
+          cargo test --locked -p aicoder-runtime --no-default-features --test summary_projection
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks -- --window
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks -- --manual
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks -- --manual --window
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks -- --veto
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks -- --manual --window --veto
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks -- --instructions
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks -- --instructions --window
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks -- --manual --instructions
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks -- --manual --window --instructions
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks -- --observer-fail
+          cargo run --locked -p aicoder-runtime --example offline_compaction_hooks -- --manual --window --observer-fail
       - name: Prepared boundary drafts and native model work
         run: |
           cargo test --locked -p aicoder-runtime --no-default-features --test boundary_drafts

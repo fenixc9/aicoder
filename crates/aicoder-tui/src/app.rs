@@ -732,6 +732,7 @@ impl App {
                 }
             }
             AppEvent::CompactionFinished(report) => {
+                self.cost_usage_complete = false;
                 self.run = None;
                 self.active_context = None;
                 self.active_handle = None;
@@ -741,11 +742,20 @@ impl App {
                 } else {
                     self.usage.accumulate(&report.usage);
                 }
-                self.state = if report.succeeded() {
+                self.state = if report.succeeded() || report.checkpoint_entry_id.is_some() {
                     AgentRunState::Completed { rounds: 0 }
                 } else {
                     AgentRunState::Failed { round: None }
                 };
+                if report.checkpoint_entry_id.is_some() && !report.succeeded() {
+                    self.timeline.push(TimelineItem::Notice("Compaction checkpoint committed; post-compaction work was incomplete. Inspect the result before another request.".into()));
+                }
+                if !report.delivery.failures.is_empty() {
+                    self.timeline.push(TimelineItem::Notice(format!(
+                        "Compaction observer delivery incomplete: {} callbacks",
+                        report.delivery.failures.len()
+                    )));
+                }
                 self.timeline.push(TimelineItem::Notice(format!(
                     "Manual compaction: {} -> {} estimated tokens; {} attempts; {}",
                     report.before,
@@ -1441,6 +1451,9 @@ mod tests {
             ..ModelUsage::zero()
         };
         let report = aicoder_core::summary::ManualCompactionReport {
+            auxiliary: vec![],
+            primary_usage: None,
+            delivery: Default::default(),
             session: None,
             checkpoint_entry_id: Some("checkpoint".into()),
             usage: usage.clone(),
@@ -2069,5 +2082,33 @@ mod tests {
                 .iter()
                 .any(|v| matches!(v, TimelineItem::User(_)))
         );
+    }
+    #[test]
+    fn acknowledged_manual_compaction_stays_applied_when_post_work_is_incomplete() {
+        let mut app = App::new(vec![]);
+        app.cost_usage_complete = true;
+        let report = aicoder_core::summary::ManualCompactionReport {
+            session: None,
+            checkpoint_entry_id: Some("acknowledged".into()),
+            usage: ModelUsage::zero(),
+            branch_usage: None,
+            tokens: Default::default(),
+            attempts: 0,
+            before: 200,
+            after: 80,
+            stop: Some(aicoder_core::RunStop::Cancelled {
+                reason: "after checkpoint".into(),
+            }),
+            persistence_error: None,
+            auxiliary: vec![],
+            primary_usage: None,
+            delivery: Default::default(),
+        };
+        app.apply(AppEvent::CompactionFinished(Box::new(report)));
+        assert!(matches!(app.state, AgentRunState::Completed { .. }));
+        assert!(!app.cost_usage_complete);
+        assert!(app.timeline.iter().any(
+            |item| matches!(item,TimelineItem::Notice(t) if t.contains("checkpoint committed"))
+        ));
     }
 }

@@ -37,10 +37,10 @@ impl Script {
     }
 }
 fn is_summary(request: &ModelRequest) -> bool {
-    request
-        .messages
-        .first()
-        .is_some_and(|m| m.text_content().starts_with("Summarize historical"))
+    request.messages.first().is_some_and(|m| {
+        m.text_content().starts_with("Summarize historical")
+            || m.text_content().starts_with("Return ONLY a JSON object")
+    })
 }
 fn usage() -> ModelUsage {
     ModelUsage {
@@ -1393,5 +1393,573 @@ async fn omitted_recovered_tool_units_still_mark_summary_uncertainty() {
             .messages
             .iter()
             .any(|m| m.role == MessageRole::System)
+    );
+}
+
+#[derive(Clone, Copy)]
+enum Intercept {
+    Veto,
+    Replace,
+    Generated,
+    GeneratedWait,
+    Instructions,
+    ReplaceInstructions,
+    Invalid,
+}
+struct Interceptor {
+    mode: Intercept,
+    provider: Arc<Script>,
+    events: Mutex<Vec<extensions::CompactionEvent>>,
+    after_fail: bool,
+    after_wait: bool,
+}
+#[async_trait]
+impl extensions::CompactionHook for Interceptor {
+    async fn before(
+        &self,
+        i: extensions::CompactionHookInput<'_>,
+        _: extensions::ExtensionCancellation,
+    ) -> anyhow::Result<Option<extensions::CompactionAction>> {
+        use extensions::*;
+        let mut action = CompactionAction::default();
+        match self.mode {
+            Intercept::Veto => action.cancel = true,
+            Intercept::Instructions | Intercept::ReplaceInstructions => {
+                action.instructions = Some(SummaryInstructions {
+                    text: "HOST_PRIVATE_SUMMARY_GUIDANCE".into(),
+                    replace_default: matches!(self.mode, Intercept::ReplaceInstructions),
+                })
+            }
+            _ => {
+                let summary =
+                    if matches!(self.mode, Intercept::Generated | Intercept::GeneratedWait) {
+                        let mut r = ModelRequest::new(
+                            "test",
+                            vec![
+                                Message::text(
+                                    MessageRole::System,
+                                    if matches!(self.mode, Intercept::GeneratedWait) {
+                                        "Summarize historical native data"
+                                    } else {
+                                        "Native replacement model"
+                                    },
+                                ),
+                                Message::text(MessageRole::User, "public historical facts"),
+                            ],
+                        );
+                        r.tool_choice = ModelToolChoice::None;
+                        r.options.max_output_tokens = Some(64);
+                        i.models
+                            .generate(self.provider.clone(), r)
+                            .await?
+                            .message
+                            .text_content()
+                    } else {
+                        "native replacement summary".into()
+                    };
+                let target = if matches!(self.mode, Intercept::Invalid) {
+                    Some("missing".into())
+                } else {
+                    i.session_context
+                        .and_then(|s| s.entry_ids.iter().rev().flatten().next().cloned())
+                };
+                action.replacement = Some(CompactionReplacement {
+                    summary,
+                    first_kept_entry_id: target,
+                    details: Some(json!({"not_in_prompt":"PRIVATE_INERT_DETAILS"})),
+                });
+            }
+        }
+        Ok(Some(action))
+    }
+    async fn after(
+        &self,
+        e: &extensions::CompactionEvent,
+        _: extensions::ExtensionCancellation,
+    ) -> anyhow::Result<()> {
+        self.events.lock().unwrap().push(e.clone());
+        if self.after_wait {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        }
+        anyhow::ensure!(!self.after_fail, "PRIVATE_OBSERVER_ERROR");
+        Ok(())
+    }
+}
+fn intercept_agent(
+    root: &std::path::Path,
+    provider: Arc<Script>,
+    hook: Arc<Interceptor>,
+    duration: Option<std::time::Duration>,
+) -> Agent {
+    use extensions::*;
+    let mut e = Extension::new("compact", "1").unwrap();
+    e.compaction_hook(HookSpec::new("native"), hook).unwrap();
+    let mut r = ExtensionRegistry::new();
+    r.install(e).unwrap();
+    let mut c = config();
+    c.failure_policy = SummaryFailurePolicy::Stop;
+    Agent::new(
+        TurnExecutor::builder_from_shared(provider.clone())
+            .workspace(root)
+            .extensions(Arc::new(r.finish()))
+            .config(TurnExecutionConfig {
+                budget: RunBudget {
+                    max_duration: duration,
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .context_compactor(SemanticContextCompactor::new(provider, "test", c).unwrap())
+            .build()
+            .unwrap(),
+        AgentConfig::new("test").system_prompt("trusted prefix"),
+    )
+}
+fn interceptor(mode: Intercept, p: Arc<Script>) -> Arc<Interceptor> {
+    Arc::new(Interceptor {
+        mode,
+        provider: p,
+        events: Mutex::new(vec![]),
+        after_fail: false,
+        after_wait: false,
+    })
+}
+#[tokio::test]
+async fn compaction_veto_stops_auto_io_and_reports_manual_cancel_without_cancelling_host() {
+    for manual in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let repo = MemorySessionRepository::new();
+        let s = seed(&repo, root.path());
+        let p = Script::new(&[]);
+        let h = interceptor(Intercept::Veto, p.clone());
+        let a = intercept_agent(root.path(), p.clone(), h.clone(), None);
+        let context = TurnExecutionContext::new();
+        if manual {
+            let report = a
+                .compact_session(&repo, &s.metadata().id, context.clone())
+                .await;
+            assert!(!report.succeeded());
+            assert!(matches!(report.stop, Some(RunStop::Cancelled { .. })));
+            assert!(report.checkpoint_entry_id.is_none());
+            assert_eq!(report.attempts, 0);
+        } else {
+            let out = a
+                .run_with_session_outcome(
+                    &repo,
+                    SessionSelection::Existing(s.metadata().id.clone()),
+                    "fresh",
+                    Arc::new(()),
+                    context.clone(),
+                )
+                .await;
+            assert!(!matches!(out, AgentTurnOutcome::Completed(_)), "{out:?}");
+            assert_eq!(out.progress().usage, ModelUsage::zero());
+        }
+        assert!(p.requests.lock().unwrap().is_empty());
+        assert!(!context.is_cancelled());
+        assert_eq!(
+            h.events.lock().unwrap()[0].status,
+            extensions::CompactionStatus::Vetoed
+        );
+    }
+}
+#[tokio::test]
+async fn native_replacements_commit_before_auto_main_io_and_preserve_manual_history() {
+    for manual in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let repo = MemorySessionRepository::new();
+        let s = seed(&repo, root.path());
+        let raw = s.selected_branch().chat_messages();
+        let p = Script::new(&[]);
+        let h = interceptor(Intercept::Replace, p.clone());
+        let a = intercept_agent(root.path(), p.clone(), h.clone(), None);
+        if manual {
+            let report = a
+                .compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+                .await;
+            assert!(
+                report.succeeded() && report.checkpoint_entry_id.is_some(),
+                "{report:?}"
+            );
+            assert_eq!(report.attempts, 0);
+            assert_eq!(report.usage, ModelUsage::zero());
+            assert_eq!(
+                repo.open(&s.metadata().id)
+                    .unwrap()
+                    .selected_branch()
+                    .chat_messages(),
+                raw
+            );
+        } else {
+            let out = a
+                .run_with_session_outcome(
+                    &repo,
+                    SessionSelection::Existing(s.metadata().id.clone()),
+                    "fresh",
+                    Arc::new(()),
+                    TurnExecutionContext::new(),
+                )
+                .await;
+            assert!(matches!(out, AgentTurnOutcome::Completed(_)), "{out:?}");
+            assert_eq!(out.progress().usage.total_tokens, Some(10));
+            assert_eq!(p.requests.lock().unwrap().len(), 1);
+            let r = &p.requests.lock().unwrap()[0];
+            assert!(
+                r.messages
+                    .iter()
+                    .any(|m| m.text_content().contains("native replacement summary"))
+            );
+            assert!(!serde_json::to_string(r).unwrap().contains("PRIVATE_INERT"));
+        }
+        let event = h.events.lock().unwrap()[0].clone();
+        assert_eq!(event.status, extensions::CompactionStatus::Completed);
+        assert!(event.from_extension && event.checkpoint_entry_id.is_some());
+        assert_eq!(p.summaries(), 0);
+    }
+}
+#[tokio::test]
+async fn native_replacement_model_work_is_charged_separately_for_manual_and_auto() {
+    for manual in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let repo = MemorySessionRepository::new();
+        let s = seed(&repo, root.path());
+        let p = Script::new(&[]);
+        let h = interceptor(Intercept::Generated, p.clone());
+        let a = intercept_agent(root.path(), p.clone(), h, None);
+        if manual {
+            let report = a
+                .compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+                .await;
+            assert!(report.succeeded(), "{report:?}");
+            assert_eq!(report.usage.total_tokens, Some(10));
+            assert_eq!(report.primary_usage.unwrap().total_tokens, Some(0));
+            assert_eq!(report.auxiliary.len(), 1);
+            assert_eq!(report.branch_usage.unwrap().total_tokens, Some(10));
+            assert_eq!(report.attempts, 0);
+        } else {
+            let out = a
+                .run_with_session_outcome(
+                    &repo,
+                    SessionSelection::Existing(s.metadata().id.clone()),
+                    "fresh",
+                    Arc::new(()),
+                    TurnExecutionContext::new(),
+                )
+                .await;
+            assert!(matches!(out, AgentTurnOutcome::Completed(_)), "{out:?}");
+            assert_eq!(out.progress().usage.total_tokens, Some(20));
+            assert_eq!(
+                out.progress().primary_usage.as_ref().unwrap().total_tokens,
+                Some(10)
+            );
+            assert_eq!(out.progress().auxiliary.len(), 1);
+        }
+        assert_eq!(p.summaries(), 0);
+        assert!(
+            repo.open(&s.metadata().id)
+                .unwrap()
+                .selected_branch()
+                .accounting()
+                .unwrap()
+                .usage
+                .total_tokens
+                .unwrap()
+                >= 10
+        );
+    }
+}
+#[tokio::test]
+async fn native_instructions_customize_default_requests_without_becoming_history() {
+    for mode in [Intercept::Instructions, Intercept::ReplaceInstructions] {
+        let root = tempfile::tempdir().unwrap();
+        let repo = MemorySessionRepository::new();
+        let s = seed(&repo, root.path());
+        let p = Script::new(&[]);
+        let h = interceptor(mode, p.clone());
+        let a = intercept_agent(root.path(), p.clone(), h, None);
+        let report = a
+            .compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+            .await;
+        assert!(
+            report.succeeded() && report.checkpoint_entry_id.is_some(),
+            "{report:?}"
+        );
+        let requests = p.requests.lock().unwrap();
+        assert!(!requests.is_empty());
+        for r in requests.iter() {
+            assert!(
+                r.messages[0]
+                    .text_content()
+                    .contains("HOST_PRIVATE_SUMMARY_GUIDANCE")
+            );
+            assert!(r.messages[0].text_content().contains("five arrays"));
+            assert!(r.tools.is_empty());
+        }
+        assert!(
+            !serde_json::to_string(repo.open(&s.metadata().id).unwrap().entries())
+                .unwrap()
+                .contains("HOST_PRIVATE_SUMMARY_GUIDANCE")
+        );
+    }
+}
+#[tokio::test]
+async fn invalid_native_replacement_never_falls_back_or_mutates_canonical_facts() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let s = seed(&repo, root.path());
+    let raw = s.selected_branch().chat_messages();
+    let p = Script::new(&[]);
+    let h = interceptor(Intercept::Invalid, p.clone());
+    let a = intercept_agent(root.path(), p.clone(), h.clone(), None);
+    let report = a
+        .compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+        .await;
+    assert!(!report.succeeded());
+    assert!(p.requests.lock().unwrap().is_empty());
+    assert_eq!(
+        repo.open(&s.metadata().id)
+            .unwrap()
+            .selected_branch()
+            .chat_messages(),
+        raw
+    );
+    assert_eq!(
+        h.events.lock().unwrap()[0].status,
+        extensions::CompactionStatus::Failed
+    );
+}
+#[tokio::test]
+async fn post_compaction_observer_errors_cannot_veto_the_acknowledged_checkpoint() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let s = seed(&repo, root.path());
+    let p = Script::new(&[]);
+    let h = Arc::new(Interceptor {
+        mode: Intercept::Generated,
+        provider: p.clone(),
+        events: Mutex::new(vec![]),
+        after_fail: true,
+        after_wait: false,
+    });
+    let a = intercept_agent(root.path(), p.clone(), h, None);
+    let report = a
+        .compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+        .await;
+    assert!(
+        report.succeeded() && report.checkpoint_entry_id.is_some(),
+        "{report:?}"
+    );
+    assert_eq!(report.delivery.failures.len(), 1);
+    assert_eq!(report.usage.total_tokens, Some(10));
+    assert_eq!(p.requests.lock().unwrap().len(), 1);
+}
+#[tokio::test]
+async fn observer_deadline_retains_manual_checkpoint_and_paid_usage() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let s = seed(&repo, root.path());
+    let p = Script::new(&[]);
+    let h = Arc::new(Interceptor {
+        mode: Intercept::Generated,
+        provider: p.clone(),
+        events: Mutex::new(vec![]),
+        after_fail: false,
+        after_wait: true,
+    });
+    let a = intercept_agent(
+        root.path(),
+        p.clone(),
+        h,
+        Some(std::time::Duration::from_millis(80)),
+    );
+    let report = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        a.compact_session(&repo, &s.metadata().id, TurnExecutionContext::new()),
+    )
+    .await
+    .unwrap();
+    assert!(report.checkpoint_entry_id.is_some(), "{report:?}");
+    assert!(matches!(report.stop, Some(RunStop::Budget(_))));
+    assert_eq!(report.usage.total_tokens, Some(10));
+    assert_eq!(report.delivery.completed, 0);
+    assert_eq!(p.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn cancelled_manual_hook_settles_partial_native_receipts_without_a_fake_turn() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let s = seed(&repo, root.path());
+    let p = Script::new(&[Reply::Wait]);
+    let h = interceptor(Intercept::GeneratedWait, p.clone());
+    let a = intercept_agent(
+        root.path(),
+        p.clone(),
+        h,
+        Some(std::time::Duration::from_millis(40)),
+    );
+    let report = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        a.compact_session(&repo, &s.metadata().id, TurnExecutionContext::new()),
+    )
+    .await
+    .unwrap();
+    assert!(!report.succeeded(), "{report:?}");
+    assert_eq!(report.usage.total_tokens, Some(10));
+    assert_eq!(report.branch_usage.as_ref().unwrap().total_tokens, Some(10));
+    assert_eq!(report.auxiliary.len(), 1);
+    assert_eq!(report.auxiliary[0].status, "interrupted");
+    assert!(report.checkpoint_entry_id.is_none());
+    let stored = repo.open(&s.metadata().id).unwrap();
+    assert!(!stored.entries().iter().any(|e| matches!(
+        e.data,
+        SessionEntryData::TurnStart { .. } | SessionEntryData::TurnEnd { .. }
+    )));
+    assert_eq!(stored.messages().len(), 9);
+}
+#[tokio::test]
+async fn customized_instruction_failures_do_not_poison_another_instruction_cache_key() {
+    let p = Script::new(&[Reply::Fail]);
+    let mut c = config();
+    c.max_attempts = 1;
+    let compactor = SemanticContextCompactor::new(p.clone(), "test", c).unwrap();
+    let messages = history();
+    let request = || CompactionRequest {
+        input: ContextCompactionInput {
+            model: "test",
+            messages: &messages,
+            tools: None,
+            max_output_tokens: None,
+        },
+        history: &messages,
+        system_prefix_len: 1,
+        force: false,
+        token_budget: None,
+        archived_messages: 0,
+    };
+    let measure = || ContextMeasure {
+        counting: Default::default(),
+        spec: p.model_spec("test").unwrap(),
+        response_format: None,
+        tool_choice: ModelToolChoice::None,
+        target_tokens: 1000,
+    };
+    let first = extensions::SummaryInstructions {
+        text: "first host guidance".into(),
+        replace_default: false,
+    };
+    let result = compactor
+        .compact_customized(
+            request(),
+            measure(),
+            None,
+            Some(&first),
+            TurnExecutionContext::new(),
+        )
+        .await
+        .unwrap();
+    assert!(result.checkpoint.is_none());
+    let calls = p.summaries();
+    let result = compactor
+        .compact_customized(
+            request(),
+            measure(),
+            None,
+            Some(&first),
+            TurnExecutionContext::new(),
+        )
+        .await
+        .unwrap();
+    assert!(result.checkpoint.is_none());
+    assert_eq!(p.summaries(), calls);
+    let other = extensions::SummaryInstructions {
+        text: "different host guidance".into(),
+        replace_default: false,
+    };
+    assert!(
+        compactor
+            .compact_customized(
+                request(),
+                measure(),
+                None,
+                Some(&other),
+                TurnExecutionContext::new()
+            )
+            .await
+            .unwrap()
+            .checkpoint
+            .is_some()
+    );
+    assert!(p.summaries() > calls);
+}
+
+struct DefaultAfterReplacement;
+#[async_trait]
+impl extensions::CompactionHook for DefaultAfterReplacement {
+    async fn before(
+        &self,
+        i: extensions::CompactionHookInput<'_>,
+        _: extensions::ExtensionCancellation,
+    ) -> anyhow::Result<Option<extensions::CompactionAction>> {
+        assert!(i.replacement.is_some());
+        Ok(Some(extensions::CompactionAction {
+            use_default: true,
+            instructions: Some(extensions::SummaryInstructions {
+                text: "ROOT_PRIVATE_LATER_GUIDANCE".into(),
+                replace_default: false,
+            }),
+            ..Default::default()
+        }))
+    }
+}
+#[tokio::test]
+async fn later_hook_can_restore_default_generation_without_erasing_earlier_native_usage() {
+    use extensions::*;
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let s = seed(&repo, root.path());
+    let p = Script::new(&[]);
+    let mut e = Extension::new("chain", "1").unwrap();
+    e.compaction_hook(
+        HookSpec::new("first"),
+        interceptor(Intercept::Generated, p.clone()),
+    )
+    .unwrap();
+    let mut later = HookSpec::new("later");
+    later.priority = 10;
+    e.compaction_hook(later, Arc::new(DefaultAfterReplacement))
+        .unwrap();
+    let mut r = ExtensionRegistry::new();
+    r.install(e).unwrap();
+    let a = Agent::new(
+        TurnExecutor::builder_from_shared(p.clone())
+            .workspace(root.path())
+            .extensions(Arc::new(r.finish()))
+            .context_compactor(SemanticContextCompactor::new(p.clone(), "test", config()).unwrap())
+            .build()
+            .unwrap(),
+        AgentConfig::new("test"),
+    );
+    let report = a
+        .compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+        .await;
+    assert!(
+        report.succeeded() && report.checkpoint_entry_id.is_some(),
+        "{report:?}"
+    );
+    assert_eq!(report.auxiliary.len(), 1);
+    assert!(report.attempts > 0);
+    assert_eq!(
+        report.usage.total_tokens,
+        Some((report.attempts as u64 + 1) * 10)
+    );
+    assert_eq!(
+        report.branch_usage.unwrap().total_tokens,
+        report.usage.total_tokens
+    );
+    assert!(
+        !serde_json::to_string(repo.open(&s.metadata().id).unwrap().entries())
+            .unwrap()
+            .contains("ROOT_PRIVATE_LATER_GUIDANCE")
     );
 }

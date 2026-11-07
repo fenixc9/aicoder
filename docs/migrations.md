@@ -1,5 +1,30 @@
 # API migrations
 
+## S7: compaction hooks and manual usage separation
+
+Extension adds compaction_hook; CompactionHook has ordered before decisions and post-effect after
+observations. CompactionAction can veto, customize SummaryInstructions or replace with a native
+reduction. Scoped models share parent budgets and record their own usage. BoundaryKind adds
+Compaction for prepared replacement receipts; ordinary boundary/startup invocation is unchanged.
+SummaryFailureKind adds Vetoed. Update exhaustive Rust matches. ContextCompactor adds optional
+compact_customized; existing implementations keep compact_projected unless instructions are given.
+Semantic request guards persist when replacing content guidance, and failed-source cache keys
+include ephemeral instruction identity.
+
+RunJournal adds record_compaction_hooks, defaulting to rejection. Installed hooks probe support
+before paid work. Memory/JSONL session journals, () and EvaluationJournal implement it. Metadata
+uses aicoder.compaction-hooks.v1 and omits instruction/view text. Existing semantic/native reduction
+wire formats remain unchanged; history never restores callbacks or routes.
+
+ManualCompactionReport adds defaulted auxiliary, primary_usage and delivery fields; Rust literals
+must initialize them. Aggregate report usage is separate from default summary checkpoint/usage
+ownership and helper Finished receipts. Interrupted idle helper attempts retain known durable
+usage without inventing terminal turns. An acknowledged checkpoint ID remains present after
+observer/deadline failures; clients must not infer that the reduction failed or automatically
+repeat provider work. TUI cost display is conservative after manual work, and CLI errors distinguish
+acknowledged checkpoints from failures before publication. See [contract](compaction-hooks.md).
+
+
 ## S7: prepared boundary drafts and scoped model work
 
 BoundaryEntry adds CustomMessage, ContextEdit and Compaction. Update exhaustive Rust matches.

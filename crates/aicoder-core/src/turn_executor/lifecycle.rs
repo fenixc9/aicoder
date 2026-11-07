@@ -16,7 +16,10 @@ impl TurnExecutor {
         journal: &dyn crate::RunJournal,
         context: &TurnExecutionContext,
     ) -> Result<()> {
-        if self.boundary_hooks.is_empty() && self.startup_hooks.is_empty() {
+        if self.boundary_hooks.is_empty()
+            && self.startup_hooks.is_empty()
+            && self.compaction_hooks.is_empty()
+        {
             return Ok(());
         }
         let record = LifecycleRecord::Started {
@@ -29,9 +32,15 @@ impl TurnExecutor {
                         .iter()
                         .map(|h| format!("{}/{}", h.owner, h.spec.id)),
                 )
+                .chain(
+                    self.compaction_hooks
+                        .iter()
+                        .map(|h| format!("{}/{}", h.owner, h.spec.id)),
+                )
                 .collect(),
         };
-        tokio::select! {biased;cancelled=context.cancelled()=>Err(cancelled.into()),result=tokio::time::timeout(Duration::from_secs(30),journal.record_lifecycle(&record))=>result.map_err(|_|anyhow::anyhow!("lifecycle journal timed out")).and_then(|v|v).map_err(|e|RunFailure::from_error(RunStage::Persistence,&e).into())}
+        tokio::select! {biased;cancelled=context.cancelled()=>Err(cancelled.into()),result=tokio::time::timeout(Duration::from_secs(30),journal.record_lifecycle(&record))=>result.map_err(|_|anyhow::anyhow!("lifecycle journal timed out")).and_then(|v|v).map_err(|e|anyhow::Error::from(RunFailure::from_error(RunStage::Persistence,&e)))}?;
+        crate::summary::hooks::probe(&self.compaction_hooks, journal, context).await
     }
     pub(super) async fn run_boundary(
         &self,
@@ -94,6 +103,7 @@ impl TurnExecutor {
                     context.ui(),
                     |cancel| async move {
                         let models = BoundaryModels {
+                            phase: "boundary",
                             owner: &hook.owner,
                             hook: &hook.spec.id,
                             limits,

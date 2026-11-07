@@ -26,7 +26,9 @@ pub use startup::{
 };
 mod boundary;
 mod boundary_models;
+mod compaction;
 pub use boundary_models::BoundaryModels;
+pub use compaction::*;
 mod commands;
 pub(crate) use boundary::explicit_context_message;
 pub use boundary::{
@@ -34,7 +36,7 @@ pub use boundary::{
     BoundaryKind, BoundaryProposal, BoundaryStatistics, LIFECYCLE_NAMESPACE, LifecycleRecord,
     MAX_BOUNDARY_BYTES, PreparedBoundary,
 };
-mod hooks;
+pub(crate) mod hooks;
 mod interception;
 mod request;
 pub use interception::{

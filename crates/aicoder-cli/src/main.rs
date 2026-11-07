@@ -1002,8 +1002,13 @@ async fn application() -> Result<()> {
             return Err(input::Interrupted.into());
         }
         if !report.succeeded() {
+            if report.checkpoint_entry_id.is_some() {
+                anyhow::bail!(
+                    "Compaction checkpoint committed; later work was incomplete. Inspect the report before another request"
+                );
+            }
             anyhow::bail!(
-                "Manual compaction did not commit a summary; inspect the report before retrying"
+                "Manual compaction did not commit a summary; inspect the report before another request"
             );
         }
         return Ok(());

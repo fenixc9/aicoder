@@ -94,5 +94,6 @@ It uses a real owned file mutation, approvals, optional Code Mode, JSONL and a s
 provider. Approval denial starts no auxiliary request. Allowed variants preserve original tool
 receipts, apply the draft before the next main request and reopen the final archive view. These
 are offline contracts, not real-model coding scores. [Acceptance](s7-boundary-drafts-acceptance.md)
-records local checks. Compaction interception/replacement, tree summaries and final isolated
-Spark/Pi/SWE quality/release acceptance remain open.
+records local checks. [Compaction interception](compaction-hooks.md) covers automatic/manual
+before/after callbacks separately. Tree summaries and final isolated Spark/Pi/SWE quality/release
+acceptance remain open.

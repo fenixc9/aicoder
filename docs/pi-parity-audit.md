@@ -133,8 +133,11 @@ that full product parity has already been achieved.
    publication. SDK/CLI/RPC/TUI/Web and browser draft-only restoration have executable evidence;
    visible publication failures retain the target identity without repeating work. The pinned
    runtime's before-fork handler consumes cancellation; skipConversationRestore exists in its
-   declaration but is not consumed by that fork path. Tree summary customization and compaction
-   interception/replacement remain open. [Persistent idle context edits](context-edits.md)
+   declaration but is not consumed by that fork path. Tree summary customization remains open.
+   [Compaction hooks](compaction-hooks.md) now intercept automatic/manual preparation with veto,
+   native replacement, default-summary guidance and post-effect observations. Shared parent
+   budgets, scoped auxiliary usage, read-only append plans and acknowledged checkpoint reporting
+   have native host evidence. [Persistent idle context edits](context-edits.md)
    now append ID-bound Text/Blocks/Omit/Restore records through owned, model-validated session
    plans. Full snapshots and bounded cold archives retain raw history and whole tool units.
    [Projection-aware semantic summaries](summary-projection.md) now cover latest edited tails,
@@ -160,7 +163,7 @@ passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /
 incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
 original score/release requirements stay open; local scripted scores cannot substitute for them.
 
-The next implementation items are tree-summary and compaction interception/replacement.
+The next implementation item is tree-summary customization; final isolated comparison and release gates remain open.
 The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.
 

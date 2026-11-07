@@ -10,7 +10,7 @@ use std::{collections::HashMap, sync::Mutex};
 
 pub(crate) struct SessionJournal<'a> {
     repository: &'a dyn SessionRepository,
-    turn_id: String,
+    turn_id: Option<String>,
     owner: uuid::Uuid,
     state: Mutex<State>,
 }
@@ -32,6 +32,16 @@ impl<'a> SessionJournal<'a> {
         session: RunSession,
         turn_id: String,
     ) -> Self {
+        Self::with_turn(repository, session, Some(turn_id))
+    }
+    pub(crate) fn idle(repository: &'a dyn SessionRepository, session: RunSession) -> Self {
+        Self::with_turn(repository, session, None)
+    }
+    fn with_turn(
+        repository: &'a dyn SessionRepository,
+        session: RunSession,
+        turn_id: Option<String>,
+    ) -> Self {
         let initial_ids = session
             .messages()
             .iter()
@@ -51,6 +61,60 @@ impl<'a> SessionJournal<'a> {
                 initial_message_count,
             }),
         }
+    }
+    pub(crate) fn branch_accounting(&self) -> Result<super::BranchAccounting> {
+        self.state
+            .lock()
+            .expect("session journal poisoned")
+            .session
+            .accounting()
+    }
+    pub(crate) fn settle_idle_auxiliary(
+        &self,
+        attempts: &[crate::auxiliary::AuxiliaryAttempt],
+    ) -> Result<()> {
+        ensure!(
+            self.turn_id.is_none(),
+            "auxiliary settlement requires an idle journal"
+        );
+        if attempts.is_empty() {
+            return Ok(());
+        }
+        let mut state = self.state.lock().expect("session journal poisoned");
+        let existing = match &state.session {
+            RunSession::Full(s) => s.active_entries(),
+            RunSession::Window(w) => w.entries().iter().collect(),
+        };
+        let mut finished = std::collections::HashSet::new();
+        for e in existing {
+            if let SessionEntryData::Extension { namespace, data } = &e.data
+                && namespace == crate::auxiliary::AUXILIARY_NAMESPACE
+                && let crate::auxiliary::AuxiliaryRecord::Finished { attempt } =
+                    serde_json::from_value(data.clone())?
+            {
+                finished.insert(attempt.id);
+            }
+        }
+        let entries = attempts
+            .iter()
+            .filter(|a| !finished.contains(&a.id))
+            .map(|a| {
+                Ok(SessionEntryData::Extension {
+                    namespace: crate::auxiliary::AUXILIARY_NAMESPACE.into(),
+                    data: serde_json::to_value(crate::auxiliary::AuxiliaryRecord::Finished {
+                        attempt: a.clone(),
+                    })?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if entries.is_empty() {
+            return Ok(());
+        }
+        self.write(&mut state, entries)
+    }
+    pub(crate) fn append_idle(&self, data: Vec<SessionEntryData>) -> Result<()> {
+        let mut state = self.state.lock().expect("session journal poisoned");
+        self.write(&mut state, data)
     }
     pub fn metadata(&self) -> SessionMetadata {
         self.state
@@ -75,11 +139,26 @@ impl<'a> SessionJournal<'a> {
 }
 #[async_trait]
 impl RunJournal for SessionJournal<'_> {
+    async fn record_compaction_hooks(
+        &self,
+        record: &crate::summary::CompactionHookRecord,
+    ) -> Result<()> {
+        crate::extensions::size(record, 64 * 1024)?;
+        let mut state = self.state.lock().expect("session journal poisoned");
+        self.write(
+            &mut state,
+            vec![SessionEntryData::Extension {
+                namespace: crate::summary::COMPACTION_HOOK_NAMESPACE.into(),
+                data: serde_json::to_value(record)?,
+            }],
+        )
+    }
+
     async fn boundary_context(&self) -> Result<Option<super::OwnedSessionContext>> {
         let state = self.state.lock().expect("session journal poisoned");
         state
             .session
-            .project_context(self.repository, Some(&self.turn_id))
+            .project_context(self.repository, self.turn_id.as_deref())
     }
     async fn prepare_boundary(
         &self,
@@ -92,9 +171,10 @@ impl RunJournal for SessionJournal<'_> {
             !state.finished && state.failure.is_none(),
             "session journal is not writable"
         );
-        let plan = state
-            .session
-            .prepare_append(self.repository, commit, Some(&self.turn_id))?;
+        let plan =
+            state
+                .session
+                .prepare_append(self.repository, commit, self.turn_id.as_deref())?;
         let view = if commit.changes_projection() {
             let mut view = current
                 .get(..prefix)
@@ -164,7 +244,7 @@ impl RunJournal for SessionJournal<'_> {
         );
         let Some(projection) = state
             .session
-            .project_context(self.repository, Some(&self.turn_id))?
+            .project_context(self.repository, self.turn_id.as_deref())?
         else {
             return Ok(None);
         };
@@ -581,7 +661,7 @@ impl RunJournal for SessionJournal<'_> {
                 session,
                 draft.clone(),
                 first,
-                Some(self.turn_id.clone()),
+                self.turn_id.clone(),
             ),
             RunSession::Window(window) => {
                 let checkpoint = crate::summary::SummaryCheckpoint {
@@ -598,7 +678,7 @@ impl RunJournal for SessionJournal<'_> {
                         .recorded_messages
                         .checked_sub(draft.keep_messages)
                         .ok_or_else(|| anyhow::anyhow!("invalid summary tail"))?,
-                    accounted_by_turn: Some(self.turn_id.clone()),
+                    accounted_by_turn: self.turn_id.clone(),
                     draft: draft.clone(),
                 };
                 self.repository
@@ -666,7 +746,10 @@ impl RunJournal for SessionJournal<'_> {
             "final transcript omitted a checkpoint"
         );
         entries.push(SessionEntryData::TurnEnd {
-            turn_id: self.turn_id.clone(),
+            turn_id: self
+                .turn_id
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("idle journal has no turn to finish"))?,
             record: Box::new(TurnRecord::from_progress(progress, outcome.stop().cloned())),
         });
         self.write(&mut state, entries)?;

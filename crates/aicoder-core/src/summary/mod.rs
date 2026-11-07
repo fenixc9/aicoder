@@ -1,5 +1,7 @@
 //! Bounded semantic context reduction and branch-local durable summaries.
 mod engine;
+pub(crate) mod hooks;
+pub use hooks::{COMPACTION_HOOK_NAMESPACE, CompactionChange, CompactionHookRecord};
 mod native;
 pub use native::{NATIVE_COMPACTION_NAMESPACE, NativeCompactionRecord, is_reduction_namespace};
 mod projection;
@@ -106,6 +108,7 @@ impl RecordedCompaction {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SummaryFailureKind {
+    Vetoed,
     Cancelled,
     Budget,
     Provider,

@@ -63,6 +63,8 @@ omissions, preserving canonical history and complete tool units across full snap
 stable record IDs, preserving raw history and compatible v1/v2 checkpoint replay.
 [Boundary drafts](docs/boundary-drafts.md) prepare custom messages, persistent context edits and
 native compactions with fixed IDs, atomic publication and scoped auxiliary model budgets.
+[Compaction hooks](docs/compaction-hooks.md) veto or replace automatic/manual reductions, customize
+summary guidance and observe acknowledged results under the same budgets and storage contracts.
 [Explicit host launch files](docs/host-extensions.md) enable process/MCP tools in CLI, TUI and Web.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime
