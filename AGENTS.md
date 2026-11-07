@@ -50,6 +50,10 @@
 - Keep canonical recorded history separate from provider projections. Recovery repairs
   and pruning must not become historical facts; journal indices follow canonical input.
   Preserve declared runtime prefixes and branch provenance when constructing model views.
+  Persistent context edits append branch-local sourced records; retain original messages and
+  raw summary anchors. Pair omissions by projection provenance, never globally reused call IDs.
+  Validate whole replacements before splitting tool results, and materialize only real bounded
+  archive edits; private descriptor payloads cannot become prompts or canonical messages.
 - Semantic summaries must use bounded, tool-free requests and charge every attempt to
   run usage/budgets. Commit branch-anchored checkpoints before using reduced context;
   keep raw history, interruption uncertainty and restored authorization separate.

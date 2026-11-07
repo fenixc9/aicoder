@@ -22,6 +22,10 @@ pub struct SessionContextSource {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContextOrigin<'a> {
+    Edited {
+        entry_id: &'a str,
+        edit_entry_id: &'a str,
+    },
     Recorded {
         entry_id: &'a str,
     },
@@ -39,6 +43,14 @@ pub enum ContextOrigin<'a> {
     SummaryRecovery {
         entry_id: &'a str,
     },
+}
+impl<'a> ContextOrigin<'a> {
+    pub fn recorded_entry_id(&self) -> Option<&'a str> {
+        match self {
+            Self::Recorded { entry_id } | Self::Edited { entry_id, .. } => Some(*entry_id),
+            _ => None,
+        }
+    }
 }
 /// Owned model messages with borrowed provenance; this view never changes the session.
 #[derive(Debug)]
@@ -412,6 +424,7 @@ impl<'a> SessionBranch<'a> {
             output.origins.extend(origins);
             output.source.summary_checkpoint = Some(entry.id.clone());
         }
+        super::context_edit::apply_context_edits(&self.entries, &mut output)?;
         Ok(output)
     }
 }

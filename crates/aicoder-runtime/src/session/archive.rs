@@ -176,6 +176,12 @@ fn descriptor(entry: &SessionEntry) -> SessionEntry {
                 statistics: record.statistics.clone(),
             }),
         },
+        SessionEntryData::Extension { namespace, data } if namespace == CONTEXT_EDIT_NAMESPACE => {
+            let mut record: ContextEditRecord =
+                serde_json::from_value(data.clone()).expect("validated context edit");
+            record.replacement = ContextReplacement::Restore;
+            record.data()
+        }
         SessionEntryData::Extension { namespace, data } if namespace == SUMMARY_NAMESPACE => {
             let mut checkpoint: SummaryCheckpoint =
                 serde_json::from_value(data.clone()).expect("validated summary");
@@ -567,6 +573,44 @@ fn materialize_using(
         .iter()
         .filter(|entry| entry.data.as_message().is_some())
         .count();
+    let loaded_ids = loaded
+        .iter()
+        .filter(|e| e.data.as_message().is_some())
+        .map(|e| e.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut latest_edits = std::collections::HashMap::new();
+    for entry in selected {
+        if let SessionEntryData::Extension { namespace, data } = &entry.data
+            && namespace == CONTEXT_EDIT_NAMESPACE
+        {
+            let record: ContextEditRecord = serde_json::from_value(data.clone())?;
+            if loaded_ids.contains(record.target_id.as_str()) {
+                latest_edits.insert(record.target_id, entry);
+            }
+        }
+    }
+    let mut extra_edits = Vec::new();
+    for entry in latest_edits.values() {
+        let ordinal = index
+            .session
+            .entry_position(&entry.id)
+            .expect("indexed edit");
+        let real = read(index.locations[ordinal])?;
+        bytes = bytes.saturating_add(serde_json::to_vec(&real)?.len());
+        check(
+            "context edit window bytes",
+            bytes as u64,
+            limits.max_window_bytes as u64,
+        )?;
+        extra_edits.push(real);
+    }
+    loaded.extend(extra_edits);
+    loaded.sort_by_key(|entry| {
+        index
+            .session
+            .entry_position(&entry.id)
+            .expect("real window entry")
+    });
     let mut projection_entries = index.session.entries().to_vec();
     for entry in &loaded {
         let ordinal = index
@@ -580,7 +624,20 @@ fn materialize_using(
     let mut source = projected.source.clone();
     let mut context = projected.messages;
     if summary_start.is_none() && loaded_messages < total {
-        let offset=projected.origins.iter().position(|origin|matches!(origin,ContextOrigin::Recorded {entry_id} if Some(*entry_id)==first.as_deref())).context("missing window boundary")?;
+        let first_ordinal = first
+            .as_deref()
+            .and_then(|id| index.session.entry_position(id))
+            .context("missing raw window boundary")?;
+        let offset = projected
+            .origins
+            .iter()
+            .position(|origin| {
+                origin
+                    .recorded_entry_id()
+                    .and_then(|id| index.session.entry_position(id))
+                    .is_some_and(|ordinal| ordinal >= first_ordinal)
+            })
+            .unwrap_or(context.len());
         let uncertain = context[..offset]
             .iter()
             .any(|message| message.role == MessageRole::System);
@@ -952,6 +1009,20 @@ pub(super) fn prepare_navigation(
         "window revision conflict"
     );
     let (action, transaction) = prepare_transaction(&index.session, action)?;
+    if let ArchiveNavigation::EditContext { edit } = &action {
+        let ordinal = index
+            .session
+            .entry_position(&edit.target_id)
+            .context("edit target missing")?;
+        let mut reader = Reader::new(&index.path, repository.limits.max_record_bytes)?;
+        let target = reader.entry(index.locations[ordinal])?;
+        edit.validate_replacement(
+            target
+                .data
+                .as_message()
+                .context("edit target has no message")?,
+        )?;
+    }
     let mut candidate = index.clone();
     if let Some(transaction) = &transaction {
         let revision = index
@@ -970,7 +1041,23 @@ pub(super) fn prepare_navigation(
             &repository.limits,
         )?;
     }
-    let preview = materialize(&candidate, &repository.limits)?;
+    let owned = transaction
+        .as_ref()
+        .map(|t| t.entries.as_slice())
+        .unwrap_or_default();
+    let mut reader = Reader::new(&index.path, repository.limits.max_record_bytes)?;
+    // Planned edit entries have no file location yet. Their actual immutable payloads are
+    // used only in this private preview; older records are still read from the pinned archive.
+    let preview = materialize_using(&candidate, &repository.limits, |location| {
+        if location.offset == index.valid_len {
+            owned
+                .get(location.ordinal)
+                .cloned()
+                .context("planned navigation entry missing")
+        } else {
+            reader.entry(location)
+        }
+    })?;
     SessionNavigationPlan::new(
         window.metadata().clone(),
         action,

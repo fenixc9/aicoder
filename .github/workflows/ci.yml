@@ -127,6 +127,11 @@ jobs:
           cargo run --locked -p aicoder-runtime --example offline_session_fork -- --observer-error
           cargo build --locked -p aicoder-tui --example offline_extension_ui
           python3 scripts/check_session_fork.py
+      - name: Durable branch-local context edits
+        run: |
+          cargo test --locked -p aicoder-runtime --no-default-features --test context_edits
+          cargo run --locked -p aicoder-runtime --example offline_context_edits
+          cargo run --locked -p aicoder-runtime --example offline_context_edits -- --window
       - name: Raw input before expansion and ordered controls
         run: |
           cargo test --locked -p aicoder-runtime --no-default-features --test input_hooks

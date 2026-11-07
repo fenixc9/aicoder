@@ -18,6 +18,10 @@ pub struct ArchivePage {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum ArchiveNavigation {
+    /// Append a branch-local model-view edit without changing its canonical target.
+    EditContext {
+        edit: super::ContextEditRecord,
+    },
     Rename {
         title: String,
     },

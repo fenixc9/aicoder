@@ -100,6 +100,11 @@ pub fn prepare_transaction(
     let mut parent = session.metadata().leaf_id.clone();
     let mut data = None;
     let action = match action {
+        ArchiveNavigation::EditContext { mut edit } => {
+            edit.target_id = session.resolve_entry(&edit.target_id)?.to_owned();
+            data = Some(edit.data());
+            ArchiveNavigation::EditContext { edit }
+        }
         ArchiveNavigation::Rename { title } => {
             super::navigation::name(&title)?;
             data = Some(

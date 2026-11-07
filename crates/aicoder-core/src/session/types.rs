@@ -487,6 +487,25 @@ impl Session {
                         !namespace.is_empty(),
                         "extension namespace must not be empty"
                     );
+                    if namespace == super::CONTEXT_EDIT_NAMESPACE {
+                        let record: super::ContextEditRecord =
+                            serde_json::from_value(data.clone())?;
+                        let target = self
+                            .entry(&record.target_id)
+                            .or_else(|| new_entries.get(record.target_id.as_str()).copied())
+                            .ok_or_else(|| anyhow::anyhow!("context edit target missing"))?;
+                        let mut cursor = entry.parent_id.as_deref();
+                        let ancestors = std::iter::from_fn(|| {
+                            let id = cursor?;
+                            let e = self
+                                .entry(id)
+                                .or_else(|| new_entries.get(id).copied())
+                                .expect("validated ancestry");
+                            cursor = e.parent_id.as_deref();
+                            Some(id)
+                        });
+                        record.validate(target, ancestors)?;
+                    }
                     if namespace == super::NAVIGATION_NAMESPACE {
                         let record: super::NavigationRecord = serde_json::from_value(data.clone())?;
                         record.validate(|id| {

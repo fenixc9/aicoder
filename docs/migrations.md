@@ -1,5 +1,22 @@
 # API migrations
 
+## S7: persistent branch-local context edits
+
+ArchiveNavigation adds EditContext { edit: ContextEditRecord }; ContextOrigin adds Edited with
+canonical target and edit IDs. Update exhaustive Rust matches. The replacement enum supports
+Omit, Restore, Text and Blocks, using a bounded aicoder.context.edit.v1 record. No session version,
+existing message or provider format changes. Older readers may ignore this extension namespace;
+do not use them to continue a session expecting its edited projection. Raw exports retain both
+original records and edits.
+
+Agent::navigate_session/apply_navigation reuse compatibility preflight and native guards for this
+append. Full and JSONL window plans validate actual targets before publication. Custom window
+backends must materialize real edit records and preserve their budget/provenance semantics; private
+index descriptors must never be used as replacement content. Restore retains explicit provenance
+without importing any executable authority. See [contract and current limits](context-edits.md).
+Boundary drafts and projection-aware semantic summary preparation remain subsequent work.
+
+
 ## S7: cross-session fork and clone
 
 Agent adds fork_session / apply_fork over PreparedSessionFork and SessionForkPlan. ForkPoint selects

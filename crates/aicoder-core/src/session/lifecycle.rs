@@ -100,7 +100,9 @@ impl Agent {
         };
         let input = if matches!(
             plan.action(),
-            ArchiveNavigation::Checkout { .. } | ArchiveNavigation::Branch { .. }
+            ArchiveNavigation::Checkout { .. }
+                | ArchiveNavigation::Branch { .. }
+                | ArchiveNavigation::EditContext { .. }
         ) {
             Some(self.prepare_session_view(plan.preview(), &context).await?)
         } else {
