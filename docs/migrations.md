@@ -1,5 +1,25 @@
 # API migrations
 
+## S7: summary lineage and checkpoint version 2
+
+SummaryCheckpoint writes version 2 while retaining its existing namespace and fields. Counts now
+include ordinary Message, CustomMessage and NativeContext contributors; custom/native messages
+may start a retained unit. Version 1 retains its original Message-only counts and boundary rules.
+Existing v1 records are not rewritten. Upgrade older binaries before continuing a v2-checkpoint
+session; they reject the unsupported checkpoint version. Top-level session versions are unchanged.
+
+SessionContext::into_owned / OwnedSessionContext and RunSession::project_context expose native
+read-only messages/IDs/source. SessionRepository::project_window_context and
+RunJournal::compaction_projection have optional defaults returning None. JSONL's implementation
+uses real admitted window records and a validated backend cursor, not cold payloads/descriptors.
+ContextCompactor::compact_projected defaults to compact_counted, so existing implementations and
+CompactionRequest literals remain source compatible. SemanticContextCompactor consumes the optional
+CompactionProjection and binds it to both history and model view. Custom backends/journals implement
+lineage to enable edited-tail summaries; otherwise their safe suffix behavior remains available.
+No lineage object, active-turn claim or backend/authorization handle is serialized or restored.
+See [contract](summary-projection.md) and [acceptance](s7-summary-projection-acceptance.md).
+
+
 ## S7: persistent branch-local context edits
 
 ArchiveNavigation adds EditContext { edit: ContextEditRecord }; ContextOrigin adds Edited with
@@ -14,7 +34,7 @@ append. Full and JSONL window plans validate actual targets before publication. 
 backends must materialize real edit records and preserve their budget/provenance semantics; private
 index descriptors must never be used as replacement content. Restore retains explicit provenance
 without importing any executable authority. See [contract and current limits](context-edits.md).
-Boundary drafts and projection-aware semantic summary preparation remain subsequent work.
+Boundary drafts remain subsequent work. Projection-aware summary preparation is covered by the v2 migration above.
 
 
 ## S7: cross-session fork and clone

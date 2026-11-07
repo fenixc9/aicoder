@@ -52,6 +52,17 @@ pub trait ContextCompactor: Send + Sync {
         Ok(recorded)
     }
 
+    /// Optional validated session lineage. Existing implementations retain their counted path.
+    async fn compact_projected(
+        &self,
+        request: crate::summary::CompactionRequest<'_>,
+        measure: ContextMeasure,
+        _projection: Option<&crate::summary::CompactionProjection>,
+        context: crate::TurnExecutionContext,
+    ) -> Result<crate::summary::RecordedCompaction> {
+        self.compact_counted(request, measure, context).await
+    }
+
     /// Whether compaction may consume model tokens. Unknown implementations are accounted conservatively.
     fn uses_model(&self) -> bool {
         true

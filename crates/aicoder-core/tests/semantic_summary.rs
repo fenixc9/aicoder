@@ -836,3 +836,562 @@ async fn growing_branch_merges_previous_summary_without_resending_replaced_histo
         Some((summaries as u64 + 1) * 10)
     );
 }
+
+fn context_edit(
+    repo: &dyn SessionRepository,
+    session: &Session,
+    target: &str,
+    replacement: ContextReplacement,
+) {
+    SessionNavigator::new(repo, &session.metadata().cwd)
+        .unwrap()
+        .execute(
+            &session.metadata().id,
+            ArchiveNavigation::EditContext {
+                edit: ContextEditRecord {
+                    version: 1,
+                    extension: "summary-test".into(),
+                    hook: "view".into(),
+                    target_id: target.into(),
+                    replacement,
+                },
+            },
+        )
+        .unwrap();
+}
+fn checkpoint(session: &Session) -> SummaryCheckpoint {
+    session
+        .entries()
+        .iter()
+        .rev()
+        .find_map(|e| match &e.data {
+            SessionEntryData::Extension { namespace, data } if namespace == SUMMARY_NAMESPACE => {
+                Some(serde_json::from_value(data.clone()).unwrap())
+            }
+            _ => None,
+        })
+        .unwrap()
+}
+#[tokio::test]
+async fn manual_summary_retains_latest_edited_id_without_a_new_canonical_suffix() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let session = seed(&repo, root.path());
+    let target = session.metadata().leaf_id.clone().unwrap();
+    let raw = session.selected_branch().chat_messages();
+    context_edit(
+        &repo,
+        &session,
+        &target,
+        ContextReplacement::Text("edited latest tail".into()),
+    );
+    let provider = Script::new(&[]);
+    let mut c = config();
+    c.failure_policy = SummaryFailurePolicy::Stop;
+    let a = agent(provider.clone(), root.path(), c);
+    let report = a
+        .compact_session(&repo, &session.metadata().id, TurnExecutionContext::new())
+        .await;
+    assert!(
+        report.succeeded() && report.checkpoint_entry_id.is_some(),
+        "{report:?}"
+    );
+    let restored = repo.open(&session.metadata().id).unwrap();
+    let cp = checkpoint(&restored);
+    assert_eq!(cp.version, 2);
+    assert_eq!(cp.first_kept_entry_id, target);
+    assert_eq!(cp.draft.keep_messages, 1);
+    assert_eq!(restored.selected_branch().chat_messages(), raw);
+    assert_eq!(
+        restored
+            .selected_branch()
+            .model_context()
+            .unwrap()
+            .messages
+            .last()
+            .unwrap()
+            .text_content(),
+        "edited latest tail"
+    );
+    assert_eq!(report.usage.total_tokens, Some(report.attempts as u64 * 10));
+}
+#[tokio::test]
+async fn summary_v2_counts_custom_and_native_messages_and_accepts_them_as_tail_anchors() {
+    for native in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let repo = MemorySessionRepository::new();
+        let mut session = seed(&repo, root.path());
+        let data = if native {
+            SessionEntryData::native_context(
+                NativeContextSource {
+                    extension: "source".into(),
+                    hook: "hook".into(),
+                    kind: "context".into(),
+                },
+                "keep native",
+            )
+            .unwrap()
+        } else {
+            SessionEntryData::CustomMessage {
+                custom: CustomMessage::text("source", "kind", "keep custom").unwrap(),
+            }
+        };
+        repo.append_entries(&mut session, vec![data]).unwrap();
+        let target = session.metadata().leaf_id.clone().unwrap();
+        let raw = session.selected_branch().chat_messages();
+        let mut c = config();
+        c.window.preserve_recent_tokens = 1;
+        let report = agent(Script::new(&[]), root.path(), c)
+            .compact_session(&repo, &session.metadata().id, TurnExecutionContext::new())
+            .await;
+        assert!(
+            report.succeeded() && report.checkpoint_entry_id.is_some(),
+            "{report:?}"
+        );
+        let restored = repo.open(&session.metadata().id).unwrap();
+        let cp = checkpoint(&restored);
+        assert_eq!(cp.version, 2);
+        assert_eq!(cp.first_kept_entry_id, target);
+        assert_eq!(cp.summarized_messages, 9);
+        assert_eq!(cp.draft.keep_messages, 1);
+        let view = restored.selected_branch().model_context().unwrap().messages;
+        assert_eq!(view.last().unwrap(), raw.last().unwrap());
+        assert_eq!(restored.selected_branch().chat_messages(), raw);
+        // Native context is an explicit sourced System message, not a runtime prefix.
+        assert_eq!(
+            restored
+                .selected_branch()
+                .model_context()
+                .unwrap()
+                .source
+                .recorded_messages,
+            10
+        );
+    }
+}
+#[tokio::test]
+async fn summary_maps_reordered_split_results_to_the_whole_raw_tool_unit() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let mut session = seed(&repo, root.path());
+    repo.append(
+        &mut session,
+        Message {
+            role: MessageRole::Assistant,
+            content: ["a", "b"]
+                .into_iter()
+                .map(|id| ContentBlock::ToolCall {
+                    call: ModelToolCall {
+                        id: id.into(),
+                        name: "read".into(),
+                        arguments: json!({}),
+                    },
+                })
+                .collect(),
+        },
+    )
+    .unwrap();
+    let call_id = session.metadata().leaf_id.clone().unwrap();
+    repo.append(
+        &mut session,
+        Message {
+            role: MessageRole::Tool,
+            content: ["b", "a"]
+                .into_iter()
+                .map(|id| ContentBlock::ToolResult {
+                    call_id: id.into(),
+                    content: json!({"output":id}),
+                    is_error: false,
+                })
+                .collect(),
+        },
+    )
+    .unwrap();
+    let result_id = session.metadata().leaf_id.clone().unwrap();
+    context_edit(
+        &repo,
+        &session,
+        &result_id,
+        ContextReplacement::Text("edited tool output".into()),
+    );
+    let raw = repo
+        .open(&session.metadata().id)
+        .unwrap()
+        .selected_branch()
+        .chat_messages();
+    let mut c = config();
+    c.failure_policy = SummaryFailurePolicy::Stop;
+    c.window.preserve_recent_tokens = 1;
+    let report = agent(Script::new(&[]), root.path(), c)
+        .compact_session(&repo, &session.metadata().id, TurnExecutionContext::new())
+        .await;
+    assert!(
+        report.succeeded() && report.checkpoint_entry_id.is_some(),
+        "{report:?}"
+    );
+    let saved = repo.open(&session.metadata().id).unwrap();
+    let cp = checkpoint(&saved);
+    assert_eq!(cp.first_kept_entry_id, call_id);
+    assert_eq!(cp.draft.keep_messages, 2);
+    let view = saved.selected_branch().model_context().unwrap().messages;
+    assert_eq!(
+        view.iter().filter(|m| m.role == MessageRole::Tool).count(),
+        2
+    );
+    for (m, id) in view
+        .iter()
+        .filter(|m| m.role == MessageRole::Tool)
+        .zip(["a", "b"])
+    {
+        assert!(
+            matches!(&m.content[0],ContentBlock::ToolResult {call_id,content,..} if call_id==id && content["output"]=="edited tool output")
+        );
+    }
+    assert_eq!(saved.selected_branch().chat_messages(), raw);
+}
+#[tokio::test]
+async fn omitted_duplicate_tail_keeps_the_visible_id_and_raw_suffix_count() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let mut session = seed(&repo, root.path());
+    repo.append(&mut session, Message::text(MessageRole::User, "duplicate"))
+        .unwrap();
+    let keep = session.metadata().leaf_id.clone().unwrap();
+    repo.append(&mut session, Message::text(MessageRole::User, "duplicate"))
+        .unwrap();
+    let omit = session.metadata().leaf_id.clone().unwrap();
+    context_edit(&repo, &session, &omit, ContextReplacement::Omit);
+    let mut c = config();
+    c.window.preserve_recent_tokens = 1;
+    c.failure_policy = SummaryFailurePolicy::Stop;
+    let report = agent(Script::new(&[]), root.path(), c)
+        .compact_session(&repo, &session.metadata().id, TurnExecutionContext::new())
+        .await;
+    assert!(
+        report.succeeded() && report.checkpoint_entry_id.is_some(),
+        "{report:?}"
+    );
+    let saved = repo.open(&session.metadata().id).unwrap();
+    let cp = checkpoint(&saved);
+    assert_eq!(cp.first_kept_entry_id, keep);
+    assert_eq!(cp.draft.keep_messages, 2);
+    assert_eq!(
+        saved
+            .selected_branch()
+            .model_context()
+            .unwrap()
+            .messages
+            .len(),
+        2
+    );
+    assert_eq!(saved.messages().len(), 11);
+}
+#[tokio::test]
+async fn automatic_summary_retains_an_edited_historical_unit_with_the_new_input() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let session = seed(&repo, root.path());
+    let target = session.metadata().leaf_id.clone().unwrap();
+    context_edit(
+        &repo,
+        &session,
+        &target,
+        ContextReplacement::Text("edited historical tail".into()),
+    );
+    let mut c = config();
+    c.window.preserve_recent_tokens = 160;
+    c.failure_policy = SummaryFailurePolicy::Stop;
+    let provider = Script::new(&[]);
+    let a = agent(provider.clone(), root.path(), c);
+    let outcome = a
+        .run_with_session_outcome(
+            &repo,
+            SessionSelection::Existing(session.metadata().id.clone()),
+            "fresh input",
+            Arc::new(()),
+            TurnExecutionContext::new(),
+        )
+        .await;
+    assert!(
+        matches!(outcome, AgentTurnOutcome::Completed(_)),
+        "{outcome:?}"
+    );
+    let saved = repo.open(&session.metadata().id).unwrap();
+    let cp = checkpoint(&saved);
+    assert_eq!(cp.first_kept_entry_id, target);
+    assert_eq!(cp.draft.keep_messages, 2);
+    let requests = provider.requests.lock().unwrap();
+    let main = requests.iter().find(|r| !is_summary(r)).unwrap();
+    assert!(
+        main.messages
+            .iter()
+            .any(|m| m.text_content() == "edited historical tail")
+    );
+    assert!(
+        main.messages
+            .iter()
+            .any(|m| m.text_content() == "fresh input")
+    );
+    assert_eq!(saved.messages().len(), 11);
+}
+#[tokio::test]
+async fn cancelled_projected_summary_retains_usage_and_effective_view_without_checkpoint() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let session = seed(&repo, root.path());
+    let target = session.metadata().leaf_id.clone().unwrap();
+    context_edit(
+        &repo,
+        &session,
+        &target,
+        ContextReplacement::Text("edited tail".into()),
+    );
+    let before = repo
+        .open(&session.metadata().id)
+        .unwrap()
+        .selected_branch()
+        .model_context()
+        .unwrap()
+        .messages;
+    let report = agent(Script::new(&[Reply::Cancel]), root.path(), config())
+        .compact_session(&repo, &session.metadata().id, TurnExecutionContext::new())
+        .await;
+    assert!(!report.succeeded());
+    assert_eq!(report.usage.total_tokens, Some(10));
+    assert_eq!(report.attempts, 1);
+    assert!(report.checkpoint_entry_id.is_none());
+    assert_eq!(
+        repo.open(&session.metadata().id)
+            .unwrap()
+            .selected_branch()
+            .model_context()
+            .unwrap()
+            .messages,
+        before
+    );
+}
+
+#[tokio::test]
+async fn lineage_rejects_stale_equal_length_views_and_never_guesses_duplicate_ids() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let mut s = seed(&repo, root.path());
+    repo.append(&mut s, Message::text(MessageRole::User, "duplicate"))
+        .unwrap();
+    repo.append(&mut s, Message::text(MessageRole::User, "duplicate"))
+        .unwrap();
+    let branch = s.selected_branch();
+    let source = branch.model_context().unwrap().into_owned();
+    let raw = branch.chat_messages();
+    let positions = || s.messages().into_iter().enumerate().map(|(i, m)| (m.id, i));
+    let projection =
+        CompactionProjection::from_session_view(&source, &source.messages, 0, &raw, positions())
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        projection.canonical_index(raw.len() - 2),
+        Some(raw.len() - 2)
+    );
+    assert_eq!(
+        projection.canonical_index(raw.len() - 1),
+        Some(raw.len() - 1)
+    );
+    assert!(
+        CompactionProjection::from_session_view(
+            &source,
+            &source.messages[..source.messages.len() - 1],
+            0,
+            &raw,
+            positions()
+        )
+        .unwrap()
+        .is_none()
+    );
+    let mut unknown = source.clone();
+    unknown.entry_ids[0] = Some("foreign-id".into());
+    assert!(
+        CompactionProjection::from_session_view(&unknown, &unknown.messages, 0, &raw, positions())
+            .unwrap()
+            .is_none()
+    );
+    let mut changed = source.messages.clone();
+    changed.last_mut().unwrap().content = vec![ContentBlock::Text {
+        text: "changed".into(),
+    }];
+    let provider = Script::new(&[]);
+    let compactor = SemanticContextCompactor::new(provider.clone(), "test", config()).unwrap();
+    let error = compactor
+        .compact_projected(
+            CompactionRequest {
+                input: ContextCompactionInput {
+                    model: "test",
+                    messages: &changed,
+                    tools: None,
+                    max_output_tokens: None,
+                },
+                history: &raw,
+                system_prefix_len: 0,
+                force: true,
+                token_budget: None,
+                archived_messages: 0,
+            },
+            ContextMeasure {
+                counting: Default::default(),
+                spec: provider.model_spec("test").unwrap(),
+                response_format: None,
+                tool_choice: ModelToolChoice::None,
+                target_tokens: 1000,
+            },
+            Some(&projection),
+            TurnExecutionContext::new(),
+        )
+        .await
+        .err()
+        .unwrap();
+    let failure = error.downcast_ref::<SummaryFailure>().unwrap();
+    assert_eq!(failure.attempts, 0);
+    assert_eq!(failure.usage, ModelUsage::zero());
+    assert_eq!(provider.summaries(), 0);
+    let mut changed_history = raw.clone();
+    changed_history[0] = Message::text(MessageRole::User, "different canonical history");
+    let error = compactor
+        .compact_projected(
+            CompactionRequest {
+                input: ContextCompactionInput {
+                    model: "test",
+                    messages: &source.messages,
+                    tools: None,
+                    max_output_tokens: None,
+                },
+                history: &changed_history,
+                system_prefix_len: 0,
+                force: true,
+                token_budget: None,
+                archived_messages: 0,
+            },
+            ContextMeasure {
+                counting: Default::default(),
+                spec: provider.model_spec("test").unwrap(),
+                response_format: None,
+                tool_choice: ModelToolChoice::None,
+                target_tokens: 1000,
+            },
+            Some(&projection),
+            TurnExecutionContext::new(),
+        )
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(error.downcast_ref::<SummaryFailure>().unwrap().attempts, 0);
+    assert_eq!(provider.summaries(), 0);
+}
+#[tokio::test]
+async fn version_one_checkpoints_keep_their_original_message_only_counting_rules() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let mut s = seed(&repo, root.path());
+    repo.append_entries(
+        &mut s,
+        vec![
+            SessionEntryData::CustomMessage {
+                custom: CustomMessage::text("source", "kind", "custom").unwrap(),
+            },
+            SessionEntryData::native_context(
+                NativeContextSource {
+                    extension: "source".into(),
+                    hook: "hook".into(),
+                    kind: "context".into(),
+                },
+                "native",
+            )
+            .unwrap(),
+        ],
+    )
+    .unwrap();
+    repo.append(&mut s, Message::text(MessageRole::User, "tail"))
+        .unwrap();
+    let mut c = config();
+    c.window.preserve_recent_tokens = 1;
+    let a = agent(Script::new(&[]), root.path(), c);
+    assert!(
+        a.compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+            .await
+            .succeeded()
+    );
+    let saved = repo.open(&s.metadata().id).unwrap();
+    let expected = saved.selected_branch().model_context().unwrap().messages;
+    let mut entries = saved.entries().to_vec();
+    let mut checkpoint = checkpoint(&saved);
+    assert_eq!(checkpoint.summarized_messages, 11);
+    checkpoint.version = 1;
+    checkpoint.summarized_messages = 9;
+    entries.last_mut().unwrap().data = checkpoint.data();
+    let restored = Session::from_entries(saved.metadata().clone(), entries).unwrap();
+    assert_eq!(
+        restored.selected_branch().model_context().unwrap().messages,
+        expected
+    );
+    for version in [2, 3] {
+        let mut invalid = checkpoint.clone();
+        invalid.version = version;
+        assert!(
+            validate_checkpoint(
+                &invalid,
+                &restored.selected_branch().entries()[..restored.entries().len() - 1],
+                restored.entries().last().unwrap().parent_id.as_deref()
+            )
+            .is_err()
+        );
+    }
+}
+#[tokio::test]
+async fn omitted_recovered_tool_units_still_mark_summary_uncertainty() {
+    let root = tempfile::tempdir().unwrap();
+    let repo = MemorySessionRepository::new();
+    let mut s = repo.create(root.path()).unwrap();
+    repo.append(
+        &mut s,
+        Message {
+            role: MessageRole::Assistant,
+            content: vec![ContentBlock::ToolCall {
+                call: ModelToolCall {
+                    id: "uncertain".into(),
+                    name: "read".into(),
+                    arguments: json!({}),
+                },
+            }],
+        },
+    )
+    .unwrap();
+    let missing = s.metadata().leaf_id.clone().unwrap();
+    for m in history().into_iter().skip(1) {
+        repo.append(&mut s, m).unwrap();
+    }
+    context_edit(&repo, &s, &missing, ContextReplacement::Omit);
+    let before = repo
+        .open(&s.metadata().id)
+        .unwrap()
+        .selected_branch()
+        .model_context()
+        .unwrap()
+        .messages;
+    assert!(!before.iter().any(|m| m.role == MessageRole::Tool));
+    let report = agent(Script::new(&[]), root.path(), config())
+        .compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+        .await;
+    assert!(
+        report.succeeded() && report.checkpoint_entry_id.is_some(),
+        "{report:?}"
+    );
+    let saved = repo.open(&s.metadata().id).unwrap();
+    assert!(checkpoint(&saved).draft.uncertain_operations);
+    assert!(
+        saved
+            .selected_branch()
+            .model_context()
+            .unwrap()
+            .messages
+            .iter()
+            .any(|m| m.role == MessageRole::System)
+    );
+}

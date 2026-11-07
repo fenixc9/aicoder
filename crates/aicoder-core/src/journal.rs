@@ -3,6 +3,17 @@ use crate::{RunOutcome, model::Message};
 use async_trait::async_trait;
 #[async_trait]
 pub trait RunJournal: Send + Sync {
+    /// Read-only lineage for this exact live view. Never infer IDs from equal text.
+    async fn compaction_projection(
+        &self,
+        _view: &[Message],
+        _prefix: usize,
+        _input_messages: usize,
+        _history: &[Message],
+    ) -> anyhow::Result<Option<crate::summary::CompactionProjection>> {
+        Ok(None)
+    }
+
     async fn record_message_finalization(
         &self,
         _record: &crate::extensions::MessageFinalizationRecord,
@@ -49,7 +60,8 @@ pub trait RunJournal: Send + Sync {
         Ok(())
     }
     /// Persist a summary before its reduced context reaches the next model call.
-    /// Retained messages form an exact canonical suffix. None means a transient host.
+    /// Retained counts identify a canonical suffix; its model projection may contain edits or repairs.
+    /// None means a transient host.
     async fn record_summary(
         &self,
         _draft: &crate::summary::SummaryDraft,

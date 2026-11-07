@@ -31,6 +31,16 @@ pub struct SessionExtensionState {
 }
 /// Object-safe storage and transaction boundary, shared by all hosts.
 pub trait SessionRepository: Send + Sync {
+    /// Read-only projection of the real materialized window, including an optional owned live turn.
+    /// Unsupported backends retain legacy safe suffix compaction.
+    fn project_window_context(
+        &self,
+        _window: &super::SessionWindow,
+        _active_turn: Option<&str>,
+    ) -> Result<Option<super::OwnedSessionContext>> {
+        Ok(None)
+    }
+
     fn prepare_fork(
         &self,
         source: &super::RunSession,

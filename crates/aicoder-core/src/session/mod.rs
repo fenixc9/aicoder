@@ -30,7 +30,8 @@ mod types;
 mod window;
 pub use navigation::*;
 pub use projection::{
-    BranchAccounting, ContextOrigin, SessionBranch, SessionContext, SessionContextSource,
+    BranchAccounting, ContextOrigin, OwnedSessionContext, SessionBranch, SessionContext,
+    SessionContextSource,
 };
 pub use window::*;
 

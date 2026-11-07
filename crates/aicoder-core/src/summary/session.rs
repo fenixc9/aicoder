@@ -26,7 +26,7 @@ pub fn validate_checkpoint(
     parent: Option<&str>,
 ) -> Result<()> {
     ensure!(
-        record.version == 1,
+        matches!(record.version, 1 | 2),
         "unsupported summary checkpoint version"
     );
     record.draft.summary.validate()?;
@@ -59,13 +59,24 @@ pub fn validate_checkpoint(
         .position(|entry| entry.id == record.first_kept_entry_id)
         .ok_or_else(|| anyhow::anyhow!("summary boundary is not an ancestor"))?;
     ensure!(
-        matches!(&ancestors[start].data,SessionEntryData::Message{message} if message.role!=MessageRole::Tool),
+        if record.version == 1 {
+            matches!(&ancestors[start].data,SessionEntryData::Message{message} if message.role!=MessageRole::Tool)
+        } else {
+            ancestors[start]
+                .data
+                .as_message()
+                .is_some_and(|m| m.role != MessageRole::Tool)
+        },
         "summary boundary must start a complete message unit"
     );
     ensure!(
         ancestors[..start]
             .iter()
-            .filter(|entry| matches!(entry.data, SessionEntryData::Message { .. }))
+            .filter(|entry| if record.version == 1 {
+                matches!(entry.data, SessionEntryData::Message { .. })
+            } else {
+                entry.data.as_message().is_some()
+            })
             .count()
             == record.summarized_messages,
         "summary replaced-message count differs from source"
@@ -73,7 +84,11 @@ pub fn validate_checkpoint(
     ensure!(
         ancestors[start..]
             .iter()
-            .filter(|entry| matches!(entry.data, SessionEntryData::Message { .. }))
+            .filter(|entry| if record.version == 1 {
+                matches!(entry.data, SessionEntryData::Message { .. })
+            } else {
+                entry.data.as_message().is_some()
+            })
             .count()
             == record.draft.keep_messages,
         "summary retained-message count differs from source"
@@ -113,7 +128,7 @@ pub fn commit_summary(
         .position(|entry| entry.id == first_kept_entry_id)
         .ok_or_else(|| anyhow::anyhow!("summary boundary missing"))?;
     let checkpoint = SummaryCheckpoint {
-        version: 1,
+        version: 2,
         source_leaf: session
             .metadata()
             .leaf_id
@@ -123,7 +138,7 @@ pub fn commit_summary(
         first_kept_entry_id,
         summarized_messages: branch.entries()[..start]
             .iter()
-            .filter(|entry| matches!(entry.data, SessionEntryData::Message { .. }))
+            .filter(|entry| entry.data.as_message().is_some())
             .count(),
         accounted_by_turn: turn_id,
         draft,

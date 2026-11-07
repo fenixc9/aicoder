@@ -62,11 +62,11 @@ not publish a partial edit. Window continuation and reopened views use actual im
 
 Existing summary checkpoints retain their original raw anchors. Editing a message already reduced
 into a summary does not recreate it; editing/omitting its retained boundary does not invalidate the
-checkpoint. Semantic summary generation still requires a safe canonical retained suffix. Editing
-the newest retained unit can cause a safe summary refusal until a fresh unedited suffix exists;
-projection-aware summary preparation remains part of the next compaction work. Boundary context-edit
-and compaction drafts, before-compaction replacement and tree summaries remain open. This API is
-currently native SDK functionality, without a new stock frontend command or request endpoint.
+checkpoint. [Projection-aware semantic summaries](summary-projection.md) now map retained boundaries
+through canonical IDs, so editing the newest retained unit does not require a fresh raw suffix.
+Custom window backends/journals without lineage support keep the old safe suffix path. Boundary
+context-edit/compaction drafts, before-compaction replacement and tree summaries remain open.
+This API is currently native SDK functionality, without a new stock frontend edit command or endpoint.
 
 Run the executable examples without credentials or network:
 

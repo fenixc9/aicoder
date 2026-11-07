@@ -59,6 +59,8 @@ adoption, with bounded start/shutdown/reload observations and cancellable fronte
 raw history and summary anchors through bounded, atomic publication and explicit draft restoration.
 [Persistent context edits](docs/context-edits.md) append branch-local model-view replacements or
 omissions, preserving canonical history and complete tool units across full snapshots and windows.
+[Summary lineage](docs/summary-projection.md) retains edited/custom/native/tool units through
+stable record IDs, preserving raw history and compatible v1/v2 checkpoint replay.
 [Explicit host launch files](docs/host-extensions.md) enable process/MCP tools in CLI, TUI and Web.
 [Process tool extensions](docs/process-extensions.md) add an optional versioned stdio adapter
 with owned-plan approval, bounded transport and process-group cleanup; no scripting runtime

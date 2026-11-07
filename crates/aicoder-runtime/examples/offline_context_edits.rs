@@ -19,10 +19,19 @@ impl ModelProvider for Provider {
         sink: Arc<dyn ModelEventSink>,
         _: TurnExecutionContext,
     ) -> Result<ModelResponse, ProviderError> {
+        let summary = request
+            .messages
+            .first()
+            .is_some_and(|m| m.text_content().starts_with("Summarize historical"));
+        let message = if summary {
+            serde_json::json!({"goals":["retained history"],"constraints":[],"changes":[],"todos":[],"notes":[]}).to_string()
+        } else {
+            "done".into()
+        };
         let response = ModelResponse {
             id: None,
             model: request.model.clone(),
-            message: Message::text(MessageRole::Assistant, "done"),
+            message: Message::text(MessageRole::Assistant, message),
             stop_reason: StopReason::Complete,
             usage: ModelUsage::zero(),
         };
@@ -34,6 +43,7 @@ impl ModelProvider for Provider {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let window = std::env::args().any(|arg| arg == "--window");
+    let compact = std::env::args().any(|arg| arg == "--compact");
     let workspace = tempfile::tempdir()?;
     let storage = tempfile::tempdir()?;
     let writer = JsonlSessionRepository::new(storage.path())?;
@@ -41,7 +51,14 @@ async fn main() -> Result<()> {
     for i in 0..8 {
         writer.append(
             &mut s,
-            Message::text(MessageRole::User, format!("original-{i}")),
+            Message::text(
+                MessageRole::User,
+                if compact {
+                    format!("original-{i} {}", "x".repeat(1200))
+                } else {
+                    format!("original-{i}")
+                },
+            ),
         )?;
     }
     let target = s.metadata().leaf_id.clone().unwrap();
@@ -54,12 +71,22 @@ async fn main() -> Result<()> {
         },
     )?;
     let provider = Provider::default();
-    let agent = Agent::new(
-        TurnExecutor::builder(provider.clone())
-            .workspace(workspace.path())
-            .build()?,
-        AgentConfig::new("fixture"),
-    );
+    let mut builder = TurnExecutor::builder(provider.clone()).workspace(workspace.path());
+    if compact {
+        let mut config = summary::SummaryConfig::new(ContextWindowConfig {
+            max_context_tokens: 1200,
+            reserved_output_tokens: 200,
+            preserve_recent_tokens: 1,
+        });
+        config.output_tokens = 128;
+        config.failure_policy = summary::SummaryFailurePolicy::Stop;
+        builder = builder.context_compactor(summary::SemanticContextCompactor::new(
+            Arc::new(provider.clone()),
+            "fixture",
+            config,
+        )?);
+    }
+    let agent = Agent::new(builder.build()?, AgentConfig::new("fixture"));
     let result = agent
         .navigate_session(
             &repo,
@@ -80,6 +107,15 @@ async fn main() -> Result<()> {
         matches!(result.session, RunSession::Window(_)) == window,
         "unexpected storage mode"
     );
+    if compact {
+        let report = agent
+            .compact_session(&repo, &s.metadata().id, TurnExecutionContext::new())
+            .await;
+        ensure!(
+            report.succeeded() && report.checkpoint_entry_id.is_some(),
+            "summary failed: {report:?}"
+        );
+    }
     let outcome = agent
         .run_with_session_outcome(
             &repo,
@@ -94,19 +130,27 @@ async fn main() -> Result<()> {
         "run failed: {outcome:?}"
     );
     let requests = provider.0.lock().unwrap();
-    ensure!(requests.len() == 1, "duplicate model request");
+    let mains = requests
+        .iter()
+        .filter(|r| {
+            !r.messages
+                .first()
+                .is_some_and(|m| m.text_content().starts_with("Summarize historical"))
+        })
+        .collect::<Vec<_>>();
+    ensure!(mains.len() == 1, "duplicate main model request");
+    let main = mains[0];
     ensure!(
-        requests[0]
-            .messages
+        main.messages
             .iter()
             .any(|m| m.text_content() == "model-facing replacement"),
         "edit missing from model view"
     );
     ensure!(
-        !requests[0]
+        !main
             .messages
             .iter()
-            .any(|m| m.text_content() == "original-7"),
+            .any(|m| m.text_content().starts_with("original-7")),
         "original leaked into edited model view"
     );
     let persisted = writer.open(&s.metadata().id)?;
@@ -114,7 +158,7 @@ async fn main() -> Result<()> {
         persisted
             .messages()
             .iter()
-            .any(|m| m.message.text_content() == "original-7"),
+            .any(|m| m.message.text_content().starts_with("original-7")),
         "canonical target changed"
     );
     ensure!(
@@ -126,7 +170,7 @@ async fn main() -> Result<()> {
     );
     println!(
         "{}",
-        serde_json::json!({"storage":if window {"window"}else{"full"},"requests":requests.len(),"raw_messages":persisted.messages().len(),"canonical_target_preserved":true})
+        serde_json::json!({"storage":if window {"window"}else{"full"},"requests":requests.len(),"compacted":compact,"raw_messages":persisted.messages().len(),"canonical_target_preserved":true})
     );
     Ok(())
 }

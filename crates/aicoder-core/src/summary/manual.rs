@@ -113,7 +113,16 @@ pub(crate) async fn compact(
             return report;
         }
     };
+    let source_projection = session.project_context(repository, None);
+    let history_ids = session
+        .messages()
+        .iter()
+        .map(|m| m.id.to_owned())
+        .collect::<Vec<_>>();
     let work = async {
+        if context.is_cancelled() {
+            return Err(context.error().into());
+        }
         if let Some(provider) = host.input_context {
             let prepared = tokio::select! {biased;cancelled=context.cancelled()=>return Err(anyhow::Error::from(cancelled)),prepared=provider.prepare_for_execution(host.workspace,&input.history,input.system_prefix_len,&context)=>prepared?};
             crate::input_context::validate_prefix(&prepared.system_prefix)?;
@@ -157,8 +166,33 @@ pub(crate) async fn compact(
             }
             crate::context_policy::ContextDecision::Keep => {}
         }
+        let projection = source_projection?;
+        let projection = projection
+            .as_ref()
+            .map(|projection| {
+                CompactionProjection::from_session_view(
+                    projection,
+                    &input.request.messages,
+                    input.system_prefix_len,
+                    &input.history,
+                    history_ids
+                        .iter()
+                        .enumerate()
+                        .map(|(i, id)| (id.as_str(), input.system_prefix_len + i)),
+                )
+            })
+            .transpose()?
+            .flatten();
+        if host
+            .budget
+            .max_duration
+            .is_some_and(|d| started.elapsed() >= d)
+        {
+            context.cancel("manual summary duration budget reached");
+            return Err(context.error().into());
+        }
         compactor
-            .compact_counted(
+            .compact_projected(
                 CompactionRequest {
                     input: ContextCompactionInput {
                         model: &input.request.model,
@@ -176,13 +210,14 @@ pub(crate) async fn compact(
                         .map_or(0, |source| source.archived_messages),
                 },
                 measure,
+                projection.as_ref(),
                 context.clone(),
             )
             .await
     };
     tokio::pin!(work);
     let result = if let Some(duration) = host.budget.max_duration {
-        tokio::select! {biased;_ = tokio::time::sleep(duration)=>{context.cancel("manual summary duration budget reached");work.await},result=&mut work=>result}
+        tokio::select! {biased;_ = tokio::time::sleep(duration.saturating_sub(started.elapsed()))=>{context.cancel("manual summary duration budget reached");work.await},result=&mut work=>result}
     } else {
         work.await
     };
@@ -258,7 +293,7 @@ pub(crate) async fn compact(
             }
             RunSession::Window(window) => {
                 let checkpoint = super::SummaryCheckpoint {
-                    version: 1,
+                    version: 2,
                     source_leaf: window.metadata().leaf_id.clone().unwrap_or_default(),
                     source_revision: window.metadata().revision,
                     first_kept_entry_id: first,

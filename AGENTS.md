@@ -57,6 +57,9 @@
 - Semantic summaries must use bounded, tool-free requests and charge every attempt to
   run usage/budgets. Commit branch-anchored checkpoints before using reduced context;
   keep raw history, interruption uncertainty and restored authorization separate.
+  Bind summary lineage to canonical IDs, exact views/history and declared runtime prefixes.
+  Count v2 checkpoints across all real message contributors while preserving v1 rules; derive
+  live window lineage only from admitted records and validated opaque backend cursors.
 - Output artifacts are explicit scoped host storage. Bound serialization, staging, disk
   admission and pages; keep raw bytes and capture completeness separate from previews.
   Archive failures must not repeat completed operations or publish partial data as complete.

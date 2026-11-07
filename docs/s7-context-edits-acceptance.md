@@ -3,7 +3,9 @@
 This increment supplies durable branch-local model-view editing through the native session API.
 It does not close boundary context-edit/compaction drafts, projection-aware summary preparation,
 compaction interception, tree summaries or final Spark/Pi/SWE quality/release acceptance.
-The [contract](context-edits.md) records the exact scope and current summary limitation.
+The [contract](context-edits.md) records the current scope. The later
+[summary-lineage acceptance](s7-summary-projection-acceptance.md) addresses the edited-tail summary
+limitation that remained open in this increment; the original measurements below are retained.
 
 Seven core tests cover duplicate text with distinct IDs, append-only raw records, branch checkout,
 restore/omit behavior, whole call/result omission, reused call IDs in later units, reordered/split

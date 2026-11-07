@@ -284,6 +284,14 @@ impl JsonlSessionRepository {
     }
 }
 impl SessionRepository for JsonlSessionRepository {
+    fn project_window_context(
+        &self,
+        window: &SessionWindow,
+        active_turn: Option<&str>,
+    ) -> Result<Option<OwnedSessionContext>> {
+        super::archive::project_window_context(self, window, active_turn).map(Some)
+    }
+
     fn prepare_fork(
         &self,
         source: &RunSession,

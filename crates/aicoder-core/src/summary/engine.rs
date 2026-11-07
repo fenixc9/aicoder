@@ -117,6 +117,7 @@ impl SemanticContextCompactor {
         &self,
         request: &CompactionRequest<'_>,
         measure: Option<&crate::context::ContextMeasure>,
+        projection: Option<&CompactionProjection>,
     ) -> Result<usize> {
         let messages = request.input.messages;
         let prefix = request.system_prefix_len;
@@ -150,7 +151,15 @@ impl SemanticContextCompactor {
             }
         }
         start = start.max(prefix + units[0].end);
-        while start < messages.len() && !request.history.ends_with(&messages[start..]) {
+        while start < messages.len()
+            && if let Some(projection) = projection {
+                projection
+                    .canonical_index(start)
+                    .is_none_or(|i| i < prefix || request.history[i].role == MessageRole::Tool)
+            } else {
+                !request.history.ends_with(&messages[start..])
+            }
+        {
             let unit = units
                 .iter()
                 .find(|unit| prefix + unit.start >= start)
@@ -412,7 +421,22 @@ impl SemanticContextCompactor {
         request: CompactionRequest<'_>,
         context: TurnExecutionContext,
         measure: Option<crate::context::ContextMeasure>,
+        projection: Option<&CompactionProjection>,
     ) -> Result<RecordedCompaction> {
+        if let Some(projection) = projection {
+            projection
+                .validate(
+                    request.input.messages,
+                    request.history,
+                    request.system_prefix_len,
+                )
+                .map_err(|_| {
+                    Meter::new(request.token_budget).failure(
+                        SummaryFailureKind::SourceLimit,
+                        "stale compaction projection",
+                    )
+                })?;
+        }
         let measure = measure.as_ref();
         let before = measured(measure, request.input.messages, request.input.tools);
         let target = measure.map_or_else(
@@ -433,28 +457,37 @@ impl SemanticContextCompactor {
             "invalid protected prefix"
         );
         let fallback_input = request.input;
-        let uncertain_all = super::uncertain(&request.input.messages[request.system_prefix_len..]);
-        let normalized: Cow<'_, [Message]> = if request.input.messages[request.system_prefix_len..]
+        let uncertain_all = super::uncertain(&request.input.messages[request.system_prefix_len..])
+            || projection.is_some_and(CompactionProjection::uncertain_operations);
+        let keep = request.input.messages[request.system_prefix_len..]
             .iter()
-            .any(|message| message.role == MessageRole::System)
-        {
-            Cow::Owned(
+            .any(|m| m.role == MessageRole::System)
+            .then(|| {
                 request
                     .input
                     .messages
                     .iter()
                     .enumerate()
-                    .filter(|(index, message)| {
-                        *index < request.system_prefix_len
-                            || message.role != MessageRole::System
-                            || crate::extensions::explicit_context_message(message)
+                    .filter(|(i, m)| {
+                        *i < request.system_prefix_len
+                            || m.role != MessageRole::System
+                            || crate::extensions::explicit_context_message(m)
                     })
-                    .map(|(_, message)| message.clone())
+                    .map(|(i, _)| i)
+                    .collect::<Vec<_>>()
+            });
+        let normalized: Cow<'_, [Message]> = match &keep {
+            Some(keep) => Cow::Owned(
+                keep.iter()
+                    .map(|i| request.input.messages[*i].clone())
                     .collect(),
-            )
-        } else {
-            Cow::Borrowed(request.input.messages)
+            ),
+            None => Cow::Borrowed(request.input.messages),
         };
+        let normalized_projection = keep
+            .as_ref()
+            .and_then(|keep| projection.map(|p| p.selected(keep, &normalized)));
+        let projection = normalized_projection.as_ref().or(projection);
         let request = CompactionRequest {
             input: ContextCompactionInput {
                 messages: &normalized,
@@ -463,7 +496,7 @@ impl SemanticContextCompactor {
             ..request
         };
         let mut meter = Meter::new(request.token_budget);
-        let boundary = match self.boundary(&request, measure) {
+        let boundary = match self.boundary(&request, measure, projection) {
             Ok(boundary) => boundary,
             Err(_) => {
                 let failure = meter.failure(
@@ -519,7 +552,9 @@ impl SemanticContextCompactor {
             }
             let draft = SummaryDraft {
                 summary,
-                keep_messages: request.input.messages.len() - boundary,
+                keep_messages: projection
+                    .and_then(|p| p.retained_messages(boundary))
+                    .unwrap_or(request.input.messages.len() - boundary),
                 source_digest: super::digest(older),
                 provider: self
                     .provider
@@ -584,9 +619,19 @@ impl ContextCompactor for SemanticContextCompactor {
         measure: crate::context::ContextMeasure,
         context: TurnExecutionContext,
     ) -> Result<RecordedCompaction> {
-        self.recorded(request, context, Some(measure)).await
+        self.recorded(request, context, Some(measure), None).await
     }
 
+    async fn compact_projected(
+        &self,
+        request: CompactionRequest<'_>,
+        measure: crate::context::ContextMeasure,
+        projection: Option<&CompactionProjection>,
+        context: TurnExecutionContext,
+    ) -> Result<RecordedCompaction> {
+        self.recorded(request, context, Some(measure), projection)
+            .await
+    }
     fn name(&self) -> &'static str {
         "semantic_summary_v1"
     }
@@ -621,6 +666,7 @@ impl ContextCompactor for SemanticContextCompactor {
             },
             TurnExecutionContext::new(),
             None,
+            None,
         )
         .await
         .map(|result| result.compaction)
@@ -630,7 +676,7 @@ impl ContextCompactor for SemanticContextCompactor {
         request: CompactionRequest<'_>,
         context: TurnExecutionContext,
     ) -> Result<RecordedCompaction> {
-        self.recorded(request, context, None).await
+        self.recorded(request, context, None, None).await
     }
 }
 

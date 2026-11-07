@@ -1,5 +1,7 @@
 //! Bounded semantic context reduction and branch-local durable summaries.
 mod engine;
+mod projection;
+pub use projection::CompactionProjection;
 pub(crate) mod manual;
 pub use manual::{MANUAL_USAGE_NAMESPACE, ManualCompactionReport};
 pub(crate) mod session;

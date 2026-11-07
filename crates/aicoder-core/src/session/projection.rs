@@ -59,7 +59,26 @@ pub struct SessionContext<'a> {
     pub origins: Vec<ContextOrigin<'a>>,
     pub source: SessionContextSource,
 }
+/// Owned model data and stable canonical IDs; derived repairs/summaries have no canonical ID.
+#[derive(Debug, Clone)]
+pub struct OwnedSessionContext {
+    pub messages: Vec<Message>,
+    pub entry_ids: Vec<Option<String>>,
+    pub source: SessionContextSource,
+}
 impl SessionContext<'_> {
+    pub fn into_owned(self) -> OwnedSessionContext {
+        let entry_ids = self
+            .origins
+            .iter()
+            .map(|o| o.recorded_entry_id().map(str::to_owned))
+            .collect();
+        OwnedSessionContext {
+            messages: self.messages,
+            entry_ids,
+            source: self.source,
+        }
+    }
     pub fn into_messages(self) -> Vec<Message> {
         self.messages
     }

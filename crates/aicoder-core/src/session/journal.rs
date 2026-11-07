@@ -69,6 +69,42 @@ impl<'a> SessionJournal<'a> {
 }
 #[async_trait]
 impl RunJournal for SessionJournal<'_> {
+    async fn compaction_projection(
+        &self,
+        view: &[Message],
+        prefix: usize,
+        input_messages: usize,
+        history: &[Message],
+    ) -> Result<Option<crate::summary::CompactionProjection>> {
+        let state = self.state.lock().expect("session journal poisoned");
+        ensure!(
+            !state.finished && state.failure.is_none(),
+            "session journal cannot project compaction"
+        );
+        let Some(projection) = state
+            .session
+            .project_context(self.repository, Some(&self.turn_id))?
+        else {
+            return Ok(None);
+        };
+        let offset = input_messages
+            .checked_sub(state.initial_message_count)
+            .ok_or_else(|| anyhow::anyhow!("invalid initial canonical positions"))?;
+        let positions = state
+            .initial_ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.as_str(), offset + i))
+            .chain(state.saved.iter().map(|(i, id)| (id.as_str(), *i)));
+        crate::summary::CompactionProjection::from_session_view(
+            &projection,
+            view,
+            prefix,
+            history,
+            positions,
+        )
+    }
+
     async fn record_message_finalization(
         &self,
         record: &crate::extensions::MessageFinalizationRecord,
@@ -468,7 +504,7 @@ impl RunJournal for SessionJournal<'_> {
             ),
             RunSession::Window(window) => {
                 let checkpoint = crate::summary::SummaryCheckpoint {
-                    version: 1,
+                    version: 2,
                     source_leaf: window
                         .metadata()
                         .leaf_id

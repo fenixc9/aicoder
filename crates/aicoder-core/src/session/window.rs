@@ -248,6 +248,24 @@ pub enum RunSession {
     Window(Box<SessionWindow>),
 }
 impl RunSession {
+    pub fn project_context(
+        &self,
+        repository: &dyn SessionRepository,
+        active_turn: Option<&str>,
+    ) -> Result<Option<OwnedSessionContext>> {
+        match self {
+            Self::Full(session) => {
+                let branch = session.selected_branch();
+                let projection = match active_turn {
+                    Some(turn) => branch.context_for_active_turn(turn)?,
+                    None => branch.model_context()?,
+                };
+                Ok(Some(projection.into_owned()))
+            }
+            Self::Window(window) => repository.project_window_context(window, active_turn),
+        }
+    }
+
     pub fn metadata(&self) -> &SessionMetadata {
         match self {
             Self::Full(session) => session.metadata(),

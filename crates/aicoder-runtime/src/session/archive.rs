@@ -487,6 +487,138 @@ impl Reader {
             .context("archive entry ordinal changed")
     }
 }
+struct ArchiveProjection {
+    messages: Vec<Message>,
+    source: SessionContextSource,
+    entry_ids: Option<Vec<Option<String>>>,
+}
+/// Normal window loads borrow origins; only explicit lineage requests allocate owned IDs.
+fn project_loaded(
+    index: &ArchiveIndex,
+    loaded: &[SessionEntry],
+    active_turn: Option<&str>,
+    lineage: bool,
+) -> Result<ArchiveProjection> {
+    let mut projection_entries = index.session.entries().to_vec();
+    let loaded_ids = loaded
+        .iter()
+        .map(|e| e.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    for entry in loaded {
+        let ordinal = index
+            .session
+            .entry_position(&entry.id)
+            .context("materialized entry missing")?;
+        projection_entries[ordinal] = entry.clone();
+    }
+    let projection = Session::from_entries(metadata(index), projection_entries)?;
+    let branch = projection.selected_branch();
+    let projected = match active_turn {
+        Some(turn) => branch.context_for_active_turn(turn)?,
+        None => branch.model_context()?,
+    };
+    let total = index.session.selected_branch().messages().count();
+    let loaded_messages = loaded
+        .iter()
+        .filter(|e| e.data.as_message().is_some())
+        .count();
+    let windowed = projected.source.summary_checkpoint.is_none() && loaded_messages < total;
+    let offset = if windowed {
+        let first_ordinal = loaded
+            .iter()
+            .filter(|e| e.data.as_message().is_some())
+            .filter_map(|e| index.session.entry_position(&e.id))
+            .min()
+            .context("missing raw window boundary")?;
+        projected
+            .origins
+            .iter()
+            .position(|o| {
+                o.recorded_entry_id()
+                    .and_then(|id| index.session.entry_position(id))
+                    .is_some_and(|i| i >= first_ordinal)
+            })
+            .unwrap_or(projected.messages.len())
+    } else {
+        0
+    };
+    ensure!(
+        projected.origins[offset..]
+            .iter()
+            .filter_map(ContextOrigin::recorded_entry_id)
+            .all(|id| loaded_ids.contains(id))
+            && projected
+                .source
+                .summary_checkpoint
+                .as_deref()
+                .is_none_or(|id| loaded_ids.contains(id)),
+        "private archive descriptor escaped the materialized view"
+    );
+    let mut entry_ids = lineage.then(|| {
+        projected.origins[offset..]
+            .iter()
+            .map(|o| o.recorded_entry_id().map(str::to_owned))
+            .collect::<Vec<_>>()
+    });
+    let uncertain = windowed
+        && projected.messages[..offset]
+            .iter()
+            .any(|m| m.role == MessageRole::System);
+    let mut messages = projected.messages;
+    if windowed {
+        messages = messages.split_off(offset);
+        messages.insert(0,Message::text(MessageRole::System,format!("[Archive window omitted {} earlier recorded messages to honor the host load budget. Original records remain available through archive pages; inspect them before relying on missing details.]",total-loaded_messages)));
+        if let Some(ids) = &mut entry_ids {
+            ids.insert(0, None);
+        }
+        if uncertain {
+            messages.insert(0, aicoder_core::summary::recovery_notice());
+            if let Some(ids) = &mut entry_ids {
+                ids.insert(0, None);
+            }
+        }
+    }
+    let mut source = projected.source;
+    source.archived_messages = total
+        .checked_sub(loaded_messages)
+        .context("invalid materialized raw count")?;
+    source.recorded_messages = total;
+    Ok(ArchiveProjection {
+        messages,
+        source,
+        entry_ids,
+    })
+}
+pub(super) fn project_window_context(
+    repository: &JsonlSessionRepository,
+    window: &SessionWindow,
+    active_turn: Option<&str>,
+) -> Result<OwnedSessionContext> {
+    let _lock = repository.metadata_lock(&window.metadata().id, false)?;
+    let mut cache = repository
+        .archive_cache
+        .lock()
+        .map_err(|_| anyhow::anyhow!("archive cache poisoned"))?;
+    let index = cached(repository, &window.metadata().id, &mut cache)?;
+    let cursor = window
+        .backend_state::<WindowCursor>()
+        .context("window has no backend checkpoint")?;
+    ensure!(
+        index.path == cursor.cursor.path
+            && index.expected_len == cursor.cursor.expected_len
+            && index.hash == cursor.cursor.fingerprint
+            && index.session.metadata().revision == window.metadata().revision
+            && index.session.metadata().leaf_id == window.metadata().leaf_id,
+        "stale window projection"
+    );
+    // No cold payload reads or enlarged load budget: only real records already admitted to this run.
+    let projected = project_loaded(index, window.entries(), active_turn, true)?;
+    Ok(OwnedSessionContext {
+        messages: projected.messages,
+        source: projected.source,
+        entry_ids: projected.entry_ids.expect("requested context lineage"),
+    })
+}
 fn materialize(index: &ArchiveIndex, limits: &SessionLoadLimits) -> Result<SessionWindow> {
     let mut reader = Reader::new(&index.path, limits.max_record_bytes)?;
     materialize_using(index, limits, |location| reader.entry(location))
@@ -564,20 +696,13 @@ fn materialize_using(
             || loaded.iter().any(|entry| entry.data.as_message().is_some()),
         "newest complete message unit exceeds the window budget"
     );
-    let first = loaded
-        .iter()
-        .find(|entry| entry.data.as_message().is_some())
-        .map(|entry| entry.id.clone());
-    let total = branch.messages().count();
-    let loaded_messages = loaded
-        .iter()
-        .filter(|entry| entry.data.as_message().is_some())
-        .count();
-    let loaded_ids = loaded
+    let loaded_ids = if selected.iter().any(|e|matches!(&e.data, SessionEntryData::Extension { namespace, .. } if namespace==CONTEXT_EDIT_NAMESPACE)) {
+        loaded
         .iter()
         .filter(|e| e.data.as_message().is_some())
         .map(|e| e.id.as_str())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<std::collections::HashSet<_>>()
+    } else { std::collections::HashSet::new() };
     let mut latest_edits = std::collections::HashMap::new();
     for entry in selected {
         if let SessionEntryData::Extension { namespace, data } = &entry.data
@@ -604,51 +729,18 @@ fn materialize_using(
         )?;
         extra_edits.push(real);
     }
-    loaded.extend(extra_edits);
-    loaded.sort_by_key(|entry| {
-        index
-            .session
-            .entry_position(&entry.id)
-            .expect("real window entry")
-    });
-    let mut projection_entries = index.session.entries().to_vec();
-    for entry in &loaded {
-        let ordinal = index
-            .session
-            .entry_position(&entry.id)
-            .expect("indexed entry");
-        projection_entries[ordinal] = entry.clone();
+    if !extra_edits.is_empty() {
+        loaded.extend(extra_edits);
+        loaded.sort_by_key(|entry| {
+            index
+                .session
+                .entry_position(&entry.id)
+                .expect("real window entry")
+        });
     }
-    let projection = Session::from_entries(metadata(index), projection_entries)?;
-    let projected = projection.selected_branch().model_context()?;
-    let mut source = projected.source.clone();
-    let mut context = projected.messages;
-    if summary_start.is_none() && loaded_messages < total {
-        let first_ordinal = first
-            .as_deref()
-            .and_then(|id| index.session.entry_position(id))
-            .context("missing raw window boundary")?;
-        let offset = projected
-            .origins
-            .iter()
-            .position(|origin| {
-                origin
-                    .recorded_entry_id()
-                    .and_then(|id| index.session.entry_position(id))
-                    .is_some_and(|ordinal| ordinal >= first_ordinal)
-            })
-            .unwrap_or(context.len());
-        let uncertain = context[..offset]
-            .iter()
-            .any(|message| message.role == MessageRole::System);
-        context = context.split_off(offset);
-        context.insert(0,Message::text(MessageRole::System,format!("[Archive window omitted {} earlier recorded messages to honor the host load budget. Original records remain available through archive pages; inspect them before relying on missing details.]",total-loaded_messages)));
-        if uncertain {
-            context.insert(0, aicoder_core::summary::recovery_notice());
-        }
-    }
-    source.archived_messages = total - loaded_messages;
-    source.recorded_messages = total;
+    let projected = project_loaded(index, &loaded, None, false)?;
+    let source = projected.source;
+    let context = projected.messages;
     let model = index
         .session
         .selected_model()

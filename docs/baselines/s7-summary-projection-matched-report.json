@@ -1,0 +1,842 @@
+{
+  "schema_version": 1,
+  "scope": "Fresh independent image-enabled runtime examples, 10 alternating AB/BA pairs, 125 cases per execution. The three earlier workspace samples are retained separately.",
+  "identity": {
+    "reference": {
+      "revision": "5349f99e6df74e1c443714ab14585ede5d4260f5",
+      "source_sha256": "43349cc74c78737ccb79d1f03e31d307fee960fc94d80a9a541a0021159094a4",
+      "build_command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--offline",
+        "--release",
+        "-p",
+        "aicoder-runtime",
+        "--example",
+        "offline_smoke",
+        "--features",
+        "images",
+        "--target-dir",
+        "<reference-target>",
+        "--message-format=json"
+      ],
+      "checkout": "<reference-checkout>",
+      "target": "<reference-target>",
+      "compiled_workspace_artifacts": {
+        "aicoder_providers": [
+          {
+            "manifest_path": "<reference-checkout>/crates/aicoder-providers/Cargo.toml",
+            "fresh": false,
+            "features": [],
+            "kind": [
+              "lib"
+            ]
+          }
+        ],
+        "aicoder_core": [
+          {
+            "manifest_path": "<reference-checkout>/crates/aicoder-core/Cargo.toml",
+            "fresh": false,
+            "features": [],
+            "kind": [
+              "lib"
+            ]
+          }
+        ],
+        "aicoder_runtime": [
+          {
+            "manifest_path": "<reference-checkout>/crates/aicoder-runtime/Cargo.toml",
+            "fresh": false,
+            "features": [
+              "images"
+            ],
+            "kind": [
+              "lib"
+            ]
+          }
+        ],
+        "offline_smoke": [
+          {
+            "manifest_path": "<reference-checkout>/crates/aicoder-runtime/Cargo.toml",
+            "fresh": false,
+            "features": [
+              "images"
+            ],
+            "kind": [
+              "example"
+            ]
+          }
+        ]
+      },
+      "bytes": 11952360,
+      "sha256": "ebcdde28d4dbf83f19ac9a642603c9cbb57942a6abc901d0cb3403d0e00c447d"
+    },
+    "candidate": {
+      "revision": "5349f99e6df74e1c443714ab14585ede5d4260f5",
+      "source_sha256": "8d3b1dd6b1974e9d856ff8d7219ae66a0fdd91aeb839b9ecabd2d79f8c912ad0",
+      "build_command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--offline",
+        "--release",
+        "-p",
+        "aicoder-runtime",
+        "--example",
+        "offline_smoke",
+        "--features",
+        "images",
+        "--target-dir",
+        "<candidate-target>",
+        "--message-format=json"
+      ],
+      "checkout": "<candidate-checkout>",
+      "target": "<candidate-target>",
+      "compiled_workspace_artifacts": {
+        "aicoder_providers": [
+          {
+            "manifest_path": "<candidate-checkout>/crates/aicoder-providers/Cargo.toml",
+            "fresh": false,
+            "features": [],
+            "kind": [
+              "lib"
+            ]
+          }
+        ],
+        "aicoder_core": [
+          {
+            "manifest_path": "<candidate-checkout>/crates/aicoder-core/Cargo.toml",
+            "fresh": false,
+            "features": [],
+            "kind": [
+              "lib"
+            ]
+          }
+        ],
+        "aicoder_runtime": [
+          {
+            "manifest_path": "<candidate-checkout>/crates/aicoder-runtime/Cargo.toml",
+            "fresh": false,
+            "features": [
+              "images"
+            ],
+            "kind": [
+              "lib"
+            ]
+          }
+        ],
+        "offline_smoke": [
+          {
+            "manifest_path": "<candidate-checkout>/crates/aicoder-runtime/Cargo.toml",
+            "fresh": false,
+            "features": [
+              "images"
+            ],
+            "kind": [
+              "example"
+            ]
+          }
+        ]
+      },
+      "bytes": 12455896,
+      "sha256": "287b0512d7d05a202ecc68e0fe12b856d7eb1af1cd8208b335a9407eb1fd3c3e"
+    }
+  },
+  "rustc": "rustc 1.92.0 (ded5c06cf 2025-12-08)\nbinary: rustc\ncommit-hash: ded5c06cf21d2b93bffd5d884aa6e96934ee4234\ncommit-date: 2025-12-08\nhost: x86_64-unknown-linux-gnu\nrelease: 1.92.0\nLLVM version: 21.1.3\n",
+  "cargo": "cargo 1.92.0 (344c4567c 2025-10-21)",
+  "load_before": "7.53 8.11 8.10 2/3421 2490372",
+  "load_after": "6.23 7.78 7.99 2/3424 2495489",
+  "records": [
+    {
+      "pair": 0,
+      "candidate": "reference",
+      "wall_ms": 1278.644415549934,
+      "rss_kib": 9088,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.624,
+          "max_ms": 17.282
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.651,
+          "max_ms": 0.88
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.323,
+          "max_ms": 0.468
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.195,
+          "max_ms": 0.256
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 28.501,
+          "max_ms": 242.832
+        }
+      }
+    },
+    {
+      "pair": 0,
+      "candidate": "candidate",
+      "wall_ms": 1144.4223169237375,
+      "rss_kib": 9344,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 10.848,
+          "max_ms": 139.503
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.621,
+          "max_ms": 0.816
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.32,
+          "max_ms": 0.47
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.193,
+          "max_ms": 0.275
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 27.064,
+          "max_ms": 31.847
+        }
+      }
+    },
+    {
+      "pair": 1,
+      "candidate": "candidate",
+      "wall_ms": 1010.6403883546591,
+      "rss_kib": 9216,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 10.876,
+          "max_ms": 11.15
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.629,
+          "max_ms": 0.75
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.326,
+          "max_ms": 0.401
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.2,
+          "max_ms": 0.477
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 26.937,
+          "max_ms": 27.755
+        }
+      }
+    },
+    {
+      "pair": 1,
+      "candidate": "reference",
+      "wall_ms": 995.962904766202,
+      "rss_kib": 8960,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 10.731,
+          "max_ms": 12.252
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.634,
+          "max_ms": 0.828
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.33,
+          "max_ms": 0.484
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.193,
+          "max_ms": 0.279
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 26.637,
+          "max_ms": 29.233
+        }
+      }
+    },
+    {
+      "pair": 2,
+      "candidate": "reference",
+      "wall_ms": 1030.143835581839,
+      "rss_kib": 9088,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.003,
+          "max_ms": 12.301
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.684,
+          "max_ms": 0.783
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.338,
+          "max_ms": 0.4
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.201,
+          "max_ms": 0.278
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 27.389,
+          "max_ms": 29.203
+        }
+      }
+    },
+    {
+      "pair": 2,
+      "candidate": "candidate",
+      "wall_ms": 1410.0915407761931,
+      "rss_kib": 9088,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.417,
+          "max_ms": 117.096
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.59,
+          "max_ms": 0.837
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.321,
+          "max_ms": 0.483
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.193,
+          "max_ms": 0.253
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 28.685,
+          "max_ms": 264.883
+        }
+      }
+    },
+    {
+      "pair": 3,
+      "candidate": "candidate",
+      "wall_ms": 1069.31674759835,
+      "rss_kib": 9344,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.58,
+          "max_ms": 12.059
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.634,
+          "max_ms": 0.878
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.324,
+          "max_ms": 0.404
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.195,
+          "max_ms": 0.246
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 28.733,
+          "max_ms": 29.64
+        }
+      }
+    },
+    {
+      "pair": 3,
+      "candidate": "reference",
+      "wall_ms": 1084.2038439586759,
+      "rss_kib": 9216,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.773,
+          "max_ms": 12.113
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.628,
+          "max_ms": 0.841
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.328,
+          "max_ms": 0.401
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.196,
+          "max_ms": 0.322
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 29.123,
+          "max_ms": 29.68
+        }
+      }
+    },
+    {
+      "pair": 4,
+      "candidate": "reference",
+      "wall_ms": 1099.9084310606122,
+      "rss_kib": 8960,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.943,
+          "max_ms": 12.376
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.695,
+          "max_ms": 0.857
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.322,
+          "max_ms": 0.411
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.192,
+          "max_ms": 0.312
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 29.535,
+          "max_ms": 35.102
+        }
+      }
+    },
+    {
+      "pair": 4,
+      "candidate": "candidate",
+      "wall_ms": 1326.3737242668867,
+      "rss_kib": 9600,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.977,
+          "max_ms": 120.932
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.709,
+          "max_ms": 0.872
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.335,
+          "max_ms": 0.43
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.196,
+          "max_ms": 0.325
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 29.846,
+          "max_ms": 138.089
+        }
+      }
+    },
+    {
+      "pair": 5,
+      "candidate": "candidate",
+      "wall_ms": 1108.4340205416083,
+      "rss_kib": 9216,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.758,
+          "max_ms": 13.071
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.644,
+          "max_ms": 0.825
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.325,
+          "max_ms": 0.516
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.198,
+          "max_ms": 0.238
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 29.266,
+          "max_ms": 35.984
+        }
+      }
+    },
+    {
+      "pair": 5,
+      "candidate": "reference",
+      "wall_ms": 999.7114837169647,
+      "rss_kib": 8960,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 10.479,
+          "max_ms": 18.283
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.683,
+          "max_ms": 0.795
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.339,
+          "max_ms": 0.394
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.211,
+          "max_ms": 0.283
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 26.054,
+          "max_ms": 31.315
+        }
+      }
+    },
+    {
+      "pair": 6,
+      "candidate": "reference",
+      "wall_ms": 979.507165029645,
+      "rss_kib": 8960,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 10.604,
+          "max_ms": 11.006
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.646,
+          "max_ms": 0.792
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.321,
+          "max_ms": 0.388
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.189,
+          "max_ms": 0.239
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 26.432,
+          "max_ms": 26.817
+        }
+      }
+    },
+    {
+      "pair": 6,
+      "candidate": "candidate",
+      "wall_ms": 1025.497823022306,
+      "rss_kib": 9216,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 10.799,
+          "max_ms": 15.707
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.624,
+          "max_ms": 0.826
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.32,
+          "max_ms": 0.479
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.19,
+          "max_ms": 0.294
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 27.106,
+          "max_ms": 40.848
+        }
+      }
+    },
+    {
+      "pair": 7,
+      "candidate": "candidate",
+      "wall_ms": 1246.72887660563,
+      "rss_kib": 9216,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 10.959,
+          "max_ms": 231.984
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.661,
+          "max_ms": 0.88
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.319,
+          "max_ms": 0.372
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.191,
+          "max_ms": 0.284
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 27.137,
+          "max_ms": 32.062
+        }
+      }
+    },
+    {
+      "pair": 7,
+      "candidate": "reference",
+      "wall_ms": 1035.7508175075054,
+      "rss_kib": 9088,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.137,
+          "max_ms": 13.325
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.631,
+          "max_ms": 0.818
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.32,
+          "max_ms": 0.444
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.191,
+          "max_ms": 0.258
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 27.671,
+          "max_ms": 32.33
+        }
+      }
+    },
+    {
+      "pair": 8,
+      "candidate": "reference",
+      "wall_ms": 1037.646595388651,
+      "rss_kib": 8960,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.076,
+          "max_ms": 11.738
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.657,
+          "max_ms": 0.899
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.324,
+          "max_ms": 0.402
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.195,
+          "max_ms": 0.237
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 27.672,
+          "max_ms": 32.693
+        }
+      }
+    },
+    {
+      "pair": 8,
+      "candidate": "candidate",
+      "wall_ms": 1055.3272413089871,
+      "rss_kib": 9088,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.223,
+          "max_ms": 11.639
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.649,
+          "max_ms": 0.835
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.319,
+          "max_ms": 0.398
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.194,
+          "max_ms": 0.37
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 27.954,
+          "max_ms": 34.111
+        }
+      }
+    },
+    {
+      "pair": 9,
+      "candidate": "candidate",
+      "wall_ms": 1054.3245859444141,
+      "rss_kib": 9216,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.312,
+          "max_ms": 11.657
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.629,
+          "max_ms": 0.879
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.323,
+          "max_ms": 0.434
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.195,
+          "max_ms": 0.253
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 28.314,
+          "max_ms": 29.363
+        }
+      }
+    },
+    {
+      "pair": 9,
+      "candidate": "reference",
+      "wall_ms": 1476.0223748162389,
+      "rss_kib": 9216,
+      "cases": {
+        "Edit": {
+          "count": 25,
+          "median_ms": 11.094,
+          "max_ms": 22.135
+        },
+        "Search": {
+          "count": 25,
+          "median_ms": 0.494,
+          "max_ms": 0.882
+        },
+        "ToolFailure": {
+          "count": 25,
+          "median_ms": 0.241,
+          "max_ms": 0.338
+        },
+        "Cancel": {
+          "count": 25,
+          "median_ms": 0.142,
+          "max_ms": 0.23
+        },
+        "SessionResume": {
+          "count": 25,
+          "median_ms": 27.701,
+          "max_ms": 442.619
+        }
+      }
+    }
+  ],
+  "summary": {
+    "reference": {
+      "wall_ms_median": 1036.6987064480782,
+      "rss_kib_median": 9024.0
+    },
+    "candidate": {
+      "wall_ms_median": 1088.8753840699792,
+      "rss_kib_median": 9216.0
+    }
+  },
+  "wall_change_percent": 5.0329644763103865,
+  "paired_wall_change_percent": [
+    -10.497218538155394,
+    1.4736978172799065,
+    36.88297615058333,
+    -1.373090165957136,
+    20.589467887604073,
+    10.875391409970515,
+    4.695285510368796,
+    20.369576883929973,
+    1.7039178848472947,
+    -28.569877805837805
+  ],
+  "paired_wall_change_median_percent": 3.1996016976080455,
+  "limitations": [
+    "Shared host and warm caches; this does not establish a causal effect or exclude smaller regressions.",
+    "Runtime-only examples select the images feature; both frozen matched builds have identical flags. This does not assert identity of the complete workspace feature graph.",
+    "No active context edits, real model calls, allocator instrumentation or isolated agent peak RSS measurements."
+  ],
+  "source_binding_validation": "Separate fresh targets, explicit checkout manifests and fresh compiler artifacts for all three workspace libraries and the example; source hashes checked before/after builds and sampling. Owned worktrees and targets removed after evidence capture."
+}

@@ -890,8 +890,17 @@ impl TurnExecutor {
                         ensure_token_capacity(limits, estimated_tokens as u64)?;
                     }
                     limits.check()?;
+                    let projection = if compactor.persistent_summaries() {
+                        tokio::select! {biased;
+                            cancelled=context.cancelled()=>return Err(cancelled.into()),
+                            result=tokio::time::timeout(std::time::Duration::from_secs(30),journal.compaction_projection(&context_messages,context_prefix_len,progress.input_messages,&progress.messages))=>result.map_err(|_|anyhow::anyhow!("compaction projection timed out"))??
+                        }
+                    } else {
+                        None
+                    };
+                    limits.check()?;
                     let recorded = compactor
-                        .compact_counted(
+                        .compact_projected(
                             crate::summary::CompactionRequest {
                                 input,
                                 history: &progress.messages,
@@ -911,6 +920,7 @@ impl TurnExecutor {
                                 tool_choice: request.tool_choice.clone(),
                                 target_tokens,
                             },
+                            projection.as_ref(),
                             context.clone(),
                         )
                         .await

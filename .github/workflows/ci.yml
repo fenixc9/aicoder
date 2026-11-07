@@ -132,6 +132,9 @@ jobs:
           cargo test --locked -p aicoder-runtime --no-default-features --test context_edits
           cargo run --locked -p aicoder-runtime --example offline_context_edits
           cargo run --locked -p aicoder-runtime --example offline_context_edits -- --window
+          cargo test --locked -p aicoder-runtime --no-default-features --test summary_projection
+          cargo run --locked -p aicoder-runtime --example offline_context_edits -- --compact
+          cargo run --locked -p aicoder-runtime --example offline_context_edits -- --window --compact
       - name: Raw input before expansion and ordered controls
         run: |
           cargo test --locked -p aicoder-runtime --no-default-features --test input_hooks

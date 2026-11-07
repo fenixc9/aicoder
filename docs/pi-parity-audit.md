@@ -135,7 +135,9 @@ that full product parity has already been achieved.
    replacement and context-edit/compaction drafts remain open. [Persistent idle context edits](context-edits.md)
    now append ID-bound Text/Blocks/Omit/Restore records through owned, model-validated session
    plans. Full snapshots and bounded cold archives retain raw history and whole tool units.
-   Projection-aware semantic summary preparation remains open; no boundary draft equivalence is claimed.
+   [Projection-aware semantic summaries](summary-projection.md) now cover latest edited tails,
+   omitted/duplicate records, split results and custom/native anchors, with v1/v2 replay and
+   current-window identity checks. No boundary draft equivalence is claimed.
    Provider wrappers can cover some
    host integrations, but no exhaustive executable equivalence check exists. Observation-only
    events must not quietly become mutation channels or rewrite canonical facts.
