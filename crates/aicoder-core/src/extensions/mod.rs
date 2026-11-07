@@ -25,12 +25,14 @@ pub use startup::{
     BeforeStartAction, BeforeStartHook, BeforeStartInput, StartupChange, StartupMetadata,
 };
 mod boundary;
+mod boundary_models;
+pub use boundary_models::BoundaryModels;
 mod commands;
 pub(crate) use boundary::explicit_context_message;
 pub use boundary::{
     BoundaryAction, BoundaryChange, BoundaryCommit, BoundaryEntry, BoundaryHook, BoundaryInput,
     BoundaryKind, BoundaryProposal, BoundaryStatistics, LIFECYCLE_NAMESPACE, LifecycleRecord,
-    MAX_BOUNDARY_BYTES,
+    MAX_BOUNDARY_BYTES, PreparedBoundary,
 };
 mod hooks;
 mod interception;

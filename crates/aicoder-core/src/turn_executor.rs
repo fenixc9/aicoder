@@ -1382,6 +1382,7 @@ impl TurnExecutor {
                     if self
                         .run_boundary(
                             lifecycle::BoundaryScope {
+                                prefix: context_prefix_len,
                                 kind: crate::extensions::BoundaryKind::TurnEnd,
                                 events: &round_events,
                                 request: &request,
@@ -1454,6 +1455,7 @@ impl TurnExecutor {
                         } else {
                             self.run_boundary(
                                 lifecycle::BoundaryScope {
+                                    prefix: context_prefix_len,
                                     kind: crate::extensions::BoundaryKind::BeforeSettle,
                                     events: &round_events,
                                     request: &request,
@@ -1653,6 +1655,7 @@ impl TurnExecutor {
                 let _ = self
                     .run_boundary(
                         lifecycle::BoundaryScope {
+                            prefix: context_prefix_len,
                             kind: crate::extensions::BoundaryKind::TurnEnd,
                             events: &round_events,
                             request: &request,

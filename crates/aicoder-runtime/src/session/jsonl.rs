@@ -284,6 +284,22 @@ impl JsonlSessionRepository {
     }
 }
 impl SessionRepository for JsonlSessionRepository {
+    fn prepare_window_boundary(
+        &self,
+        window: &SessionWindow,
+        commit: &aicoder_core::extensions::BoundaryCommit,
+        active_turn: Option<&str>,
+    ) -> Result<SessionAppendPlan> {
+        super::archive::prepare_boundary(self, window, commit, active_turn)
+    }
+    fn commit_window_append(
+        &self,
+        window: &mut SessionWindow,
+        plan: SessionAppendPlan,
+    ) -> Result<()> {
+        super::archive::commit_append(self, window, plan)
+    }
+
     fn project_window_context(
         &self,
         window: &SessionWindow,

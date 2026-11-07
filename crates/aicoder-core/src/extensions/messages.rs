@@ -29,7 +29,8 @@ impl MessageOrigin {
         match self {
             Self::Assistant => role == MessageRole::Assistant,
             Self::Tool => role == MessageRole::Tool,
-            Self::Startup | Self::Boundary => role == MessageRole::System,
+            Self::Startup => role == MessageRole::System,
+            Self::Boundary => matches!(role, MessageRole::System | MessageRole::Custom),
             Self::IdleCustom | Self::NextTurn | Self::Deferred => role == MessageRole::Custom,
             Self::Initial | Self::Steer | Self::FollowUp => {
                 matches!(role, MessageRole::User | MessageRole::Custom)

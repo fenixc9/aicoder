@@ -68,44 +68,83 @@ impl TurnExecutor {
             MessageOrigin::Boundary
         };
         for proposal in &mut commit.entries {
-            if let BoundaryEntry::Context { kind, text } = &mut proposal.entry {
-                let original = crate::session::NativeContextSource {
+            let custom = proposal.custom_message()?;
+            let original = if let Some(custom) = &custom {
+                custom.message().clone()
+            } else if let BoundaryEntry::Context { kind, text } = &proposal.entry {
+                crate::session::NativeContextSource {
                     extension: proposal.extension.clone(),
                     hook: proposal.hook.clone(),
                     kind: kind.clone(),
                 }
-                .message(text);
-                if let Some(value) = self
-                    .prepare_message_finalization(
-                        &original,
-                        None,
-                        origin,
-                        Some(commit.round),
-                        context,
-                    )
-                    .await?
-                {
-                    *text = value
-                        .message
-                        .text_content()
-                        .split_once("]\n")
-                        .expect("validated source label")
-                        .1
-                        .into();
-                    proposal.entry.validate()?;
-                    commit.message_finalizations.push(value.receipt);
+                .message(text)
+            } else {
+                continue;
+            };
+            let metadata = custom.as_ref().map(crate::CustomMessage::metadata);
+            if let Some(value) = self
+                .prepare_message_finalization(
+                    &original,
+                    metadata.as_ref(),
+                    origin,
+                    Some(commit.round),
+                    context,
+                )
+                .await?
+            {
+                match &mut proposal.entry {
+                    BoundaryEntry::Context { text, .. } => {
+                        *text = value
+                            .message
+                            .text_content()
+                            .split_once("]\n")
+                            .expect("validated source label")
+                            .1
+                            .into()
+                    }
+                    BoundaryEntry::CustomMessage {
+                        content,
+                        display,
+                        details,
+                        ..
+                    } => {
+                        let custom = crate::CustomMessage::from_canonical(
+                            value.custom.clone().expect("custom finalization metadata"),
+                            value.message.clone(),
+                        )?;
+                        *content = custom.message().content[1..].to_vec();
+                        *display = custom.display();
+                        *details = custom.details().cloned();
+                    }
+                    _ => unreachable!(),
                 }
+                proposal.entry.validate()?;
+                commit.message_finalizations.push(value.receipt);
             }
         }
         Ok(())
     }
     pub(crate) fn context_finalization_events(commit: &BoundaryCommit, events: &AgentEventEmitter) {
-        for (receipt, message) in commit.message_finalizations.iter().zip(commit.messages()) {
+        let metadata = commit.entries.iter().filter_map(|p| match &p.entry {
+            BoundaryEntry::Context { .. } => Some(None),
+            BoundaryEntry::CustomMessage { .. } => Some(
+                p.custom_message()
+                    .expect("validated custom")
+                    .map(|c| c.metadata()),
+            ),
+            _ => None,
+        });
+        for ((receipt, message), custom) in commit
+            .message_finalizations
+            .iter()
+            .zip(commit.messages())
+            .zip(metadata)
+        {
             events.emit(
                 FinalizedMessage {
                     receipt: receipt.clone(),
                     message,
-                    custom: None,
+                    custom,
                 }
                 .event(),
             );

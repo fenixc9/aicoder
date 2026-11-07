@@ -182,11 +182,27 @@ impl<'a> SessionBranch<'a> {
             total.tokens.used = total.tokens.used.saturating_add(tokens.used);
             total.tokens.estimated |= tokens.estimated;
         };
+        let mut owner = None;
+        let mut auxiliary = HashMap::new();
         for entry in &self.entries {
             match &entry.data {
+                SessionEntryData::TurnStart { turn_id } => owner = Some(turn_id.as_str()),
                 SessionEntryData::TurnEnd { record, .. } => {
+                    owner = None;
                     if let Some(statistics) = &record.statistics {
                         add(&statistics.usage, &statistics.tokens);
+                    }
+                }
+                SessionEntryData::Extension { namespace, data }
+                    if namespace == crate::auxiliary::AUXILIARY_NAMESPACE =>
+                {
+                    let record: crate::auxiliary::AuxiliaryRecord =
+                        serde_json::from_value(data.clone())?;
+                    if let crate::auxiliary::AuxiliaryRecord::Finished { attempt } = record
+                        && owner.is_none_or(|id| !recorded_turns.contains(id))
+                        && !matches!(attempt.status.as_str(), "prepared" | "not_started")
+                    {
+                        auxiliary.insert(attempt.id.clone(), attempt);
                     }
                 }
                 SessionEntryData::Extension { namespace, data }
@@ -212,6 +228,9 @@ impl<'a> SessionBranch<'a> {
                 }
                 _ => {}
             }
+        }
+        for attempt in auxiliary.values() {
+            add(&attempt.usage, &attempt.tokens);
         }
         Ok(total)
     }
@@ -383,34 +402,22 @@ impl<'a> SessionBranch<'a> {
         {
             interrupted(&mut output, None, turn_id);
         }
-        if let Some((position, entry, record)) =
-            self.entries
-                .iter()
-                .enumerate()
-                .rev()
-                .find_map(|(position, entry)| match &entry.data {
-                    SessionEntryData::Extension { namespace, data }
-                        if namespace == crate::summary::SUMMARY_NAMESPACE =>
-                    {
-                        Some((
-                            position,
-                            *entry,
-                            serde_json::from_value::<crate::summary::SummaryCheckpoint>(
-                                data.clone(),
-                            ),
-                        ))
-                    }
-                    _ => None,
-                })
-        {
-            let record = record?;
-            crate::summary::validate_checkpoint(
-                &record,
-                &self.entries[..position],
-                entry.parent_id.as_deref(),
-            )?;
-            let offset=output.origins.iter().position(|origin|matches!(origin,ContextOrigin::Recorded{entry_id} if *entry_id==record.first_kept_entry_id)).ok_or_else(||anyhow::anyhow!("summary tail is not a projected message boundary"))?;
-            let mut uncertain = record.draft.uncertain_operations
+        if let Some((position,entry))=self.entries.iter().enumerate().rev().find(|(_,e)|matches!(&e.data,SessionEntryData::Extension {namespace,..} if crate::summary::is_reduction_namespace(namespace))) {
+            let SessionEntryData::Extension {namespace,data}=&entry.data else { unreachable!() };
+            let (first_kept,summary_message,uncertain_operations)=if namespace==crate::summary::SUMMARY_NAMESPACE {
+                let record:crate::summary::SummaryCheckpoint=serde_json::from_value(data.clone())?;
+                crate::summary::validate_checkpoint(&record,&self.entries[..position],entry.parent_id.as_deref())?;
+                (Some(record.first_kept_entry_id),record.draft.summary.message(),record.draft.uncertain_operations)
+            }else{
+                let record:crate::summary::NativeCompactionRecord=serde_json::from_value(data.clone())?;
+                record.validate(&self.entries[..position],entry.parent_id.as_deref())?;
+                (record.first_kept_entry_id.clone(),record.message(),record.uncertain_operations)
+            };
+            let offset=match first_kept {Some(id)=>output.origins.iter().position(|o|o.recorded_entry_id()==Some(id.as_str())).ok_or_else(||anyhow::anyhow!("summary tail is not a projected message boundary"))?,None=>{
+                let later=self.entries[position+1..].iter().filter(|e|e.data.as_message().is_some_and(|m|m.role!=MessageRole::Tool)).map(|e|e.id.as_str()).collect::<HashSet<_>>();
+                output.origins.iter().position(|o|o.recorded_entry_id().is_some_and(|id|later.contains(id))).unwrap_or(output.messages.len())
+            }};
+            let mut uncertain = uncertain_operations || output.source.recovered_tool_results>0 || output.source.interrupted_turns>0
                 || crate::summary::uncertain(&output.messages[..offset]);
             let mut messages = Vec::new();
             let mut origins = Vec::new();
@@ -435,7 +442,7 @@ impl<'a> SessionBranch<'a> {
                     entry_id: &entry.id,
                 });
             }
-            output.messages.push(record.draft.summary.message());
+            output.messages.push(summary_message);
             output.origins.push(ContextOrigin::Summary {
                 entry_id: &entry.id,
             });

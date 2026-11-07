@@ -64,8 +64,9 @@ Existing summary checkpoints retain their original raw anchors. Editing a messag
 into a summary does not recreate it; editing/omitting its retained boundary does not invalidate the
 checkpoint. [Projection-aware semantic summaries](summary-projection.md) now map retained boundaries
 through canonical IDs, so editing the newest retained unit does not require a fresh raw suffix.
-Custom window backends/journals without lineage support keep the old safe suffix path. Boundary
-context-edit/compaction drafts, before-compaction replacement and tree summaries remain open.
+Custom window backends/journals without lineage support keep the old safe suffix path.
+[Live boundary drafts](boundary-drafts.md) now stage persistent edits and compactions atomically;
+before-compaction replacement and tree summaries remain open.
 This API is currently native SDK functionality, without a new stock frontend edit command or endpoint.
 
 Run the executable examples without credentials or network:

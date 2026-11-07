@@ -3,6 +3,29 @@ use crate::{RunOutcome, model::Message};
 use async_trait::async_trait;
 #[async_trait]
 pub trait RunJournal: Send + Sync {
+    async fn boundary_context(
+        &self,
+    ) -> anyhow::Result<Option<crate::session::OwnedSessionContext>> {
+        Ok(None)
+    }
+    async fn prepare_boundary(
+        &self,
+        commit: &crate::extensions::BoundaryCommit,
+        current: &[Message],
+        prefix: usize,
+    ) -> anyhow::Result<crate::extensions::PreparedBoundary> {
+        Ok(crate::extensions::PreparedBoundary::new(
+            commit.clone(),
+            Some(commit.ephemeral_view(current, prefix)?),
+        ))
+    }
+    async fn commit_prepared_boundary(
+        &self,
+        prepared: crate::extensions::PreparedBoundary,
+    ) -> anyhow::Result<()> {
+        self.commit_boundary(prepared.commit()).await
+    }
+
     /// Read-only lineage for this exact live view. Never infer IDs from equal text.
     async fn compaction_projection(
         &self,

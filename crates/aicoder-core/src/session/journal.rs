@@ -11,7 +11,12 @@ use std::{collections::HashMap, sync::Mutex};
 pub(crate) struct SessionJournal<'a> {
     repository: &'a dyn SessionRepository,
     turn_id: String,
+    owner: uuid::Uuid,
     state: Mutex<State>,
+}
+struct BoundaryPlan {
+    owner: uuid::Uuid,
+    plan: super::SessionAppendPlan,
 }
 struct State {
     session: RunSession,
@@ -36,6 +41,7 @@ impl<'a> SessionJournal<'a> {
         Self {
             repository,
             turn_id,
+            owner: uuid::Uuid::new_v4(),
             state: Mutex::new(State {
                 session,
                 saved: HashMap::new(),
@@ -69,6 +75,81 @@ impl<'a> SessionJournal<'a> {
 }
 #[async_trait]
 impl RunJournal for SessionJournal<'_> {
+    async fn boundary_context(&self) -> Result<Option<super::OwnedSessionContext>> {
+        let state = self.state.lock().expect("session journal poisoned");
+        state
+            .session
+            .project_context(self.repository, Some(&self.turn_id))
+    }
+    async fn prepare_boundary(
+        &self,
+        commit: &crate::extensions::BoundaryCommit,
+        current: &[Message],
+        prefix: usize,
+    ) -> Result<crate::extensions::PreparedBoundary> {
+        let state = self.state.lock().expect("session journal poisoned");
+        ensure!(
+            !state.finished && state.failure.is_none(),
+            "session journal is not writable"
+        );
+        let plan = state
+            .session
+            .prepare_append(self.repository, commit, Some(&self.turn_id))?;
+        let view = if commit.changes_projection() {
+            let mut view = current
+                .get(..prefix)
+                .ok_or_else(|| anyhow::anyhow!("invalid boundary prefix"))?
+                .to_vec();
+            view.extend(plan.projection().messages.iter().cloned());
+            view
+        } else {
+            commit.ephemeral_view(current, prefix)?
+        };
+        let mut prepared = crate::extensions::PreparedBoundary::new(commit.clone(), Some(view));
+        prepared.set_session_projection(plan.projection().clone());
+        prepared.bind(BoundaryPlan {
+            owner: self.owner,
+            plan,
+        });
+        Ok(prepared)
+    }
+    async fn commit_prepared_boundary(
+        &self,
+        prepared: crate::extensions::PreparedBoundary,
+    ) -> Result<()> {
+        let (commit, _, BoundaryPlan { owner, plan }) = prepared.into_parts::<BoundaryPlan>()?;
+        ensure!(owner == self.owner, "foreign boundary journal plan");
+        let mut state = self.state.lock().expect("session journal poisoned");
+        ensure!(
+            !state.finished && state.failure.is_none(),
+            "session journal is not writable"
+        );
+        let ids = plan
+            .transaction()
+            .entries
+            .iter()
+            .filter(|e| e.data.as_message().is_some())
+            .map(|e| e.id.clone())
+            .collect::<Vec<_>>();
+        let end = commit
+            .base_index
+            .checked_add(ids.len())
+            .ok_or_else(|| anyhow::anyhow!("boundary index overflow"))?;
+        ensure!(
+            (commit.base_index..end).all(|i| !state.saved.contains_key(&i)),
+            "boundary canonical positions already saved"
+        );
+        if let Err(error) = state.session.commit_append(self.repository, plan) {
+            let failure = RunFailure::from_error(RunStage::Persistence, &error);
+            state.failure = Some(failure.clone());
+            return Err(failure.into());
+        }
+        for (i, id) in ids.into_iter().enumerate() {
+            state.saved.insert(commit.base_index + i, id);
+        }
+        Ok(())
+    }
+
     async fn compaction_projection(
         &self,
         view: &[Message],

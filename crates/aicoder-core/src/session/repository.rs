@@ -31,6 +31,22 @@ pub struct SessionExtensionState {
 }
 /// Object-safe storage and transaction boundary, shared by all hosts.
 pub trait SessionRepository: Send + Sync {
+    fn prepare_window_boundary(
+        &self,
+        _window: &super::SessionWindow,
+        _commit: &crate::extensions::BoundaryCommit,
+        _active_turn: Option<&str>,
+    ) -> Result<super::SessionAppendPlan> {
+        anyhow::bail!("repository does not support prepared boundary projections")
+    }
+    fn commit_window_append(
+        &self,
+        _window: &mut super::SessionWindow,
+        _plan: super::SessionAppendPlan,
+    ) -> Result<()> {
+        anyhow::bail!("repository does not support prepared appends")
+    }
+
     /// Read-only projection of the real materialized window, including an optional owned live turn.
     /// Unsupported backends retain legacy safe suffix compaction.
     fn project_window_context(

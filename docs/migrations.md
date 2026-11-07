@@ -1,5 +1,34 @@
 # API migrations
 
+## S7: prepared boundary drafts and scoped model work
+
+BoundaryEntry adds CustomMessage, ContextEdit and Compaction. Update exhaustive Rust matches.
+BoundaryProposal adds optional entry_id (old receipts default to None); literal initializers add
+entry_id: None. Native staging allocates stable IDs for later callbacks and exact final publication.
+BoundaryInput adds context_preview, optional session_context and scoped models. Boundary origin
+now accepts Custom as well as sourced System messages for fresh finalization. Startup keeps only
+its existing Data/Context entries; new draft variants require a live successful boundary.
+
+RunJournal adds boundary_context / prepare_boundary / commit_prepared_boundary with defaults.
+Basic journals keep append/self-retaining views; ID operations need session support. SessionRepository
+adds prepare_window_boundary / commit_window_append with unsupported defaults. Custom backends
+must bind source metadata/cursors, validate real targets and return an immutable exact transaction
+and preview. SessionAppendPlan and PreparedBoundary never serialize or restore backend authority.
+A failed post-effect receipt cannot repeat completed work.
+
+Native compactions use aicoder.context.native-compaction.v1, version 1. Upgrade older readers that
+ignore this namespace before continuation. Existing semantic checkpoint v1/v2 formats are unchanged;
+raw records and branches remain intact. Auxiliary receipts retain their existing wire shape and
+are now validated as typed bounded records; custom inert data must use a separate namespace.
+Known Finished usage from turns without terminal statistics is recovered, with one terminal total
+or one receipt per attempt ID. It does not restore executable authority or exact billing claims.
+
+BoundaryModels::generate reserves the parent's auxiliary/token budget and uses a host-supplied
+provider object for bounded tool-free model work. It records known usage before output/receipt
+validation, including discarded/failed/cancelled drafts. Direct host IO remains host responsibility.
+See [contract](boundary-drafts.md) and [acceptance](s7-boundary-drafts-acceptance.md).
+
+
 ## S7: summary lineage and checkpoint version 2
 
 SummaryCheckpoint writes version 2 while retaining its existing namespace and fields. Counts now

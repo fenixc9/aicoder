@@ -97,7 +97,9 @@ that full product parity has already been achieved.
    see [native transport acceptance](s7-aux-transport-acceptance.md). Arbitrary new provider drivers
    still require explicit integration. [Actionable round/settlement boundaries](boundary-hooks.md)
    now stage inert data, source-labelled canonical context and continuation in the same metered
-   loop, with atomic JSONL and queue rechecks. Context-edit/compaction boundary drafts remain open.
+   loop, with atomic JSONL and queue rechecks. [Prepared boundary drafts](boundary-drafts.md)
+   now add sourced custom messages, stable-ID context edits and native compaction, including
+   self-retaining summaries, paired tool units, bounded windows and scoped auxiliary model work.
    [Assistant finalization](assistant-finalization.md) now provides ordered text/visible-reasoning
    edits after paid provider completion, atomically persisting the effective message before tool
    dispatch and verification. Role, action blocks and opaque provider state remain protected;
@@ -131,13 +133,14 @@ that full product parity has already been achieved.
    publication. SDK/CLI/RPC/TUI/Web and browser draft-only restoration have executable evidence;
    visible publication failures retain the target identity without repeating work. The pinned
    runtime's before-fork handler consumes cancellation; skipConversationRestore exists in its
-   declaration but is not consumed by that fork path. Tree summary customization, compaction
-   replacement and context-edit/compaction drafts remain open. [Persistent idle context edits](context-edits.md)
+   declaration but is not consumed by that fork path. Tree summary customization and compaction
+   interception/replacement remain open. [Persistent idle context edits](context-edits.md)
    now append ID-bound Text/Blocks/Omit/Restore records through owned, model-validated session
    plans. Full snapshots and bounded cold archives retain raw history and whole tool units.
    [Projection-aware semantic summaries](summary-projection.md) now cover latest edited tails,
    omitted/duplicate records, split results and custom/native anchors, with v1/v2 replay and
-   current-window identity checks. No boundary draft equivalence is claimed.
+   current-window identity checks. Boundary drafts have a separate [native host acceptance](s7-boundary-drafts-acceptance.md);
+   the TypeScript wire/ABI is not reproduced.
    Provider wrappers can cover some
    host integrations, but no exhaustive executable equivalence check exists. Observation-only
    events must not quietly become mutation channels or rewrite canonical facts.
@@ -157,8 +160,8 @@ passed 3/4, Pi 4/4; both patches passed hidden tests 4/4. Non-sandboxed shared /
 incomplete Pi package pinning keep this exploratory, not final comparison acceptance. The
 original score/release requirements stay open; local scripted scores cannot substitute for them.
 
-The next implementation items are tree-summary and compaction interception, and boundary
-context-edit/compaction drafts. The final audit must rerun the matrix
+The next implementation items are tree-summary and compaction interception/replacement.
+The final audit must rerun the matrix
 against actual executable paths and list any user-approved scope exceptions explicitly.
 
 [Terminal/performance follow-up](s7-terminal-exit-followup.md) records the TUI terminal-owner

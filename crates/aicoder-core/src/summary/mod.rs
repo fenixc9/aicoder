@@ -1,5 +1,7 @@
 //! Bounded semantic context reduction and branch-local durable summaries.
 mod engine;
+mod native;
+pub use native::{NATIVE_COMPACTION_NAMESPACE, NativeCompactionRecord, is_reduction_namespace};
 mod projection;
 pub use projection::CompactionProjection;
 pub(crate) mod manual;

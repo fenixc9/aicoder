@@ -127,6 +127,17 @@ jobs:
           cargo run --locked -p aicoder-runtime --example offline_session_fork -- --observer-error
           cargo build --locked -p aicoder-tui --example offline_extension_ui
           python3 scripts/check_session_fork.py
+      - name: Prepared boundary drafts and native model work
+        run: |
+          cargo test --locked -p aicoder-runtime --no-default-features --test boundary_drafts
+          cargo run --locked -p aicoder-runtime --example offline_boundary_drafts
+          cargo run --locked -p aicoder-runtime --example offline_boundary_drafts -- --window
+          cargo run --locked -p aicoder-runtime --example offline_boundary_drafts -- --deny
+          cargo run --locked -p aicoder-runtime --example offline_boundary_drafts -- --window --deny
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_boundary_drafts -- --code-mode
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_boundary_drafts -- --code-mode --window
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_boundary_drafts -- --code-mode --deny
+          cargo run --locked -p aicoder-runtime --features code-mode --example offline_boundary_drafts -- --code-mode --window --deny
       - name: Durable branch-local context edits
         run: |
           cargo test --locked -p aicoder-runtime --no-default-features --test context_edits

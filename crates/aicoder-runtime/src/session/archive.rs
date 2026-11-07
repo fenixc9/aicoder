@@ -182,6 +182,25 @@ fn descriptor(entry: &SessionEntry) -> SessionEntry {
             record.replacement = ContextReplacement::Restore;
             record.data()
         }
+        SessionEntryData::Extension { namespace, data }
+            if namespace == aicoder_core::auxiliary::AUXILIARY_NAMESPACE =>
+        {
+            let record: aicoder_core::auxiliary::AuxiliaryRecord =
+                serde_json::from_value(data.clone()).expect("validated auxiliary receipt");
+            SessionEntryData::Extension {
+                namespace: namespace.clone(),
+                data: serde_json::to_value(record).expect("auxiliary metadata"),
+            }
+        }
+        SessionEntryData::Extension { namespace, data }
+            if namespace == aicoder_core::summary::NATIVE_COMPACTION_NAMESPACE =>
+        {
+            let mut record: aicoder_core::summary::NativeCompactionRecord =
+                serde_json::from_value(data.clone()).expect("validated native compaction");
+            record.summary = "[private index descriptor]".into();
+            record.details = None;
+            record.data()
+        }
         SessionEntryData::Extension { namespace, data } if namespace == SUMMARY_NAMESPACE => {
             let mut checkpoint: SummaryCheckpoint =
                 serde_json::from_value(data.clone()).expect("validated summary");
@@ -509,7 +528,19 @@ fn project_loaded(
             .session
             .entry_position(&entry.id)
             .context("materialized entry missing")?;
-        projection_entries[ordinal] = entry.clone();
+        let cold_edit = if let SessionEntryData::Extension { namespace, data } = &entry.data
+            && namespace == CONTEXT_EDIT_NAMESPACE
+        {
+            let record: ContextEditRecord = serde_json::from_value(data.clone())?;
+            !loaded_ids.contains(record.target_id.as_str())
+        } else {
+            false
+        };
+        projection_entries[ordinal] = if cold_edit {
+            descriptor(entry)
+        } else {
+            entry.clone()
+        };
     }
     let projection = Session::from_entries(metadata(index), projection_entries)?;
     let branch = projection.selected_branch();
@@ -632,14 +663,21 @@ fn materialize_using(
     // Validate historical tool identities/turn boundaries using metadata descriptors only.
     branch.model_context()?;
     let selected = branch.entries();
-    let summary=selected.iter().rev().find(|entry|matches!(&entry.data,SessionEntryData::Extension {namespace,..} if namespace==SUMMARY_NAMESPACE));
+    let summary=selected.iter().rev().find(|entry|matches!(&entry.data,SessionEntryData::Extension {namespace,..} if aicoder_core::summary::is_reduction_namespace(namespace)));
     let summary_start = summary
         .map(|entry| {
-            let SessionEntryData::Extension { data, .. } = &entry.data else {
+            let SessionEntryData::Extension { namespace, data } = &entry.data else {
                 unreachable!()
             };
-            serde_json::from_value::<SummaryCheckpoint>(data.clone())
-                .map(|checkpoint| checkpoint.first_kept_entry_id)
+            if namespace == SUMMARY_NAMESPACE {
+                serde_json::from_value::<SummaryCheckpoint>(data.clone())
+                    .map(|c| Some(c.first_kept_entry_id))
+            } else {
+                serde_json::from_value::<aicoder_core::summary::NativeCompactionRecord>(
+                    data.clone(),
+                )
+                .map(|c| c.first_kept_entry_id)
+            }
         })
         .transpose()?;
     let mut loaded = Vec::new();
@@ -647,7 +685,7 @@ fn materialize_using(
     let mut messages = 0usize;
     for entry in selected.iter().rev() {
         if entry.data.as_message().is_none()
-            && !matches!(&entry.data,SessionEntryData::Extension {namespace,..} if namespace==SUMMARY_NAMESPACE)
+            && !matches!(&entry.data,SessionEntryData::Extension {namespace,..} if aicoder_core::summary::is_reduction_namespace(namespace))
         {
             continue;
         }
@@ -673,7 +711,10 @@ fn materialize_using(
         }
         bytes += size;
         messages += usize::from(is_message);
-        let done = summary_start.as_ref().is_some_and(|id| *id == real.id);
+        let done = summary_start.as_ref().is_some_and(|id| match id {
+            Some(id) => *id == real.id,
+            None => summary.is_some_and(|s| s.id == real.id),
+        });
         loaded.push(real);
         if done {
             break;
@@ -693,6 +734,7 @@ fn materialize_using(
     }
     ensure!(
         index.session.messages().is_empty()
+            || summary_start == Some(None)
             || loaded.iter().any(|entry| entry.data.as_message().is_some()),
         "newest complete message unit exceeds the window budget"
     );
@@ -1579,6 +1621,122 @@ pub(super) fn bind_fork_window(window: &mut SessionWindow, path: PathBuf, length
     window.attach_backend_state(WindowCursor {
         cursor: cursor_for(path, length, length, false, hash),
     });
+}
+
+pub(super) fn prepare_boundary(
+    repository: &JsonlSessionRepository,
+    window: &SessionWindow,
+    commit: &aicoder_core::extensions::BoundaryCommit,
+    active_turn: Option<&str>,
+) -> Result<SessionAppendPlan> {
+    let _lock = repository.metadata_lock(&window.metadata().id, false)?;
+    let mut cache = repository
+        .archive_cache
+        .lock()
+        .map_err(|_| anyhow::anyhow!("archive cache poisoned"))?;
+    let index = cached(repository, &window.metadata().id, &mut cache)?;
+    let cursor = &window
+        .backend_state::<WindowCursor>()
+        .context("window has no backend checkpoint")?
+        .cursor;
+    ensure!(
+        index.path == cursor.path
+            && index.expected_len == cursor.expected_len
+            && index.hash == cursor.fingerprint
+            && index.session.metadata().revision == window.metadata().revision
+            && index.session.metadata().leaf_id == window.metadata().leaf_id,
+        "stale window append preparation"
+    );
+    let mut transaction = commit.session_transaction(&index.session, active_turn)?;
+    if window.source().archived_messages > 0 {
+        for entry in &mut transaction.entries {
+            if let SessionEntryData::Extension { namespace, data } = &mut entry.data
+                && namespace == aicoder_core::summary::NATIVE_COMPACTION_NAMESPACE
+            {
+                let mut record: aicoder_core::summary::NativeCompactionRecord =
+                    serde_json::from_value(data.clone())?;
+                record.uncertain_operations = true;
+                *data = serde_json::to_value(record)?;
+            }
+        }
+    }
+    let mut reader = Reader::new(&index.path, repository.limits.max_record_bytes)?;
+    for entry in &transaction.entries {
+        if let SessionEntryData::Extension { namespace, data } = &entry.data
+            && namespace == CONTEXT_EDIT_NAMESPACE
+        {
+            let edit: ContextEditRecord = serde_json::from_value(data.clone())?;
+            let target =
+                if let Some(target) = transaction.entries.iter().find(|e| e.id == edit.target_id) {
+                    target.clone()
+                } else {
+                    let ordinal = index
+                        .session
+                        .entry_position(&edit.target_id)
+                        .context("edit target missing")?;
+                    reader.entry(index.locations[ordinal])?
+                };
+            edit.validate_replacement(
+                target
+                    .data
+                    .as_message()
+                    .context("edit target has no message")?,
+            )?;
+        }
+    }
+    for entry in &transaction.entries {
+        if let SessionEntryData::Extension { namespace, data } = &entry.data
+            && namespace == aicoder_core::summary::NATIVE_COMPACTION_NAMESPACE
+        {
+            let record: aicoder_core::summary::NativeCompactionRecord =
+                serde_json::from_value(data.clone())?;
+            if let Some(id) = record.first_kept_entry_id {
+                ensure!(
+                    window
+                        .entries()
+                        .iter()
+                        .chain(transaction.entries.iter())
+                        .any(|e| e.id == id && e.data.as_message().is_some()),
+                    "native compaction tail is outside the admitted window; reopen with a larger host load budget"
+                );
+            }
+        }
+    }
+    let mut candidate = index.clone();
+    accept(
+        &mut candidate,
+        transaction.entries.clone(),
+        transaction.leaf_id.clone(),
+        index
+            .session
+            .metadata()
+            .revision
+            .checked_add(1)
+            .context("append revision exhausted")?,
+        now_millis()?,
+        index.valid_len,
+        &repository.limits,
+    )?;
+    let mut loaded = window.entries().to_vec();
+    loaded.extend(transaction.entries.iter().cloned());
+    let projected = project_loaded(&candidate, &loaded, active_turn, true)?;
+    SessionAppendPlan::new(
+        window.metadata().clone(),
+        transaction,
+        OwnedSessionContext {
+            messages: projected.messages,
+            source: projected.source,
+            entry_ids: projected.entry_ids.expect("requested append lineage"),
+        },
+    )
+}
+pub(super) fn commit_append(
+    repository: &JsonlSessionRepository,
+    window: &mut SessionWindow,
+    plan: SessionAppendPlan,
+) -> Result<()> {
+    plan.validate_source(window.metadata())?;
+    commit_transaction(repository, window, plan.into_transaction(), false)
 }
 
 #[cfg(test)]

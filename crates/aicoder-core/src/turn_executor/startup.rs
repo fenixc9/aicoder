@@ -90,8 +90,16 @@ impl TurnExecutor {
                         "startup entry count exceeds 32"
                     );
                     for entry in action.append {
+                        anyhow::ensure!(
+                            matches!(
+                                entry,
+                                BoundaryEntry::Data { .. } | BoundaryEntry::Context { .. }
+                            ),
+                            "startup supports data/context entries; use a live boundary for other drafts"
+                        );
                         entry.validate()?;
                         let proposal = BoundaryProposal {
+                            entry_id: None,
                             extension: hook.owner.clone(),
                             hook: hook.spec.id.clone(),
                             entry,

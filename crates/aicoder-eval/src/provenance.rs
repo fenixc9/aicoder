@@ -304,4 +304,143 @@ mod tool_catalog_tests {
                 .is_none()
         );
     }
+    struct BoundaryProvider(std::sync::atomic::AtomicUsize);
+    #[async_trait]
+    impl ModelProvider for BoundaryProvider {
+        fn model_spec(&self, m: &str) -> Result<ModelSpec, ProviderError> {
+            let mut spec = ModelSpec::new(if m == "aux" { "native" } else { "primary" }, m);
+            spec.context_tokens = Some(65536);
+            spec.max_output_tokens = Some(128);
+            Ok(spec)
+        }
+        async fn generate(
+            &self,
+            r: ModelRequest,
+            s: Arc<dyn ModelEventSink>,
+            _: TurnExecutionContext,
+        ) -> Result<ModelResponse, ProviderError> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let native = r.model == "aux";
+            let response = ModelResponse {
+                id: None,
+                model: r.model,
+                message: Message::text(
+                    MessageRole::Assistant,
+                    if native {
+                        "benchmark summary"
+                    } else {
+                        "answer"
+                    },
+                ),
+                stop_reason: StopReason::Complete,
+                usage: ModelUsage {
+                    input_tokens: Some(if native { 2 } else { 6 }),
+                    output_tokens: Some(1),
+                    total_tokens: Some(if native { 3 } else { 7 }),
+                    cached_input_tokens: Some(0),
+                    cache_write_tokens: Some(0),
+                },
+            };
+            emit_response(&response, s.as_ref());
+            Ok(response)
+        }
+    }
+    struct Boundary(Arc<BoundaryProvider>);
+    #[async_trait]
+    impl aicoder_core::extensions::BoundaryHook for Boundary {
+        async fn boundary(
+            &self,
+            i: aicoder_core::extensions::BoundaryInput<'_>,
+            _: aicoder_core::extensions::ExtensionCancellation,
+        ) -> Result<Option<aicoder_core::extensions::BoundaryAction>> {
+            use aicoder_core::extensions::*;
+            if i.kind != BoundaryKind::TurnEnd || i.round != 1 {
+                return Ok(None);
+            }
+            let mut request = ModelRequest::new(
+                "aux",
+                vec![Message::text(MessageRole::User, "public task facts")],
+            );
+            request.tool_choice = ModelToolChoice::None;
+            request.options.max_output_tokens = Some(32);
+            let response = i.models.generate(self.0.clone(), request).await?;
+            Ok(Some(BoundaryAction {
+                append: vec![
+                    BoundaryEntry::Compaction {
+                        summary: response.message.text_content(),
+                        first_kept_entry_id: None,
+                        details: None,
+                    },
+                    BoundaryEntry::CustomMessage {
+                        kind: "audit".into(),
+                        content: vec![ContentBlock::Text {
+                            text: "benchmark context".into(),
+                        }],
+                        display: false,
+                        details: None,
+                    },
+                ],
+                continue_run: Some(true),
+                ..Default::default()
+            }))
+        }
+    }
+    #[tokio::test]
+    async fn evaluation_journal_observes_native_boundary_work_without_a_frontend_or_restored_authority()
+     {
+        use aicoder_core::extensions::*;
+        let root = tempfile::tempdir().unwrap();
+        let provider = Arc::new(BoundaryProvider(std::sync::atomic::AtomicUsize::new(0)));
+        let mut e = Extension::new("bench", "1").unwrap();
+        e.boundary_hook(
+            HookSpec::new("boundary"),
+            Arc::new(Boundary(provider.clone())),
+        )
+        .unwrap();
+        let mut r = ExtensionRegistry::new();
+        r.install(e).unwrap();
+        let executor = TurnExecutor::builder_from_shared(provider.clone())
+            .workspace(root.path())
+            .extensions(Arc::new(r.finish()))
+            .build()
+            .unwrap();
+        let journal = EvaluationJournal::default();
+        let request = ModelRequest::new(
+            "main",
+            vec![
+                Message::text(MessageRole::System, "host prefix"),
+                Message::text(MessageRole::User, "task"),
+            ],
+        );
+        let trace = crate::AgentTraceRecorder::shared();
+        let out = executor
+            .run_with_journal(
+                request,
+                trace.clone(),
+                TurnExecutionContext::new(),
+                &journal,
+            )
+            .await;
+        trace.trace().validate().unwrap();
+        assert!(matches!(out, RunOutcome::Completed(_)), "{out:?}");
+        assert_eq!(provider.0.load(std::sync::atomic::Ordering::SeqCst), 3);
+        assert_eq!(out.progress().usage.total_tokens, Some(17));
+        assert_eq!(
+            out.progress().primary_usage.as_ref().unwrap().total_tokens,
+            Some(14)
+        );
+        assert_eq!(out.progress().auxiliary.len(), 1);
+        let records = journal.records();
+        assert_eq!(
+            records.iter().filter(|v| v["kind"] == "auxiliary").count(),
+            2
+        );
+        assert_eq!(
+            records
+                .iter()
+                .filter(|v| v["kind"] == "lifecycle_boundary")
+                .count(),
+            1
+        );
+    }
 }

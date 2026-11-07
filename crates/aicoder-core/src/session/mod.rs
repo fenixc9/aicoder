@@ -5,7 +5,9 @@ pub use native_context::{NATIVE_CONTEXT_NAMESPACE, NativeContextSource};
 mod journal;
 pub(crate) use journal::SessionJournal;
 pub const SESSION_VERSION: u32 = 3;
+mod append;
 mod context_edit;
+pub use append::SessionAppendPlan;
 mod fork;
 pub use context_edit::{
     CONTEXT_EDIT_NAMESPACE, ContextEditRecord, ContextReplacement, MAX_CONTEXT_EDIT_BYTES,
@@ -42,7 +44,7 @@ pub use types::{
     SessionTransaction, TurnRecord, TurnStatistics,
 };
 
-fn now_millis() -> anyhow::Result<u64> {
+pub(crate) fn now_millis() -> anyhow::Result<u64> {
     Ok(std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
         .as_millis()

@@ -539,10 +539,30 @@ impl Session {
                             ensure!(labels.len() <= 256, "session label limit is 256");
                         }
                     }
+                    if namespace == crate::auxiliary::AUXILIARY_NAMESPACE {
+                        serde_json::from_value::<crate::auxiliary::AuxiliaryRecord>(data.clone())?;
+                        crate::extensions::size(data, 64 * 1024)?;
+                    }
                     if namespace == crate::summary::MANUAL_USAGE_NAMESPACE {
                         let usage: crate::summary::manual::ManualSummaryUsage =
                             serde_json::from_value(data.clone())?;
                         usage.validate()?;
+                    }
+                    if namespace == crate::summary::NATIVE_COMPACTION_NAMESPACE {
+                        let record: crate::summary::NativeCompactionRecord =
+                            serde_json::from_value(data.clone())?;
+                        let mut ancestors = Vec::new();
+                        let mut cursor = entry.parent_id.as_deref();
+                        while let Some(id) = cursor {
+                            let ancestor = self
+                                .entry(id)
+                                .or_else(|| new_entries.get(id).copied())
+                                .expect("validated parent");
+                            ancestors.push(ancestor);
+                            cursor = ancestor.parent_id.as_deref();
+                        }
+                        ancestors.reverse();
+                        record.validate(&ancestors, entry.parent_id.as_deref())?;
                     }
                     if namespace == crate::summary::SUMMARY_NAMESPACE {
                         let checkpoint: crate::summary::SummaryCheckpoint =

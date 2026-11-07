@@ -22,12 +22,16 @@ see earlier proposals and the current flag. Replacements take the replacing call
 appends preserve existing provenance. Callback results cannot edit recorded history, routing,
 approval rules, the verifier result or the terminal answer directly.
 
-Two entry kinds are supported:
+The original entry kinds remain supported:
 
 - `Data { key, value }` is inert extension metadata. It is never inserted into a model prompt.
 - `Context { kind, text }` creates an explicitly sourced native context message with a validated
   extension/hook/kind label. It is a system/context message, never synthetic user input. It is
   recorded even without continuation; the current answer remains the model's actual answer.
+
+[Boundary drafts](boundary-drafts.md) add CustomMessage, ContextEdit and Compaction entries,
+callback-only previews with stable IDs, and scoped auxiliary model work. Canonical history stays
+separate from pending projections. Startup remains data/context-only.
 
 A chain admits at most 32 entries, 32 KiB per entry body, 64 KiB for the complete staged list,
 256 KiB across successive staged lists and 128 KiB for its final receipt. The complete receipt
@@ -76,9 +80,9 @@ cargo run --locked -p aicoder-runtime --features code-mode --example offline_bou
 
 It uses actual owned file tools, approvals, JSONL, archive windows and export, with a scripted
 provider and no credentials/network. [Acceptance](s7-boundary-hooks-acceptance.md) records the
-measured checks. This implements data/context/continuation boundary actions; Pi's context-edit
-and compaction drafts, message transforms and session navigation veto remain
-separate work in the [audit](pi-parity-audit.md).
+measured checks. This acceptance records the original data/context/continuation increment. The later
+[draft acceptance](s7-boundary-drafts-acceptance.md) covers context edits and compaction drafts;
+message finalization and session navigation are recorded separately in the [audit](pi-parity-audit.md).
 
 [Startup hooks](startup-hooks.md) use a separate once-per-run callback and BeforeStart receipt
 kind; ordinary BoundaryHook callbacks still run only at TurnEnd and BeforeSettle.

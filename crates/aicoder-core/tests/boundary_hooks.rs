@@ -782,6 +782,7 @@ async fn explicit_context_is_summary_data_but_inert_boundary_entries_are_never_p
         changes: vec![],
         entries: vec![
             BoundaryProposal {
+                entry_id: None,
                 extension: "source".into(),
                 hook: "message".into(),
                 entry: BoundaryEntry::Context {
@@ -790,6 +791,7 @@ async fn explicit_context_is_summary_data_but_inert_boundary_entries_are_never_p
                 },
             },
             BoundaryProposal {
+                entry_id: None,
                 extension: "source".into(),
                 hook: "data".into(),
                 entry: BoundaryEntry::Data {

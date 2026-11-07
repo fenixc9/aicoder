@@ -118,6 +118,10 @@
   Recheck elapsed budgets after callback/receipt work and before summary or main provider IO.
   Actionable boundaries stage bounded owned entries, atomically journal before projection, and
   preserve extension provenance. Inert data never becomes instructions or restored authority.
+  Pending boundary records keep fixed IDs across previews/finalization; commit their exact owned
+  append before adopting a model view. Self-retaining reductions preserve future facts and archive
+  uncertainty. Scoped boundary model work reserves parent budgets, captures usage before output
+  validation, and retains completed receipts when callbacks or terminal statistics fail.
   Continue in the existing metered loop; recheck controls after settle waits, retain acknowledged
   facts on deadline expiry, and never override verifier rejection or repeat completed effects.
   Startup edits are once-per-run snapshots, separate from model-selection previews and raw

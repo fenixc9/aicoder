@@ -59,5 +59,6 @@ be upgraded before continuing sessions containing v2; the top-level session vers
 See [migrations](migrations.md) and [acceptance](s7-summary-projection-acceptance.md).
 
 This closes projection-aware summary preparation for the built-in memory/JSONL Agent paths.
-Boundary context-edit/compaction drafts, compaction interception/replacement, tree-summary hooks
-and final isolated Spark/Pi/SWE quality/release acceptance remain separate work.
+[Boundary context-edit/compaction drafts](boundary-drafts.md) now share owned preparation and
+atomic publication. Compaction interception/replacement, tree-summary hooks and final isolated
+Spark/Pi/SWE quality/release acceptance remain separate work.
